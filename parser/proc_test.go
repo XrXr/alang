@@ -1,51 +1,118 @@
 package parser
 
 import (
-    "testing"
-    "reflect"
+	"reflect"
+	"testing"
 )
 
-func TestEmptyFunc(t *testing.T) {
-    node, err := Parse("proc flyers(flow: int) int {}")
-    if err != nil {
-        t.Error()
-        return
-    }
-    pNode, parsed := node.(ProcNode)
-    if !parsed {
-        t.Error()
-    }
-    argList := make([]Declearation, 1)
-    argList[0] = Declearation{Type: "int", Name: "flow"}
-    reflect.DeepEqual(pNode, ProcNode{
-        Name: "flyers",
-        Args: argList,
-        Ret: "int",
-        Body: make([]interface{}, 0),
-    })
-}
-
-// func tryParseExpr(s string, pred func (interface{}) bool) {
-
+// func TestEmptyFunc(t *testing.T) {
+//     node, err := Parse("proc flyers(flow: int) int {}")
+//     if err != nil {
+//         t.Error()
+//         return
+//     }
+//     pNode, parsed := node.(ProcNode)
+//     if !parsed {
+//         t.Error()
+//     }
+//     argList := make([]Declearation, 1)
+//     argList[0] = Declearation{Type: "int", Name: "flow"}
+//     reflect.DeepEqual(pNode, ProcNode{
+//         Name: "flyers",
+//         Args: argList,
+//         Ret: "int",
+//         Body: make([]interface{}, 0),
+//     })
 // }
 
-func TestUnaryExpression(t *testing.T) {
-    node, err := parseExpr([]byte("+ br1dg3"))
-    if err != nil {
-        t.Error()
-        return
-    }
+var parseExprCases = map[string]interface{}{
+	"+ br1dg3": ExprNode{
+		Op:    PLUS,
+		Left:  nil,
+		Right: IdName("br1dg3"),
+	},
+	"-10.20": ExprNode{
+		Op:   MINUS,
+		Left: nil,
+		Right: Literal{
+			Type:  NUMBER,
+			Value: "10.20",
+		},
+	},
+	"12.82 + foo * bar - 1000": ExprNode{
+		Op: PLUS,
+		Left: Literal{
+			Type:  NUMBER,
+			Value: "12.82",
+		},
+		Right: ExprNode{
+			Op: MINUS,
+			Left: ExprNode{
+				Op:    MULTIPLY,
+				Left:  IdName("foo"),
+				Right: IdName("bar"),
+			},
+			Right: Literal{
+				Type:  NUMBER,
+				Value: "1000",
+			},
+		},
+	},
+	"12.82 + foo * (bar - 1000)": ExprNode{
+		Op: PLUS,
+		Left: Literal{
+			Type:  NUMBER,
+			Value: "12.82",
+		},
+		Right: ExprNode{
+			Op:   MULTIPLY,
+			Left: IdName("foo"),
+			Right: ExprNode{
+				Op:   MINUS,
+				Left: IdName("bar"),
+				Right: Literal{
+					Type:  NUMBER,
+					Value: "1000",
+				},
+			},
+		},
+	},
+	"flower.grace + foo * -1000": ExprNode{
+		Op: PLUS,
+		Left: ExprNode{
+			Op:    DOT,
+			Left:  IdName("flower"),
+			Right: IdName("grace"),
+		},
+		Right: ExprNode{
+			Op:   MULTIPLY,
+			Left: IdName("foo"),
+			Right: ExprNode{
+				Op:   MINUS,
+				Left: nil,
+				Right: Literal{
+					Type:  NUMBER,
+					Value: "1000",
+				},
+			},
+		},
+	},
+}
 
-    expr := node.(ExprNode)
-    if (expr.Right).(IdName) != "br1dg3" {
-        t.Error()
-        return
-    }
+func TestParseExpr(t *testing.T) {
+	for expr, expected := range parseExprCases {
+		tryParseExpr(t, expr, expected)
+	}
+}
 
-    node, err = parseExpr([]byte("-10.20"))
-    expr = node.(ExprNode)
-    if l := (expr.Right).(Literal); l.Type != NUMBER || l.Value != "10.20" {
-        t.Error()
-        return
-    }
+func tryParseExpr(t *testing.T, toParse string, correctResult interface{}) {
+	node, err := parseExpr([]byte(toParse))
+	if err != nil {
+		t.Errorf(`Not able to successfully parse "%s"`, toParse)
+		return
+	}
+	if !reflect.DeepEqual(node, correctResult) {
+		t.Errorf(`Incorrectly parsed "%s"`, toParse)
+		return
+	}
 }
