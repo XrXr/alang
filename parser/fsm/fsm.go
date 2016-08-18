@@ -4,10 +4,6 @@ package fsm
 // are only allowed one accept state. NFAs can only be constructed by
 // making a DFA right-to-left.
 
-import (
-	"strings"
-)
-
 type DFA struct {
 	state       int // signed for the fail state
 	rules       map[transCond]uint8
@@ -94,43 +90,6 @@ func NewBackwardNFA(desc *DFADescription) NFA {
 	}
 	dfa.acceptState = 0
 	return dfa
-}
-
-var identifierNameCache *DFADescription
-
-func IdentifierName() *DFADescription {
-	if identifierNameCache != nil {
-		return identifierNameCache
-	}
-	lowerAlpha := "abcdefghijklnmopqrstuvwxyz"
-	alphabet := []rune(lowerAlpha)
-	upperAlphabet := []rune(strings.ToUpper(lowerAlpha))
-	digits := []rune("01234567890")
-
-	alphaOnly := append(alphabet, upperAlphabet...)
-	// firstChar is alpha or underscore
-	startRules := make([]TransitionRule, len(alphaOnly)+1)
-	startRules[0] = TransitionRule{0, '_', 1}
-	i := 1
-	for _, c := range alphaOnly {
-		startRules[i] = TransitionRule{0, c, 1}
-		i++
-	}
-
-	fullList := append(alphaOnly, digits...)
-	afterFirst := make([]TransitionRule, len(fullList)+1)
-	afterFirst[0] = TransitionRule{1, '_', 1}
-	i = 1
-
-	for _, c := range fullList {
-		afterFirst[i] = TransitionRule{1, c, 1}
-		i++
-	}
-
-	identifierNameCache = new(DFADescription)
-	identifierNameCache.Rules = append(startRules, afterFirst...)
-	identifierNameCache.AcceptState = 1
-	return identifierNameCache
 }
 
 // A state in every DFA that traps and is not an accept state.
