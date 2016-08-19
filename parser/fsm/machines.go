@@ -117,3 +117,23 @@ func FloatLiteral() *DFADescription {
 	floatLiteralCache = desc
 	return desc
 }
+
+var decimalLiteralCache *DFADescription
+
+func DecimalLiteral() *DFADescription {
+	if decimalLiteralCache != nil {
+		return decimalLiteralCache
+	}
+	desc := new(DFADescription)
+	desc.Rules = make([]TransitionRule, 2*len(digits))
+	i := 0
+	for _, c := range digits {
+		desc.Rules[i] = TransitionRule{0, c, 1}
+		i++
+		desc.Rules[i] = TransitionRule{1, c, 1}
+		i++
+	}
+	desc.AcceptState = 1
+	decimalLiteralCache = desc
+	return desc
+}

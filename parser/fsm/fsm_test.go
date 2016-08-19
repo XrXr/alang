@@ -156,6 +156,10 @@ func TestNumericLiterals(t *testing.T) {
 	testMachine(t, FloatLiteral, validFloatLiterals, true)
 	testMachine(t, FloatLiteral, invalidFloatLiterals, false)
 	testMachine(t, FloatLiteral, validDecimalLiterals, false)
+
+	testMachine(t, DecimalLiteral, validDecimalLiterals, true)
+	testMachine(t, DecimalLiteral, invalidFloatLiterals, false)
+	testMachine(t, DecimalLiteral, validHexLiterals, false)
 }
 
 // Only works with ascii encoding. Why is this not in the standard lib?
