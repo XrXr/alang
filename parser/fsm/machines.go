@@ -137,3 +137,31 @@ func DecimalLiteral() *DFADescription {
 	decimalLiteralCache = desc
 	return desc
 }
+
+// TODO refactor newFoward and newBackward to return StateMachine to get
+// rid of duplication
+func ForwardNumLiteralMachines() []StateMachine {
+	dec := NewForwardDFA(DecimalLiteral())
+	hex := NewForwardDFA(HexLiteral())
+	bin := NewForwardDFA(BinaryLiteral())
+	fl := NewForwardDFA(FloatLiteral())
+	return []StateMachine{
+		StateMachine(&dec),
+		StateMachine(&hex),
+		StateMachine(&bin),
+		StateMachine(&fl),
+	}
+}
+
+func BackwardNumLiteralMachines() []StateMachine {
+	dec := NewBackwardNFA(DecimalLiteral())
+	hex := NewBackwardNFA(HexLiteral())
+	bin := NewBackwardNFA(BinaryLiteral())
+	fl := NewBackwardNFA(FloatLiteral())
+	return []StateMachine{
+		StateMachine(&dec),
+		StateMachine(&hex),
+		StateMachine(&bin),
+		StateMachine(&fl),
+	}
+}

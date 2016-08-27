@@ -22,9 +22,10 @@ type ProcNode struct {
 type Operator int
 
 const (
-	PLUS = iota
-	MINUS
+	_ = iota
 	MULTIPLY
+	MINUS
+	PLUS
 	DIVIDE
 	CALL
 	ASSIGN

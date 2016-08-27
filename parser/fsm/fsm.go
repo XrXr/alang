@@ -4,6 +4,11 @@ package fsm
 // are only allowed one accept state. NFAs can only be constructed by
 // making a DFA right-to-left.
 
+type StateMachine interface {
+	Feed(rune)
+	Accepted() bool
+}
+
 type DFA struct {
 	state       int // signed for the fail state
 	rules       map[transCond]uint8
@@ -90,6 +95,17 @@ func NewBackwardNFA(desc *DFADescription) NFA {
 	}
 	dfa.acceptState = 0
 	return dfa
+}
+
+func AdvanceAll(c rune, dfas ...StateMachine) int {
+	accepted := -1
+	for i, e := range dfas {
+		e.Feed(c)
+		if accepted == -1 && e.Accepted() {
+			accepted = i
+		}
+	}
+	return accepted
 }
 
 // A state in every DFA that traps and is not an accept state.
