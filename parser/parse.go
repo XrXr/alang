@@ -139,6 +139,13 @@ func (o *OpHeap) Pop() interface{} {
 	return x
 }
 
+var tokToOp = map[string]Operator{
+	"+": Plus,
+	"/": Divide,
+	"*": Star,
+	"-": Minus,
+}
+
 func parseExpr(s []byte) (interface{}, error) {
 	var ops OpHeap
 	heap.Init(&ops)
@@ -146,20 +153,10 @@ func parseExpr(s []byte) (interface{}, error) {
 	tokens := Tokenize(string(s))
 
 	for i, tok := range tokens {
-		var op Operator
-		switch tok {
-		case "+":
-			op = PLUS
-		case "-":
-			op = MINUS
-		case "*":
-			op = MULTIPLY
-		case "/":
-			op = DIVIDE
-		default:
-			continue
+		op, good := tokToOp[tok]
+		if good {
+			heap.Push(&ops, opToken{i, op})
 		}
-		heap.Push(&ops, opToken{i, op})
 	}
 
 	var finalNode ExprNode
@@ -193,7 +190,7 @@ func parseExpr(s []byte) (interface{}, error) {
 func tokenType(s string) interface{} {
 	// TODO: complete this
 	if unicode.IsDigit(rune(s[0])) {
-		return Literal{NUMBER, s}
+		return Literal{Number, s}
 	} else {
 		return IdName(s)
 	}

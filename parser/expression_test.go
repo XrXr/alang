@@ -27,71 +27,71 @@ import (
 
 var parseExprCases = map[string]interface{}{
 	"+ br1dg3": ExprNode{
-		Op:    PLUS,
+		Op:    Plus,
 		Left:  nil,
 		Right: IdName("br1dg3"),
 	},
 	"-10.20": ExprNode{
-		Op:   MINUS,
+		Op:   Minus,
 		Left: nil,
 		Right: Literal{
-			Type:  NUMBER,
+			Type:  Number,
 			Value: "10.20",
 		},
 	},
 	"12.82 + foo * bar - 1000": ExprNode{
-		Op: PLUS,
+		Op: Plus,
 		Left: Literal{
-			Type:  NUMBER,
+			Type:  Number,
 			Value: "12.82",
 		},
 		Right: ExprNode{
-			Op: MINUS,
+			Op: Minus,
 			Left: ExprNode{
-				Op:    MULTIPLY,
+				Op:    Star,
 				Left:  IdName("foo"),
 				Right: IdName("bar"),
 			},
 			Right: Literal{
-				Type:  NUMBER,
+				Type:  Number,
 				Value: "1000",
 			},
 		},
 	},
 	"12.82 + foo * (bar - 1000)": ExprNode{
-		Op: PLUS,
+		Op: Plus,
 		Left: Literal{
-			Type:  NUMBER,
+			Type:  Number,
 			Value: "12.82",
 		},
 		Right: ExprNode{
-			Op:   MULTIPLY,
+			Op:   Star,
 			Left: IdName("foo"),
 			Right: ExprNode{
-				Op:   MINUS,
+				Op:   Minus,
 				Left: IdName("bar"),
 				Right: Literal{
-					Type:  NUMBER,
+					Type:  Number,
 					Value: "1000",
 				},
 			},
 		},
 	},
 	"flower.grace + foo * -1000": ExprNode{
-		Op: PLUS,
+		Op: Plus,
 		Left: ExprNode{
-			Op:    DOT,
+			Op:    Dot,
 			Left:  IdName("flower"),
 			Right: IdName("grace"),
 		},
 		Right: ExprNode{
-			Op:   MULTIPLY,
+			Op:   Star,
 			Left: IdName("foo"),
 			Right: ExprNode{
-				Op:   MINUS,
+				Op:   Minus,
 				Left: nil,
 				Right: Literal{
-					Type:  NUMBER,
+					Type:  Number,
 					Value: "1000",
 				},
 			},

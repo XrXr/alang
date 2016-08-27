@@ -19,27 +19,28 @@ type ProcNode struct {
 	Body []interface{}
 }
 
+const Invalid = 0
+
 type Operator int
 
 const (
-	_ = iota
-	MULTIPLY
-	MINUS
-	PLUS
-	DIVIDE
-	CALL
-	ASSIGN
-	DECLEAR
-	DEREFERENCE
-	DOT
+	Star  = 1
+	Minus = iota
+	Plus
+	Divide
+	Call
+	Assign
+	Declare
+	Dereference
+	Dot
 )
 
 type LiteralType int
 
 const (
-	NUMBER = iota
-	STRING
-	ARRAY
+	Number = 1
+	String = iota
+	Array
 )
 
 type Literal struct {
