@@ -31,13 +31,9 @@ var parseExprCases = map[string]interface{}{
 		Left:  nil,
 		Right: IdName("br1dg3"),
 	},
-	"-10.20": ExprNode{
-		Op:   Minus,
-		Left: nil,
-		Right: Literal{
-			Type:  Number,
-			Value: "10.20",
-		},
+	"-10.20": Literal{
+		Type:  Number,
+		Value: "-10.20",
 	},
 	"12.82 + foo * bar - 1000": ExprNode{
 		Op: Plus,
@@ -77,7 +73,7 @@ var parseExprCases = map[string]interface{}{
 			},
 		},
 	},
-	"flower.grace + foo * -1000": ExprNode{
+	"flower.grace + foo * 1000": ExprNode{
 		Op: Plus,
 		Left: ExprNode{
 			Op:    Dot,
@@ -87,13 +83,9 @@ var parseExprCases = map[string]interface{}{
 		Right: ExprNode{
 			Op:   Star,
 			Left: IdName("foo"),
-			Right: ExprNode{
-				Op:   Minus,
-				Left: nil,
-				Right: Literal{
-					Type:  Number,
-					Value: "1000",
-				},
+			Right: Literal{
+				Type:  Number,
+				Value: "1000",
 			},
 		},
 	},
@@ -101,6 +93,11 @@ var parseExprCases = map[string]interface{}{
 
 func TestParseExpr(t *testing.T) {
 	for expr, expected := range parseExprCases {
+		defer func() {
+			if recover() != nil {
+				t.Errorf("Panicked while trying to parse %s", expr)
+			}
+		}()
 		tryParseExpr(t, expr, expected)
 	}
 }
@@ -112,7 +109,7 @@ func tryParseExpr(t *testing.T, toParse string, correctResult interface{}) {
 		return
 	}
 	if !reflect.DeepEqual(node, correctResult) {
-		t.Errorf(`Incorrectly parsed "%s"`, toParse)
+		t.Errorf(`Incorrectly parsed "%s". Got %#v`, toParse, node)
 		return
 	}
 }

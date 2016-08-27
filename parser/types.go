@@ -21,25 +21,27 @@ type ProcNode struct {
 
 const Invalid = 0
 
+//go:generate $GOPATH/bin/stringer -type=Operator
 type Operator int
 
 const (
-	Star  = 1
-	Minus = iota
+	Dot Operator = iota + 1
+	Star
+	Minus
 	Plus
 	Divide
 	Call
 	Assign
 	Declare
 	Dereference
-	Dot
 )
 
+//go:generate $GOPATH/bin/stringer -type=LiteralType
 type LiteralType int
 
 const (
-	Number = 1
-	String = iota
+	Number LiteralType = iota + 1
+	String
 	Array
 )
 

@@ -109,9 +109,26 @@ func Parse(s string) (interface{}, error) {
 // 	return i, acceptedIdx
 // }
 
+var tokToOp = map[string]Operator{
+	"+": Plus,
+	"/": Divide,
+	"*": Star,
+	"-": Minus,
+	".": Dot,
+}
+
+var precedence = map[Operator]int{
+	Dot:    0,
+	Star:   10,
+	Divide: 10,
+	Plus:   20,
+	Minus:  20,
+	Assign: 100,
+}
+
 type parsedNode struct {
-	node   interface{}
-	jumpTo int
+	node     interface{}
+	otherEnd int
 }
 
 // index for characters in the token string fall in the interval
@@ -123,9 +140,17 @@ type opToken struct {
 
 type OpHeap []opToken
 
-func (o OpHeap) Len() int           { return len(o) }
-func (o OpHeap) Less(i, j int) bool { return int(o[i].op) < int(o[j].op) }
-func (o OpHeap) Swap(i, j int)      { o[i], o[j] = o[j], o[i] }
+func (o OpHeap) Len() int { return len(o) }
+func (o OpHeap) Less(i, j int) bool {
+	preceI := precedence[o[i].op]
+	preceJ := precedence[o[j].op]
+	if preceI == preceJ {
+		return o[i].index > o[j].index
+	} else {
+		return preceI < preceJ
+	}
+}
+func (o OpHeap) Swap(i, j int) { o[i], o[j] = o[j], o[i] }
 
 func (o *OpHeap) Push(x interface{}) {
 	*o = append(*o, x.(opToken))
@@ -139,18 +164,15 @@ func (o *OpHeap) Pop() interface{} {
 	return x
 }
 
-var tokToOp = map[string]Operator{
-	"+": Plus,
-	"/": Divide,
-	"*": Star,
-	"-": Minus,
-}
-
 func parseExpr(s []byte) (interface{}, error) {
 	var ops OpHeap
 	heap.Init(&ops)
-	var parsed map[int]parsedNode
+	parsed := make(map[int]parsedNode)
 	tokens := Tokenize(string(s))
+
+	if len(tokens) == 1 {
+		return parseToken(tokens[0]), nil
+	}
 
 	for i, tok := range tokens {
 		op, good := tokToOp[tok]
@@ -162,34 +184,46 @@ func parseExpr(s []byte) (interface{}, error) {
 	var finalNode ExprNode
 	for len(ops) > 0 {
 		opTok := heap.Pop(&ops).(opToken)
+		leftI := opTok.index - 1
+		rightI := opTok.index + 1
 
 		var newNode ExprNode
 		newNode.Op = opTok.op
 		if opTok.index > 0 {
-			node, good := parsed[opTok.index-1]
+			parsed, good := parsed[opTok.index-1]
 			if good {
-				newNode.Left = node
+				newNode.Left = parsed.node
+				leftI = parsed.otherEnd
 			} else {
-				newNode.Left = tokenType(tokens[opTok.index-1])
+				newNode.Left = parseToken(tokens[opTok.index-1])
 			}
 		}
 		if opTok.index < len(tokens)-1 {
-			node, good := parsed[opTok.index+1]
+			parsed, good := parsed[opTok.index+1]
 			if good {
-				newNode.Right = node
+				newNode.Right = parsed.node
+				rightI = parsed.otherEnd
 			} else {
-				newNode.Right = tokenType(tokens[opTok.index+1])
+				newNode.Right = parseToken(tokens[opTok.index+1])
 			}
 		}
+
 		finalNode = newNode
+
+		if opTok.index > 0 {
+			parsed[leftI] = parsedNode{newNode, rightI}
+		}
+		if opTok.index < len(tokens)-1 {
+			parsed[rightI] = parsedNode{newNode, leftI}
+		}
 	}
 
 	return finalNode, nil
 }
 
-func tokenType(s string) interface{} {
+func parseToken(s string) interface{} {
 	// TODO: complete this
-	if unicode.IsDigit(rune(s[0])) {
+	if unicode.IsDigit(rune(s[0])) || s[0] == '-' {
 		return Literal{Number, s}
 	} else {
 		return IdName(s)
