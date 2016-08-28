@@ -164,21 +164,86 @@ func (o *OpHeap) Pop() interface{} {
 	return x
 }
 
-func parseExpr(s []byte) (interface{}, error) {
-	var ops OpHeap
-	heap.Init(&ops)
-	parsed := make(map[int]parsedNode)
-	tokens := Tokenize(string(s))
+func parseExpr(s string) (interface{}, error) {
+	tokens := Tokenize(s)
 
-	if len(tokens) == 1 {
-		return parseToken(tokens[0]), nil
+	type bracketInfo struct {
+		open int
+		end  int
 	}
 
+	parenInfo := make([]bracketInfo, 0)
+	openStack := make([]int, 0)
 	for i, tok := range tokens {
+		if tok == "(" {
+			openStack = append(openStack, i)
+		} else if tok == ")" {
+			if len(openStack) == 0 {
+				return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `unmatched ")"`}
+			}
+			parenInfo = append(parenInfo, bracketInfo{openStack[len(openStack)-1], i})
+			openStack = openStack[:len(openStack)-1]
+		}
+	}
+	if len(openStack) != 0 {
+		return nil, &ParseError{0, 0 /* tokenToCol(openStack[len(openStack)-1])*/, `unclosed "("`}
+	}
+
+	parsed := make(map[int]parsedNode)
+	for _, paren := range parenInfo {
+		node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
+		if err != nil {
+			return nil, err
+		}
+		parsed[paren.open] = parsedNode{node, paren.end}
+		parsed[paren.end] = parsedNode{node, paren.open}
+	}
+
+	outterMost, found := parsed[0]
+	if found && outterMost.otherEnd == len(tokens)-1 {
+		return outterMost.node, nil
+	}
+	return parseExprUnit(parsed, tokens, 0, len(tokens))
+}
+
+// A unit does not contain unparsed parenthese
+func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
+	var ops OpHeap
+	heap.Init(&ops)
+
+	if start == end {
+		return nil, &ParseError{0, 0, "Empty expression"}
+	}
+
+	if end-start == 1 {
+		return parseToken(tokens[start]), nil
+	}
+
+	i := start
+	for i < end {
+		parsed, found := parsed[i]
+		if found {
+			i = parsed.otherEnd + 1
+			continue
+		}
+		tok := tokens[i]
 		op, good := tokToOp[tok]
 		if good {
 			heap.Push(&ops, opToken{i, op})
 		}
+		i++
+		if tok == "(" {
+			fmt.Printf("%#v, i=%v", tokens, i)
+			panic("parseExprUnit() shouldn't see any open parenthesis tokens")
+		}
+	}
+
+	if len(ops) == 0 {
+		parsed, found := parsed[start]
+		if !found || parsed.otherEnd != end-1 {
+			return nil, &ParseError{0, 0, "Expected an operator"}
+		}
+		return parsed.node, nil
 	}
 
 	var finalNode ExprNode

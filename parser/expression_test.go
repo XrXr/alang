@@ -73,6 +73,45 @@ var parseExprCases = map[string]interface{}{
 			},
 		},
 	},
+	"(food + good * (cat - dog))": ExprNode{
+		Op:   Plus,
+		Left: IdName("food"),
+		Right: ExprNode{
+			Op:   Star,
+			Left: IdName("good"),
+			Right: ExprNode{
+				Op:    Minus,
+				Left:  IdName("cat"),
+				Right: IdName("dog"),
+			},
+		},
+	},
+	"(((food)))": IdName("food"),
+	"(good * (cat - dog) + puf - (joker + (flow - flock)))": ExprNode{
+		Op: Plus,
+		Left: ExprNode{
+			Op:   Star,
+			Left: IdName("good"),
+			Right: ExprNode{
+				Op:    Minus,
+				Left:  IdName("cat"),
+				Right: IdName("dog"),
+			},
+		},
+		Right: ExprNode{
+			Op:   Minus,
+			Left: IdName("puf"),
+			Right: ExprNode{
+				Op:   Plus,
+				Left: IdName("joker"),
+				Right: ExprNode{
+					Op:    Minus,
+					Left:  IdName("flow"),
+					Right: IdName("flock"),
+				},
+			},
+		},
+	},
 	"flower.grace + foo * 1000": ExprNode{
 		Op: Plus,
 		Left: ExprNode{
@@ -94,8 +133,8 @@ var parseExprCases = map[string]interface{}{
 func TestParseExpr(t *testing.T) {
 	for expr, expected := range parseExprCases {
 		defer func() {
-			if recover() != nil {
-				t.Errorf("Panicked while trying to parse %s", expr)
+			if r := recover(); r != nil {
+				t.Errorf("Panicked while trying to parse %s. %v", expr, r)
 			}
 		}()
 		tryParseExpr(t, expr, expected)
@@ -103,7 +142,7 @@ func TestParseExpr(t *testing.T) {
 }
 
 func tryParseExpr(t *testing.T, toParse string, correctResult interface{}) {
-	node, err := parseExpr([]byte(toParse))
+	node, err := parseExpr(toParse)
 	if err != nil {
 		t.Errorf(`Not able to successfully parse "%s"`, toParse)
 		return
