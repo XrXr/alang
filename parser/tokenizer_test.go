@@ -22,6 +22,7 @@ var fixture = map[string][]string{
 	"frac + -3231.20 * pop":      {"frac", "+", "-3231.20", "*", "pop"}, // negative in middle
 	"29 + -3231 * pop":           {"29", "+", "-3231", "*", "pop"},
 	"12.82 + foo * (bar - 1000)": {"12.82", "+", "foo", "*", "(", "bar", "-", "1000", ")"},
+	"foo(joster, cat)":           {"foo", "(", "joster", ",", "cat", ")"},
 }
 
 func TestTokenizer(t *testing.T) {

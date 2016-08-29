@@ -18,6 +18,7 @@ var bounderies = [...]string{
 	"|",
 	"(",
 	")",
+	",",
 }
 
 func Tokenize(in string) []string {

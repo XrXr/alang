@@ -19,6 +19,11 @@ type ProcNode struct {
 	Body []interface{}
 }
 
+type ProcCall struct {
+	Callee IdName
+	Args   []interface{}
+}
+
 const Invalid = 0
 
 //go:generate $GOPATH/bin/stringer -type=Operator

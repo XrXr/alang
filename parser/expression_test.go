@@ -5,26 +5,6 @@ import (
 	"testing"
 )
 
-// func TestEmptyFunc(t *testing.T) {
-//     node, err := Parse("proc flyers(flow: int) int {}")
-//     if err != nil {
-//         t.Error()
-//         return
-//     }
-//     pNode, parsed := node.(ProcNode)
-//     if !parsed {
-//         t.Error()
-//     }
-//     argList := make([]Declearation, 1)
-//     argList[0] = Declearation{Type: "int", Name: "flow"}
-//     reflect.DeepEqual(pNode, ProcNode{
-//         Name: "flyers",
-//         Args: argList,
-//         Ret: "int",
-//         Body: make([]interface{}, 0),
-//     })
-// }
-
 var parseExprCases = map[string]interface{}{
 	"+ br1dg3": ExprNode{
 		Op:    Plus,
@@ -128,6 +108,54 @@ var parseExprCases = map[string]interface{}{
 			},
 		},
 	},
+	"foo()": ProcCall{
+		Callee: IdName("foo"),
+		Args:   []interface{}{},
+	},
+	"foo(jo * ni, hog + rust)": ProcCall{
+		Callee: IdName("foo"),
+		Args: []interface{}{
+			ExprNode{
+				Op:    Star,
+				Left:  IdName("jo"),
+				Right: IdName("ni"),
+			},
+			ExprNode{
+				Op:    Plus,
+				Left:  IdName("hog"),
+				Right: IdName("rust"),
+			},
+		},
+	},
+	"fluke() + belief(jo, rust)": ExprNode{
+		Op: Plus,
+		Left: ProcCall{
+			Callee: IdName("fluke"),
+			Args:   []interface{}{},
+		},
+		Right: ProcCall{
+			Callee: IdName("belief"),
+			Args:   []interface{}{IdName("jo"), IdName("rust")},
+		},
+	},
+	"f(g(gp(cat, dog)), foo)": ProcCall{
+		Callee: IdName("f"),
+		Args: []interface{}{
+			ProcCall{
+				Callee: IdName("g"),
+				Args: []interface{}{
+					ProcCall{
+						Callee: IdName("gp"),
+						Args: []interface{}{
+							IdName("cat"),
+							IdName("dog"),
+						},
+					},
+				},
+			},
+			IdName("foo"),
+		},
+	},
 }
 
 func TestParseExpr(t *testing.T) {
@@ -139,12 +167,17 @@ func TestParseExpr(t *testing.T) {
 		}()
 		tryParseExpr(t, expr, expected)
 	}
+	// a := parser.ProcCall{Callee: "f", Args: []interface{}{
+	// 	parser.ProcCall{Callee: "g", Args: []interface{}{
+	// 		parser.ProcCall{
+	// 			Callee: "gp",
+	// 			Args:   []interface{}{"cat"}}}}}}
 }
 
 func tryParseExpr(t *testing.T, toParse string, correctResult interface{}) {
 	node, err := parseExpr(toParse)
 	if err != nil {
-		t.Errorf(`Not able to successfully parse "%s"`, toParse)
+		t.Errorf(`Not able to successfully parse "%s". %#v`, toParse, err)
 		return
 	}
 	if !reflect.DeepEqual(node, correctResult) {

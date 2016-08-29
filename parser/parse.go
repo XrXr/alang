@@ -166,7 +166,11 @@ func (o *OpHeap) Pop() interface{} {
 
 func parseExpr(s string) (interface{}, error) {
 	tokens := Tokenize(s)
+	parsed := make(map[int]parsedNode)
+	return parseExprWithParen(parsed, tokens, 0, len(tokens))
+}
 
+func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
 	type bracketInfo struct {
 		open int
 		end  int
@@ -174,7 +178,9 @@ func parseExpr(s string) (interface{}, error) {
 
 	parenInfo := make([]bracketInfo, 0)
 	openStack := make([]int, 0)
-	for i, tok := range tokens {
+	i := start
+	for i < end {
+		tok := tokens[i]
 		if tok == "(" {
 			openStack = append(openStack, i)
 		} else if tok == ")" {
@@ -184,26 +190,63 @@ func parseExpr(s string) (interface{}, error) {
 			parenInfo = append(parenInfo, bracketInfo{openStack[len(openStack)-1], i})
 			openStack = openStack[:len(openStack)-1]
 		}
+		i++
 	}
 	if len(openStack) != 0 {
 		return nil, &ParseError{0, 0 /* tokenToCol(openStack[len(openStack)-1])*/, `unclosed "("`}
 	}
 
-	parsed := make(map[int]parsedNode)
 	for _, paren := range parenInfo {
-		node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
-		if err != nil {
-			return nil, err
+		// it's a call
+		if paren.open-1 >= 0 && tokenIsId(tokens[paren.open-1]) {
+			i := paren.open + 1
+
+			args := make([]interface{}, 0)
+			for j := i; j < end && j <= paren.end; j++ {
+				if paren.open+1 == paren.end { // call with no arguments
+					break
+				}
+				if i >= start && i < end {
+					parsedInfo, found := parsed[i]
+					if found {
+						args = append(args, parsedInfo.node)
+						i = parsedInfo.otherEnd + 2 // +1 would step on ","
+						j = i
+						continue
+					}
+				}
+				tok := tokens[j]
+				if tok == "," || j == paren.end {
+					node, err := parseExprWithParen(parsed, tokens, i, j)
+					if err != nil {
+						return nil, err
+					}
+					i = j + 1
+					args = append(args, node)
+				}
+			}
+			idNode, good := parseToken(tokens[paren.open-1]).(IdName)
+			if !good {
+				return nil, &ParseError{0, 0, `expected an identifier`}
+			}
+			call := ProcCall{Callee: idNode, Args: args}
+			parsed[paren.open-1] = parsedNode{call, paren.end}
+			parsed[paren.end] = parsedNode{call, paren.open - 1}
+		} else {
+			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
+			if err != nil {
+				return nil, err
+			}
+			parsed[paren.open] = parsedNode{node, paren.end}
+			parsed[paren.end] = parsedNode{node, paren.open}
 		}
-		parsed[paren.open] = parsedNode{node, paren.end}
-		parsed[paren.end] = parsedNode{node, paren.open}
 	}
 
 	outterMost, found := parsed[0]
 	if found && outterMost.otherEnd == len(tokens)-1 {
 		return outterMost.node, nil
 	}
-	return parseExprUnit(parsed, tokens, 0, len(tokens))
+	return parseExprUnit(parsed, tokens, start, end)
 }
 
 // A unit does not contain unparsed parenthese
@@ -233,7 +276,6 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		}
 		i++
 		if tok == "(" {
-			fmt.Printf("%#v, i=%v", tokens, i)
 			panic("parseExprUnit() shouldn't see any open parenthesis tokens")
 		}
 	}
@@ -293,4 +335,22 @@ func parseToken(s string) interface{} {
 	} else {
 		return IdName(s)
 	}
+}
+
+func tokenIsOperator(token string) bool {
+	_, found := tokToOp[token]
+	return found
+}
+
+func tokenIsId(token string) bool {
+	firstCharGood := unicode.IsLetter(rune(token[0]))
+	if !firstCharGood {
+		return false
+	}
+	for _, c := range token {
+		if !(unicode.IsLetter(c) || unicode.IsDigit(c)) {
+			return false
+		}
+	}
+	return true
 }
