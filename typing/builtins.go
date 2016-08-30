@@ -1,8 +1,9 @@
 package typing
 
-func builtinTypes() map[TypeName]bool {
+func BuiltinTypes() map[TypeName]bool {
 	return map[TypeName]bool{
 		"string": true,
+		"void":   true,
 		"int":    true,
 		"s64":    true,
 		"s32":    true,
@@ -12,5 +13,14 @@ func builtinTypes() map[TypeName]bool {
 		"u32":    true,
 		"u16":    true,
 		"u8":     true,
+	}
+}
+
+// include the preclude functions
+func BaseEnv() EnvRecord {
+	return EnvRecord{
+		Funcs: FuncRecord{
+			"print": {Return: "void", Args: []TypeName{"string"}},
+		},
 	}
 }

@@ -115,6 +115,7 @@ var tokToOp = map[string]Operator{
 	"*": Star,
 	"-": Minus,
 	".": Dot,
+	"=": Assign,
 }
 
 var precedence = map[Operator]int{

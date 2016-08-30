@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-var fixture = map[string]TypeName{
+var InferFixture = map[string]TypeName{
 	`"food"`: "string",
 }
 
 func TestInferExprType(t *testing.T) {
-	for expr, expected := range fixture {
+	for expr, expected := range InferFixture {
 		node, err := parser.ParseExpr(expr)
 		if err != nil {
 			t.Errorf(`Failed to parse %s. Error in the fixture?`, expr)

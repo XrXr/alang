@@ -19,6 +19,11 @@ var parseExprCases = map[string]interface{}{
 		Type:  String,
 		Value: "food",
 	},
+	"a = bar": ExprNode{
+		Op:    Assign,
+		Left:  IdName("a"),
+		Right: IdName("bar"),
+	},
 	"12.82 + foo * bar - 1000": ExprNode{
 		Op: Plus,
 		Left: Literal{
