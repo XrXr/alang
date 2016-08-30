@@ -15,6 +15,10 @@ var parseExprCases = map[string]interface{}{
 		Type:  Number,
 		Value: "-10.20",
 	},
+	`"food"`: Literal{
+		Type:  String,
+		Value: "food",
+	},
 	"12.82 + foo * bar - 1000": ExprNode{
 		Op: Plus,
 		Left: Literal{
@@ -175,7 +179,7 @@ func TestParseExpr(t *testing.T) {
 }
 
 func tryParseExpr(t *testing.T, toParse string, correctResult interface{}) {
-	node, err := parseExpr(toParse)
+	node, err := ParseExpr(toParse)
 	if err != nil {
 		t.Errorf(`Not able to successfully parse "%s". %#v`, toParse, err)
 		return

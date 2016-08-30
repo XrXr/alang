@@ -164,7 +164,7 @@ func (o *OpHeap) Pop() interface{} {
 	return x
 }
 
-func parseExpr(s string) (interface{}, error) {
+func ParseExpr(s string) (interface{}, error) {
 	tokens := Tokenize(s)
 	parsed := make(map[int]parsedNode)
 	return parseExprWithParen(parsed, tokens, 0, len(tokens))
@@ -329,9 +329,11 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 }
 
 func parseToken(s string) interface{} {
-	// TODO: complete this
+	// TODO: array literals
 	if unicode.IsDigit(rune(s[0])) || s[0] == '-' {
 		return Literal{Number, s}
+	} else if s[0] == '"' {
+		return Literal{String, s[1 : len(s)-1]}
 	} else {
 		return IdName(s)
 	}
