@@ -3,18 +3,20 @@ package parser
 import (
 	"container/heap"
 	"fmt"
+	"strings"
 	"unicode"
 )
 
 var _ = fmt.Printf // for debugging. remove when done
 
 var tokToOp = map[string]Operator{
-	"+": Plus,
-	"/": Divide,
-	"*": Star,
-	"-": Minus,
-	".": Dot,
-	"=": Assign,
+	"::": ConstDeclare,
+	"+":  Plus,
+	"/":  Divide,
+	"*":  Star,
+	"-":  Minus,
+	".":  Dot,
+	"=":  Assign,
 }
 
 var precedence = map[Operator]int{
@@ -29,6 +31,11 @@ var precedence = map[Operator]int{
 type parsedNode struct {
 	node     interface{}
 	otherEnd int
+}
+
+type bracketInfo struct { //index to the opening bracket and the closing
+	open int
+	end  int
 }
 
 // index for characters in the token string fall in the interval
@@ -71,11 +78,6 @@ func ParseExpr(s string) (interface{}, error) {
 }
 
 func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
-	type bracketInfo struct {
-		open int
-		end  int
-	}
-
 	parenInfo := make([]bracketInfo, 0)
 	openStack := make([]int, 0)
 	i := start
@@ -97,41 +99,26 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	}
 
 	for _, paren := range parenInfo {
-		// it's a call
+		// it's a call or a proc expression
 		if paren.open-1 >= 0 && tokenIsId(tokens[paren.open-1]) {
-			i := paren.open + 1
-
-			args := make([]interface{}, 0)
-			for j := i; j < end && j <= paren.end; j++ {
-				if paren.open+1 == paren.end { // call with no arguments
-					break
+			var node interface{}
+			end := paren.end
+			if tokens[paren.open-1] == "proc" {
+				proc, blockStart, err := parseProcExpr(tokens, parsed, paren)
+				if err != nil {
+					return nil, err
 				}
-				if i >= start && i < end {
-					parsedInfo, found := parsed[i]
-					if found {
-						args = append(args, parsedInfo.node)
-						i = parsedInfo.otherEnd + 2 // +1 would step on ","
-						j = i
-						continue
-					}
+				node = *proc
+				end = blockStart
+			} else {
+				call, err := parseCallList(tokens, parsed, paren)
+				if err != nil {
+					return nil, err
 				}
-				tok := tokens[j]
-				if tok == "," || j == paren.end {
-					node, err := parseExprWithParen(parsed, tokens, i, j)
-					if err != nil {
-						return nil, err
-					}
-					i = j + 1
-					args = append(args, node)
-				}
+				node = *call
 			}
-			idNode, good := parseToken(tokens[paren.open-1]).(IdName)
-			if !good {
-				return nil, &ParseError{0, 0, `expected an identifier`}
-			}
-			call := ProcCall{Callee: idNode, Args: args}
-			parsed[paren.open-1] = parsedNode{call, paren.end}
-			parsed[paren.end] = parsedNode{call, paren.open - 1}
+			parsed[paren.open-1] = parsedNode{node, end}
+			parsed[end] = parsedNode{node, paren.open - 1}
 		} else {
 			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
 			if err != nil {
@@ -228,9 +215,84 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 	return finalNode, nil
 }
 
+func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo) (*ProcCall, error) {
+	i := paren.open + 1
+
+	args := make([]interface{}, 0)
+	for j := i; j <= paren.end; j++ {
+		if paren.open+1 == paren.end { // call with no arguments
+			break
+		}
+		parsedInfo, found := parsed[i]
+		if found {
+			args = append(args, parsedInfo.node)
+			i = parsedInfo.otherEnd + 2 // +1 would step on ","
+			j = i
+			continue
+		}
+		tok := tokens[j]
+		if tok == "," || j == paren.end {
+			node, err := parseExprWithParen(parsed, tokens, i, j)
+			if err != nil {
+				return nil, err
+			}
+			i = j + 1
+			args = append(args, node)
+		}
+	}
+	idNode, good := parseToken(tokens[paren.open-1]).(IdName)
+	if !good {
+		return nil, &ParseError{0, 0, `expected an identifier`}
+	}
+
+	return &ProcCall{Callee: idNode, Args: args}, nil
+}
+
+func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo) (*ProcNode, int, error) {
+	i := paren.open + 1
+	args := make([]Declaration, 0)
+	for j := i; j <= paren.end; j++ {
+		tok := tokens[j]
+		if paren.open+1 == paren.end { // no arguments
+			break
+		}
+		if tok == "," || j == paren.end {
+			last := tokens[j-1]
+			spaceIdx := strings.IndexRune(last, ' ')
+			if spaceIdx == -1 {
+				return nil, 0, &ParseError{0, 0, `expected a type declaration`}
+			}
+			args = append(args, Declaration{
+				TypeName(last[:spaceIdx]), IdName(last[spaceIdx+1:]),
+			})
+			//TODO error checking
+		}
+	}
+	blockStart := paren.end + 1
+	returnType := TypeName("void")
+	if paren.end+1 < len(tokens) && tokens[paren.end+1] == "->" {
+		if paren.end+2 >= len(tokens) {
+			return nil, 0, &ParseError{0, 0, "Expected a type"}
+		}
+		returnType = TypeName(tokens[paren.end+2])
+		blockStart = paren.end + 3
+	}
+
+	if blockStart < len(tokens) && tokens[blockStart] != "{" {
+		col := blockStart
+		if blockStart >= len(tokens) {
+			col = len(tokens) - 1
+		}
+		// TODO translate token idx to col
+		return nil, 0, &ParseError{0, col, "Expected a block"}
+	}
+	return &ProcNode{Ret: returnType, Args: args, Body: Block{}}, blockStart, nil
+}
+
 func parseToken(s string) interface{} {
-	// TODO: array literals
-	if unicode.IsDigit(rune(s[0])) || s[0] == '-' {
+	if s == "}" {
+		return BlockEnd(0)
+	} else if unicode.IsDigit(rune(s[0])) || s[0] == '-' {
 		return Literal{Number, s}
 	} else if s[0] == '"' {
 		return Literal{String, s[1 : len(s)-1]}

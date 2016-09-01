@@ -26,17 +26,16 @@ func TestParseHelloWorld(t *testing.T) {
 		},
 	}
 	if !reflect.DeepEqual(firstNode, firstLineExpected) {
-		t.Errorf("Bad parse for first line")
+		t.Errorf("Bad parse for first line. Got %#v", firstNode)
 		return
 	}
-	proc := firstNode.(ExprNode).Right
 	isComplete, secondNode, parent, _ := p.FeedLine(`puts("Hello World")`)
 	if !isComplete {
 		t.Errorf("Second line should be complete")
 		return
 	}
-	if parent != proc {
-		t.Errorf("Second line should point back to the proc node")
+	if !reflect.DeepEqual(parent, firstNode) {
+		t.Errorf("Second line should point back to the first node. Got %#v", parent)
 		return
 	}
 	secondLineExpected := ProcCall{
@@ -61,21 +60,8 @@ func TestParseHelloWorld(t *testing.T) {
 		t.Errorf("Third line should't have a parent")
 		return
 	}
-	if thirdNode != firstNode {
-		t.Errorf("Third node should complete first node")
-		return
-	}
-	thirdNodeExpected := ExprNode{
-		Op:   ConstDeclare,
-		Left: IdName("main"),
-		Right: ProcNode{
-			Args: []Declaration{},
-			Ret:  TypeName("void"),
-			Body: Block{secondLineExpected},
-		},
-	}
-	if !reflect.DeepEqual(thirdNode, thirdNodeExpected) {
-		t.Errorf("Third node is incorrect")
+	if !reflect.DeepEqual(thirdNode, firstNode) {
+		t.Errorf("Third node should be first node. Got %#v", thirdNode)
 		return
 	}
 }

@@ -20,6 +20,10 @@ type ProcNode struct {
 	Body Block
 }
 
+type ExpressionContainer interface {
+	AppendExpression(interface{})
+}
+
 type ProcCall struct {
 	Callee IdName
 	Args   []interface{}
@@ -68,6 +72,8 @@ type ParseError struct {
 	Column  int
 	Message string
 }
+
+type BlockEnd int
 
 func (e *ParseError) Error() string {
 	return fmt.Sprintf("%d:%d", e.Line, e.Column)

@@ -165,7 +165,64 @@ var parseExprCases = map[string]interface{}{
 			IdName("foo"),
 		},
 	},
-	"{foo}": Block{IdName("foo")},
+	// "{foo}": Block{IdName("foo")},
+	"proc () {": ProcNode{
+		Ret:  TypeName("void"),
+		Args: []Declaration{},
+		Body: []interface{}{},
+	},
+	"proc () -> string {": ProcNode{
+		Ret:  TypeName("string"),
+		Args: []Declaration{},
+		Body: []interface{}{},
+	},
+	"proc (int bar) {": ProcNode{
+		Ret:  TypeName("void"),
+		Args: []Declaration{{TypeName("int"), IdName("bar")}},
+		Body: []interface{}{},
+	},
+	"proc (int bar) -> john {": ProcNode{
+		Ret:  TypeName("john"),
+		Args: []Declaration{{TypeName("int"), IdName("bar")}},
+		Body: []interface{}{},
+	},
+	"proc (int foo, string bar) {": ProcNode{
+		Ret: TypeName("void"),
+		Args: []Declaration{
+			{TypeName("int"), IdName("foo")},
+			{TypeName("string"), IdName("bar")},
+		},
+		Body: []interface{}{},
+	},
+	"proc (int foo, string bar) -> void {": ProcNode{
+		Ret: TypeName("void"),
+		Args: []Declaration{
+			{TypeName("int"), IdName("foo")},
+			{TypeName("string"), IdName("bar")},
+		},
+		Body: []interface{}{},
+	},
+	"happy :: proc (string cat) -> string {": ExprNode{
+		Op:   ConstDeclare,
+		Left: IdName("happy"),
+		Right: ProcNode{
+			Ret: TypeName("string"),
+			Args: []Declaration{
+				{TypeName("string"), IdName("cat")},
+			},
+			Body: []interface{}{},
+		},
+	},
+	"happy :: proc () {": ExprNode{
+		Op:   ConstDeclare,
+		Left: IdName("happy"),
+		Right: ProcNode{
+			Ret:  TypeName("void"),
+			Args: []Declaration{},
+			Body: []interface{}{},
+		},
+	},
+	"}": BlockEnd(0),
 }
 
 func TestParseExpr(t *testing.T) {
