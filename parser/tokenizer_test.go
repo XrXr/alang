@@ -26,6 +26,7 @@ var fixture = map[string][]string{
 	`12.82 + "fooser"`:           {"12.82", "+", `"fooser"`},
 	`"fooser".cat`:               {`"fooser"`, ".", "cat"},
 	`"fo\"oser\n".cat`:           {`"fo\"oser\n"`, ".", "cat"},
+	"main :: proc () {":          {"main", "::", "proc", "(", ")", "{"},
 }
 
 func TestTokenizer(t *testing.T) {

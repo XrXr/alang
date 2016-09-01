@@ -165,6 +165,7 @@ var parseExprCases = map[string]interface{}{
 			IdName("foo"),
 		},
 	},
+	"{foo}": Block{IdName("foo")},
 }
 
 func TestParseExpr(t *testing.T) {
@@ -176,11 +177,6 @@ func TestParseExpr(t *testing.T) {
 		}()
 		tryParseExpr(t, expr, expected)
 	}
-	// a := parser.ProcCall{Callee: "f", Args: []interface{}{
-	// 	parser.ProcCall{Callee: "g", Args: []interface{}{
-	// 		parser.ProcCall{
-	// 			Callee: "gp",
-	// 			Args:   []interface{}{"cat"}}}}}}
 }
 
 func tryParseExpr(t *testing.T, toParse string, correctResult interface{}) {

@@ -7,16 +7,17 @@ import (
 type TypeName string
 type IdName string
 
-type Declearation struct {
+type Declaration struct {
 	Type TypeName
 	Name IdName
 }
 
+type Block []interface{}
+
 type ProcNode struct {
-	Name IdName
-	Args []Declearation
+	Args []Declaration
 	Ret  TypeName
-	Body []interface{}
+	Body Block
 }
 
 type ProcCall struct {
@@ -38,6 +39,7 @@ const (
 	Call
 	Assign
 	Declare
+	ConstDeclare
 	Dereference
 )
 

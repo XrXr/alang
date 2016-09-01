@@ -21,6 +21,9 @@ var bounderies = [...]string{
 	",",
 	":=",
 	"=",
+	"::",
+	"{",
+	"}",
 }
 
 func Tokenize(in string) []string {
@@ -37,6 +40,12 @@ func Tokenize(in string) []string {
 					numLitEnd := iAfterNumLiteral(in, j+1)
 					result = append(result, in[j:numLitEnd])
 					i = iAfterWs(in, numLitEnd)
+					found = true
+					break outter
+				}
+				if in[j] == '\n' {
+					result = append(result, in[i:j])
+					i = j + 1
 					found = true
 					break outter
 				}
