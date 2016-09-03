@@ -7,11 +7,17 @@ import (
 	"github.com/XrXr/alang/parser"
 	"os"
 	"os/exec"
+	"sync"
 )
+
+type labelIdGen struct {
+	sync.Mutex
+	availableId int
+}
 
 var paramOrder = []string{"rax", "rbx"}
 
-func genForBlock(content chan interface{}, codeOut chan string, staticDataOut chan string) {
+func genForBlock(labelGen *labelIdGen, content chan interface{}, codeOut chan string, staticDataOut chan string) {
 	var codeBuf bytes.Buffer
 	var staticDataBuf bytes.Buffer
 	for line := range content {
@@ -24,7 +30,6 @@ func genForBlock(content chan interface{}, codeOut chan string, staticDataOut ch
 					if a.Type == parser.String {
 						var stringInsBuf bytes.Buffer
 						stringInsBuf.WriteString("\tdb\t")
-						// TODO label gen
 						byteCount := 0
 						i := 0
 						needToStartQuote := true
@@ -42,17 +47,24 @@ func genForBlock(content chan interface{}, codeOut chan string, staticDataOut ch
 							}
 							byteCount++
 						}
-						staticDataBuf.WriteString("message:\n" +
-							fmt.Sprintf("\tdq\t%d\n", byteCount))
+
+						labelGen.Lock()
+						labelName := fmt.Sprintf("label%d", labelGen.availableId)
+						labelGen.availableId++
+						labelGen.Unlock()
+
+						staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
+						staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
 						staticDataBuf.ReadFrom(&stringInsBuf)
-						argLocations = append(argLocations, "message")
+						staticDataBuf.WriteRune('\n')
+						argLocations = append(argLocations, labelName)
 					}
 				}
 			}
 			for i, location := range argLocations {
 				codeBuf.WriteString(fmt.Sprintf("\tmov %s, %s\n", paramOrder[i], location))
 			}
-			codeBuf.WriteString(fmt.Sprintf("\tcall %s", node.Callee))
+			codeBuf.WriteString(fmt.Sprintf("\tcall %s\n", node.Callee))
 		}
 	}
 	codeOut <- codeBuf.String()
@@ -74,6 +86,7 @@ func main() {
 	}
 	scanner := bufio.NewScanner(file)
 	blocks := make(map[parser.IdName]blockInfo)
+	var labelGen labelIdGen
 	var p parser.Parser
 	for scanner.Scan() {
 		isComplete, node, parent, _ := p.FeedLine(scanner.Text())
@@ -86,7 +99,7 @@ func main() {
 					make(chan string),
 					make(chan interface{})}
 				blocks[exprNode.Left.(parser.IdName)] = info
-				go genForBlock(info.feed, info.code, info.static)
+				go genForBlock(&labelGen, info.feed, info.code, info.static)
 			}
 			continue
 		}
