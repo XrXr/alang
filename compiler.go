@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"github.com/XrXr/alang/parser"
+	"log"
 	"os"
 	"os/exec"
 	"sync"
@@ -74,17 +76,25 @@ func genForBlock(labelGen *labelIdGen, content chan interface{}, codeOut chan st
 }
 
 func main() {
-	file, err := os.Open("hello.al")
+	outputPath := flag.String("o", "a.out", "path to the binary")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) < 1 {
+		log.Fatal("No input file specified")
+	}
+	sourcePath := args[0]
+
+	source, err := os.Open(sourcePath)
 	if err != nil {
 		return
 	}
-	defer file.Close()
+	defer source.Close()
 	type blockInfo struct {
 		code   chan string
 		static chan string
 		feed   chan interface{}
 	}
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(source)
 	blocks := make(map[parser.IdName]blockInfo)
 	var labelGen labelIdGen
 	var p parser.Parser
@@ -159,7 +169,7 @@ func main() {
 		fmt.Printf("nasm call failed %v\n", err)
 		return
 	}
-	cmd = exec.Command("ld", "a.o")
+	cmd = exec.Command("ld", "-o", *outputPath, "a.o")
 	err = cmd.Start()
 	if err != nil {
 		fmt.Printf("Could not start ld\n")
