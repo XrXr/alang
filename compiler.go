@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"sync"
 )
 
@@ -19,11 +20,31 @@ type labelIdGen struct {
 
 var paramOrder = []string{"rax", "rbx"}
 
-func genForBlock(labelGen *labelIdGen, content chan interface{}, codeOut chan string, staticDataOut chan string) {
+func genForBlock(labelGen *labelIdGen, lineIn chan interface{}, codeOut chan string, staticDataOut chan string) {
 	var codeBuf bytes.Buffer
 	var staticDataBuf bytes.Buffer
-	for line := range content {
+	varNum := 0
+	for line := range lineIn {
 		switch node := line.(type) {
+		case parser.ExprNode:
+			if node.Op == parser.Declare {
+				literal, rightIsLiteral := node.Right.(parser.Literal)
+				if rightIsLiteral {
+					switch literal.Type {
+					case parser.Number:
+						codeBuf.WriteString(fmt.Sprintf("\tmov $var%d, %s\n",
+							varNum, literal.Value))
+					case parser.Boolean:
+						value := 1
+						if literal.Value == "false" {
+							value = 0
+						}
+						codeBuf.WriteString(fmt.Sprintf("\tmov $var%d, %d\n",
+							varNum, value))
+					}
+				}
+				varNum++
+			}
 		case parser.ProcCall:
 			argLocations := make([]string, 0)
 			for _, arg := range node.Args {
@@ -49,6 +70,10 @@ func genForBlock(labelGen *labelIdGen, content chan interface{}, codeOut chan st
 							}
 							byteCount++
 						}
+						// end the string
+						if !needToStartQuote {
+							stringInsBuf.WriteRune('"')
+						}
 
 						labelGen.Lock()
 						labelName := fmt.Sprintf("label%d", labelGen.availableId)
@@ -69,10 +94,19 @@ func genForBlock(labelGen *labelIdGen, content chan interface{}, codeOut chan st
 			codeBuf.WriteString(fmt.Sprintf("\tcall %s\n", node.Callee))
 		}
 	}
-	codeOut <- codeBuf.String()
-	close(codeOut)
-	staticDataOut <- staticDataBuf.String()
-	close(staticDataOut)
+	sendLinesToChan(&codeBuf, &codeOut)
+	sendLinesToChan(&staticDataBuf, &staticDataOut)
+}
+
+func sendLinesToChan(buf *bytes.Buffer, channel *chan string) {
+	for {
+		line, err := buf.ReadString('\n')
+		*channel <- line
+		if err != nil {
+			close(*channel)
+			break
+		}
+	}
 }
 
 func main() {
@@ -89,10 +123,18 @@ func main() {
 		return
 	}
 	defer source.Close()
+	const (
+		None = iota
+		Proc
+		If
+		Else
+	)
 	type blockInfo struct {
-		code   chan string
-		static chan string
-		feed   chan interface{}
+		code      chan string
+		static    chan string
+		feed      chan interface{}
+		ownerType int
+		owner     string
 	}
 	scanner := bufio.NewScanner(source)
 	blocks := make(map[parser.IdName]blockInfo)
@@ -105,24 +147,27 @@ func main() {
 			_, isProc := exprNode.Right.(parser.ProcNode)
 			if isProc {
 				info := blockInfo{
-					make(chan string),
-					make(chan string),
-					make(chan interface{})}
+					code:      make(chan string),
+					static:    make(chan string),
+					feed:      make(chan interface{}),
+					ownerType: Proc,
+				}
 				blocks[exprNode.Left.(parser.IdName)] = info
 				go genForBlock(&labelGen, info.feed, info.code, info.static)
 			}
 			continue
 		}
-		bid := func(i interface{}) parser.IdName {
+		idName := func(i interface{}) parser.IdName {
 			return i.(parser.ExprNode).Left.(parser.IdName)
 		}
+		// end of proc
 		if isComplete && parent == nil {
-			info, found := blocks[bid(node)]
+			info, found := blocks[idName(node)]
 			if found {
 				close(info.feed)
 			}
-		} else if isComplete && parent != nil {
-			info := blocks[bid(parent)]
+		} else if isComplete && parent != nil { // line in a proc
+			info := blocks[idName(parent)]
 			info.feed <- node
 		}
 	}
@@ -133,14 +178,41 @@ func main() {
 	defer out.Close()
 	fmt.Fprintln(out, "\tglobal _start")
 	fmt.Fprintln(out, "\tsection .text")
+	stackOffset := 0
+	varNameRegex := regexp.MustCompile(`\$var[0-9]+`)
 	for blockName, info := range blocks {
+		// TODO: need more information about the block's owner. Is it a block
+		// for a proc? if? else?
 		fmt.Fprintln(out, blockName+":")
+		fmt.Fprintln(out, "\tpush rbp")
+		fmt.Fprintln(out, "\tmov rbp, rsp")
+		// map "$var{number}" in this block to locations like [rsp-8]
+		varTable := make(map[string]string)
 		for s := range info.code {
-			fmt.Fprintln(out, s)
+			match := varNameRegex.FindStringIndex(s)
+			if match != nil {
+				fmt.Fprint(out, s[:match[0]])
+
+				varTpl := s[match[0]:match[1]]
+				loc, found := varTable[varTpl]
+				if found {
+					fmt.Fprint(out, loc)
+				} else {
+					loc := fmt.Sprintf("qword [rbp-%d]", stackOffset)
+					varTable[varTpl] = loc
+					fmt.Fprint(out, loc)
+					stackOffset += 8
+				}
+
+				fmt.Fprint(out, s[match[1]:])
+			} else {
+				fmt.Fprint(out, s)
+			}
 		}
+		fmt.Fprintln(out, "\tpop rbp")
 		fmt.Fprintln(out, "\tret")
 		for s := range info.static {
-			fmt.Fprintln(out, s)
+			fmt.Fprint(out, s)
 		}
 	}
 

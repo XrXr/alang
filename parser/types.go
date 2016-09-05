@@ -54,6 +54,7 @@ const (
 	Number LiteralType = iota + 1
 	String
 	Array
+	Boolean
 )
 
 type Literal struct {
@@ -71,6 +72,10 @@ type ParseError struct {
 	Line    int
 	Column  int
 	Message string
+}
+
+type IfNode struct {
+	Condition interface{}
 }
 
 type BlockEnd int

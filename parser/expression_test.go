@@ -15,6 +15,14 @@ var parseExprCases = map[string]interface{}{
 		Type:  Number,
 		Value: "-10.20",
 	},
+	"true": Literal{
+		Type:  Boolean,
+		Value: "true",
+	},
+	"false": Literal{
+		Type:  Boolean,
+		Value: "false",
+	},
 	`"food"`: Literal{
 		Type:  String,
 		Value: "food",
@@ -23,6 +31,19 @@ var parseExprCases = map[string]interface{}{
 		Op:    Assign,
 		Left:  IdName("a"),
 		Right: IdName("bar"),
+	},
+	"a := hue": ExprNode{
+		Op:    Declare,
+		Left:  IdName("a"),
+		Right: IdName("hue"),
+	},
+	"a := false": ExprNode{
+		Op:   Declare,
+		Left: IdName("a"),
+		Right: Literal{
+			Type:  Boolean,
+			Value: "false",
+		},
 	},
 	"12.82 + foo * bar - 1000": ExprNode{
 		Op: Plus,
@@ -223,6 +244,9 @@ var parseExprCases = map[string]interface{}{
 		},
 	},
 	"}": BlockEnd(0),
+	"if happy {": IfNode{
+		Condition: IdName("happy"),
+	},
 }
 
 func TestParseExpr(t *testing.T) {

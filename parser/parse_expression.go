@@ -11,6 +11,7 @@ var _ = fmt.Printf // for debugging. remove when done
 
 var tokToOp = map[string]Operator{
 	"::": ConstDeclare,
+	":=": Declare,
 	"+":  Plus,
 	"/":  Divide,
 	"*":  Star,
@@ -294,6 +295,8 @@ func parseToken(s string) interface{} {
 		return BlockEnd(0)
 	} else if unicode.IsDigit(rune(s[0])) || s[0] == '-' {
 		return Literal{Number, s}
+	} else if s == "true" || s == "false" {
+		return Literal{Boolean, s}
 	} else if s[0] == '"' {
 		return Literal{String, s[1 : len(s)-1]}
 	} else {
