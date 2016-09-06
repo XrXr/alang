@@ -30,7 +30,7 @@ var bounderies = [...]string{
 func Tokenize(in string) []string {
 	var result []string
 	var lastFoundIdx int
-	i := 0
+	i := iAfterWs(in, 0)
 	for i < len(in) {
 		found := false
 	outter:
@@ -57,6 +57,12 @@ func Tokenize(in string) []string {
 						result = append(result, strings.TrimSpace(in[i:j]), bound)
 					}
 					i = iAfterWs(in, j+len(bound))
+					found = true
+					break outter
+				}
+				if j+3 <= len(in) && in[j:j+3] == "if " && (j == 0 || isSpace(in[j-1])) {
+					result = append(result, "if")
+					i = iAfterWs(in, j+3)
 					found = true
 					break outter
 				}

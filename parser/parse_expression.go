@@ -75,6 +75,21 @@ func (o *OpHeap) Pop() interface{} {
 func ParseExpr(s string) (interface{}, error) {
 	tokens := Tokenize(s)
 	parsed := make(map[int]parsedNode)
+	if tokens[0] == "if" {
+		if tokens[len(tokens)-1] != "{" {
+			return nil, &ParseError{0, 0, "if statement must end in {"}
+		}
+		if len(tokens) < 3 {
+			return nil, &ParseError{0, 0, "Missing conditonal for if statement"}
+		}
+		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens)-1)
+		if err != nil {
+			return nil, err
+		}
+		return IfNode{
+			Condition: parsed,
+		}, nil
+	}
 	return parseExprWithParen(parsed, tokens, 0, len(tokens))
 }
 

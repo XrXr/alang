@@ -1,37 +1,45 @@
 package parser
 
 type Parser struct {
-	incompleteStack []interface{}
+	incompleteStack []*interface{}
 }
 
-func (p *Parser) FeedLine(line string) (isComplete bool, node interface{}, parent interface{}, err error) {
-	getParent := func() (parent interface{}) {
+func (p *Parser) FeedLine(line string) (isComplete bool, node_ptr *interface{}, parent *interface{}, err error) {
+	getParent := func() (parent *interface{}) {
 		l := len(p.incompleteStack)
 		if l >= 1 {
 			parent = p.incompleteStack[l-1]
 		}
 		return
 	}
-	node, err = ParseExpr(line)
+	startNewBlock := func(node *interface{}) {
+		parent = getParent()
+		p.incompleteStack = append(p.incompleteStack, node)
+	}
+	n, err := ParseExpr(line)
 	if err != nil {
 		return false, nil, nil, err
 	}
-	switch t := node.(type) {
+	switch t := n.(type) {
 	case ExprNode:
 		if t.Op == ConstDeclare {
 			_, good := t.Right.(ProcNode)
 			if good {
-				parent = getParent()
-				p.incompleteStack = append(p.incompleteStack, t)
-
-				return false, t, parent, nil
+				startNewBlock(&n)
+				return false, &n, parent, nil
 			}
 		}
+	case IfNode:
+		startNewBlock(&n)
+		return false, &n, parent, nil
 	case BlockEnd:
 		l := len(p.incompleteStack)
+		if l == 0 {
+			return false, nil, nil, &ParseError{0, 0, "Unmatched closing brace"}
+		}
 		top := p.incompleteStack[l-1]
 		p.incompleteStack = p.incompleteStack[:l-1]
-		return true, top, getParent(), nil
+		return true, &n, top, nil
 	}
-	return true, node, getParent(), nil
+	return true, &n, getParent(), nil
 }
