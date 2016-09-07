@@ -247,6 +247,7 @@ var parseExprCases = map[string]interface{}{
 	"if happy {": IfNode{
 		Condition: IdName("happy"),
 	},
+	"else {": ElseNode{},
 }
 
 func TestParseExpr(t *testing.T) {

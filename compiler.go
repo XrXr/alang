@@ -56,6 +56,7 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	var staticDataBuf bytes.Buffer
 	idToTemplateName := make(map[parser.IdName]string)
 	varNum := 0
+	var lastNodePtr *interface{}
 	for nodePtr := range info.feed {
 		switch node := (*nodePtr).(type) {
 		case parser.ExprNode:
@@ -99,6 +100,21 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				codeGenCommand{isTransclude: true, transclude: nodePtr},
 				codeGenCommand{line: fmt.Sprintf("%s:\n", ifLabel)},
 			)
+		case parser.ElseNode:
+			if lastNodePtr != nil {
+				_, lastIsIf := (*lastNodePtr).(parser.IfNode)
+				if lastIsIf {
+					elseLabel := labelGen.genLabel("else_%d")
+					ifLabelCmd := codeBuf[len(codeBuf)-1]
+					codeBuf[len(codeBuf)-1] =
+						codeGenCommand{line: fmt.Sprintf("\tjmp %s\n", elseLabel)}
+					codeBuf = append(codeBuf,
+						ifLabelCmd,
+						codeGenCommand{isTransclude: true, transclude: nodePtr},
+						codeGenCommand{line: fmt.Sprintf("%s:\n", elseLabel)},
+					)
+				}
+			}
 		case parser.ProcCall:
 			argLocations := make([]string, 0)
 			for _, arg := range node.Args {
@@ -145,7 +161,9 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 			codeBuf = append(codeBuf,
 				codeGenCommand{line: fmt.Sprintf("\tcall %s\n", node.Callee)})
 		}
+		lastNodePtr = nodePtr
 	}
+
 	for _, cmd := range codeBuf {
 		info.code <- cmd
 	}
@@ -302,7 +320,11 @@ func main() {
 		go genForBlock(&labelGen, &info)
 	}
 	for scanner.Scan() {
-		isComplete, node, parent, _ := p.FeedLine(scanner.Text())
+		isComplete, node, parent, err := p.FeedLine(scanner.Text())
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
 		exprNode, isExpr := (*node).(parser.ExprNode)
 		if !isComplete && isExpr && exprNode.Op == parser.ConstDeclare {
 			_, isProc := exprNode.Right.(parser.ProcNode)
@@ -318,7 +340,8 @@ func main() {
 		}
 
 		_, isIf := (*node).(parser.IfNode)
-		if !isComplete && isIf && parent != nil {
+		_, isElse := (*node).(parser.ElseNode)
+		if !isComplete && (isIf || isElse) && parent != nil {
 			label := fmt.Sprintf("if_%d", ifCount)
 			startGenForBlock(node, label, If)
 			ifCount++

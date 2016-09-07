@@ -78,6 +78,8 @@ type IfNode struct {
 	Condition interface{}
 }
 
+type ElseNode struct{}
+
 type BlockEnd int
 
 func (e *ParseError) Error() string {

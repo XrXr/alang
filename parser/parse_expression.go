@@ -89,6 +89,8 @@ func ParseExpr(s string) (interface{}, error) {
 		return IfNode{
 			Condition: parsed,
 		}, nil
+	} else if tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{" {
+		return ElseNode{}, nil
 	}
 	return parseExprWithParen(parsed, tokens, 0, len(tokens))
 }

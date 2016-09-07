@@ -32,6 +32,9 @@ func (p *Parser) FeedLine(line string) (isComplete bool, node_ptr *interface{}, 
 	case IfNode:
 		startNewBlock(&n)
 		return false, &n, parent, nil
+	case ElseNode:
+		startNewBlock(&n)
+		return false, &n, parent, nil
 	case BlockEnd:
 		l := len(p.incompleteStack)
 		if l == 0 {
