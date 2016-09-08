@@ -83,5 +83,5 @@ type ElseNode struct{}
 type BlockEnd int
 
 func (e *ParseError) Error() string {
-	return fmt.Sprintf("%d:%d", e.Line, e.Column)
+	return fmt.Sprintf("%d:%d %s", e.Line, e.Column, e.Message)
 }

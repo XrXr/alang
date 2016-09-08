@@ -56,7 +56,7 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	var staticDataBuf bytes.Buffer
 	idToTemplateName := make(map[parser.IdName]string)
 	varNum := 0
-	var lastNodePtr *interface{}
+	// var lastNodePtr *interface{}
 	for nodePtr := range info.feed {
 		switch node := (*nodePtr).(type) {
 		case parser.ExprNode:
@@ -101,20 +101,20 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				codeGenCommand{line: fmt.Sprintf("%s:\n", ifLabel)},
 			)
 		case parser.ElseNode:
-			if lastNodePtr != nil {
-				_, lastIsIf := (*lastNodePtr).(parser.IfNode)
-				if lastIsIf {
-					elseLabel := labelGen.genLabel("else_%d")
-					ifLabelCmd := codeBuf[len(codeBuf)-1]
-					codeBuf[len(codeBuf)-1] =
-						codeGenCommand{line: fmt.Sprintf("\tjmp %s\n", elseLabel)}
-					codeBuf = append(codeBuf,
-						ifLabelCmd,
-						codeGenCommand{isTransclude: true, transclude: nodePtr},
-						codeGenCommand{line: fmt.Sprintf("%s:\n", elseLabel)},
-					)
-				}
-			}
+			// if lastNodePtr != nil {
+			// 	_, lastIsIf := (*lastNodePtr).(parser.IfNode)
+			// 	if lastIsIf {
+			elseLabel := labelGen.genLabel("else_%d")
+			ifLabelCmd := codeBuf[len(codeBuf)-1]
+			codeBuf[len(codeBuf)-1] =
+				codeGenCommand{line: fmt.Sprintf("\tjmp %s\n", elseLabel)}
+			codeBuf = append(codeBuf,
+				ifLabelCmd,
+				codeGenCommand{isTransclude: true, transclude: nodePtr},
+				codeGenCommand{line: fmt.Sprintf("%s:\n", elseLabel)},
+			)
+			// 	}
+			// }
 		case parser.ProcCall:
 			argLocations := make([]string, 0)
 			for _, arg := range node.Args {
@@ -161,7 +161,7 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 			codeBuf = append(codeBuf,
 				codeGenCommand{line: fmt.Sprintf("\tcall %s\n", node.Callee)})
 		}
-		lastNodePtr = nodePtr
+		// lastNodePtr = nodePtr
 	}
 
 	for _, cmd := range codeBuf {
@@ -298,7 +298,8 @@ func main() {
 
 	source, err := os.Open(sourcePath)
 	if err != nil {
-		return
+		fmt.Printf("Could not start nasm\n")
+		os.Exit(1)
 	}
 	defer source.Close()
 
@@ -323,8 +324,9 @@ func main() {
 		isComplete, node, parent, err := p.FeedLine(scanner.Text())
 		if err != nil {
 			fmt.Println(err.Error())
-			return
+			os.Exit(1)
 		}
+
 		exprNode, isExpr := (*node).(parser.ExprNode)
 		if !isComplete && isExpr && exprNode.Op == parser.ConstDeclare {
 			_, isProc := exprNode.Right.(parser.ProcNode)
@@ -350,21 +352,7 @@ func main() {
 			continue
 		}
 
-		closeLineFeed := func(key *interface{}) {
-			info, found := blocks[key]
-			if found {
-				close(info.feed)
-			} else {
-				panic("failed to find block to close")
-			}
-		}
-
-		_, isBlockEnd := (*node).(parser.BlockEnd)
-		if isBlockEnd && parent != nil {
-			closeLineFeed(parent)
-		} else if isComplete && parent == nil {
-			closeLineFeed(node)
-		} else if isComplete && parent != nil {
+		if isComplete && parent != nil {
 			info := blocks[parent]
 			info.feed <- node
 		}
@@ -372,7 +360,8 @@ func main() {
 	}
 	out, err := os.Create("a.asm")
 	if err != nil {
-		return
+		fmt.Printf("Could not create temporary asm file\n")
+		os.Exit(1)
 	}
 	defer out.Close()
 
@@ -394,26 +383,31 @@ func main() {
 	fmt.Fprintln(out, "\tsyscall")
 	fmt.Fprintln(out, "\tret")
 
+	for _, info := range blocks {
+		close(info.feed)
+	}
 	collectAsm(mainProc, blocks, out)
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()
 	if err != nil {
 		fmt.Printf("Could not start nasm\n")
-		return
+		os.Exit(1)
 	}
 	err = cmd.Wait()
 	if err != nil {
 		fmt.Printf("nasm call failed %v\n", err)
-		return
+		os.Exit(1)
 	}
 	cmd = exec.Command("ld", "-o", *outputPath, "a.o")
 	err = cmd.Start()
 	if err != nil {
 		fmt.Printf("Could not start ld\n")
+		os.Exit(1)
 	}
 	err = cmd.Wait()
 	if err != nil {
 		fmt.Printf("ld call failed\n")
+		os.Exit(1)
 	}
 }

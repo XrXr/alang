@@ -14,7 +14,7 @@ var typeCheckFixture = map[string]bool{
 
 func TestTypeCheck(t *testing.T) {
 	for expr, shouldPass := range typeCheckFixture {
-		node, err := parser.ParseExpr(expr)
+		node, err := parser.ParseExpr(parser.Tokenize(expr))
 		if err != nil {
 			t.Errorf(`Failed to parse %s. Error in the fixture?`, expr)
 			return

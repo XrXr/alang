@@ -72,8 +72,7 @@ func (o *OpHeap) Pop() interface{} {
 	return x
 }
 
-func ParseExpr(s string) (interface{}, error) {
-	tokens := Tokenize(s)
+func ParseExpr(tokens []string) (interface{}, error) {
 	parsed := make(map[int]parsedNode)
 	if tokens[0] == "if" {
 		if tokens[len(tokens)-1] != "{" {
@@ -89,7 +88,8 @@ func ParseExpr(s string) (interface{}, error) {
 		return IfNode{
 			Condition: parsed,
 		}, nil
-	} else if tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{" {
+	} else if (tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{") ||
+		(tokens[0] == "}" && len(tokens) == 3 && tokens[1] == "else" && tokens[2] == "{") {
 		return ElseNode{}, nil
 	}
 	return parseExprWithParen(parsed, tokens, 0, len(tokens))

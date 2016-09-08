@@ -262,7 +262,7 @@ func TestParseExpr(t *testing.T) {
 }
 
 func tryParseExpr(t *testing.T, toParse string, correctResult interface{}) {
-	node, err := ParseExpr(toParse)
+	node, err := ParseExpr(Tokenize(toParse))
 	if err != nil {
 		t.Errorf(`Not able to successfully parse "%s". %#v`, toParse, err)
 		return

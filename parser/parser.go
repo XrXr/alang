@@ -16,7 +16,8 @@ func (p *Parser) FeedLine(line string) (isComplete bool, node_ptr *interface{}, 
 		parent = getParent()
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
-	n, err := ParseExpr(line)
+	tokens := Tokenize(line)
+	n, err := ParseExpr(tokens)
 	if err != nil {
 		return false, nil, nil, err
 	}
@@ -33,6 +34,9 @@ func (p *Parser) FeedLine(line string) (isComplete bool, node_ptr *interface{}, 
 		startNewBlock(&n)
 		return false, &n, parent, nil
 	case ElseNode:
+		if tokens[0] == "}" {
+			p.incompleteStack = p.incompleteStack[:len(p.incompleteStack)-1]
+		}
 		startNewBlock(&n)
 		return false, &n, parent, nil
 	case BlockEnd:

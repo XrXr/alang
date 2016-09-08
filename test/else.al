@@ -7,8 +7,7 @@ main :: proc () {
     }
     if false {
         puts("not printed\n")
-    }
-    else {
+    } else {
         puts("printed\n")
     }
 }
