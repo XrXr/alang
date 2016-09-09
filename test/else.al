@@ -5,6 +5,7 @@ main :: proc () {
     else {
         puts("ignore me")
     }
+
     if false {
         puts("not printed\n")
     } else {

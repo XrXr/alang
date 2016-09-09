@@ -321,7 +321,11 @@ func main() {
 		go genForBlock(&labelGen, &info)
 	}
 	for scanner.Scan() {
-		isComplete, node, parent, err := p.FeedLine(scanner.Text())
+		line := scanner.Text()
+		if len(line) == 0 {
+			continue
+		}
+		isComplete, node, parent, err := p.FeedLine(line)
 		if err != nil {
 			fmt.Println(err.Error())
 			os.Exit(1)
