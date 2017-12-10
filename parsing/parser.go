@@ -1,4 +1,4 @@
-package parser
+package parsing
 
 type Parser struct {
 	incompleteStack []*interface{}

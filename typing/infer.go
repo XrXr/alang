@@ -1,7 +1,7 @@
 package typing
 
 import (
-	"github.com/XrXr/alang/parser"
+	"github.com/XrXr/alang/parsing"
 )
 
 type TypeName string // should be good enough for our purposes

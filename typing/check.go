@@ -2,7 +2,7 @@ package typing
 
 import (
 	"fmt"
-	"github.com/XrXr/alang/parser"
+	"github.com/XrXr/alang/parsing"
 )
 
 type FuncType struct {

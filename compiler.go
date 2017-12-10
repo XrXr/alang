@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/XrXr/alang/parser"
+	"github.com/XrXr/alang/parsing"
 	"io"
 	"log"
 	"os"
@@ -28,7 +28,7 @@ func (g *labelIdGen) genLabel(template string) (ret string) {
 }
 
 // An output from genForBlock can either be a solid line or a transclusion of
-// another block. There no unions in golang, so this structure is used
+// another block. There are no unions in golang, so we use this
 type codeGenCommand struct {
 	isTransclude bool
 	line         string
@@ -54,37 +54,37 @@ type blockInfo struct {
 func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	codeBuf := make([]codeGenCommand, 0)
 	var staticDataBuf bytes.Buffer
-	idToTemplateName := make(map[parser.IdName]string)
+	idToTemplateName := make(map[parsing.IdName]string)
 	varNum := 0
 	// var lastNodePtr *interface{}
 	for nodePtr := range info.feed {
 		switch node := (*nodePtr).(type) {
-		case parser.ExprNode:
-			if node.Op == parser.Declare {
-				literal, rightIsLiteral := node.Right.(parser.Literal)
+		case parsing.ExprNode:
+			if node.Op == parsing.Declare {
+				literal, rightIsLiteral := node.Right.(parsing.Literal)
 				varTemplateName := fmt.Sprintf("$var%d", varNum)
 				varNum++
-				idToTemplateName[node.Left.(parser.IdName)] = varTemplateName
+				idToTemplateName[node.Left.(parsing.IdName)] = varTemplateName
 				if rightIsLiteral {
 					var cmd codeGenCommand
 					switch literal.Type {
-					case parser.Number:
+					case parsing.Number:
 						cmd.line = fmt.Sprintf("\tmov %s, %s\n", varTemplateName, literal.Value)
-					case parser.Boolean:
+					case parsing.Boolean:
 						cmd.line = fmt.Sprintf("\tmov %s, %d\n", varTemplateName, boolStrToInt(literal.Value))
 					}
 					codeBuf = append(codeBuf, cmd)
 				}
 			}
-		case parser.IfNode:
+		case parsing.IfNode:
 			// TODO: factor out the code for generating a single expression
 			var cmd codeGenCommand
 			switch cond := node.Condition.(type) {
-			case parser.Literal:
-				if cond.Type == parser.Boolean {
+			case parsing.Literal:
+				if cond.Type == parsing.Boolean {
 					cmd.line = fmt.Sprintf("\tmov rax, %d\n", boolStrToInt(cond.Value))
 				}
-			case parser.IdName:
+			case parsing.IdName:
 				templateName, found := idToTemplateName[cond]
 				if found {
 					cmd.line = fmt.Sprintf("\tmov rax, %s\n", templateName)
@@ -100,9 +100,9 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				codeGenCommand{isTransclude: true, transclude: nodePtr},
 				codeGenCommand{line: fmt.Sprintf("%s:\n", ifLabel)},
 			)
-		case parser.ElseNode:
+		case parsing.ElseNode:
 			// if lastNodePtr != nil {
-			// 	_, lastIsIf := (*lastNodePtr).(parser.IfNode)
+			// 	_, lastIsIf := (*lastNodePtr).(parsing.IfNode)
 			// 	if lastIsIf {
 			elseLabel := labelGen.genLabel("else_%d")
 			ifLabelCmd := codeBuf[len(codeBuf)-1]
@@ -115,12 +115,12 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 			)
 			// 	}
 			// }
-		case parser.ProcCall:
+		case parsing.ProcCall:
 			argLocations := make([]string, 0)
 			for _, arg := range node.Args {
 				switch a := arg.(type) {
-				case parser.Literal:
-					if a.Type == parser.String {
+				case parsing.Literal:
+					if a.Type == parsing.String {
 						var stringInsBuf bytes.Buffer
 						stringInsBuf.WriteString("\tdb\t")
 						byteCount := 0
@@ -226,7 +226,6 @@ consumeLoop:
 				stackOffset = info.offsetBeforeEntry
 			}
 		}
-		// map "$var{number}" in this block to locations like [rsp-8]
 		varTable := make(map[string]string)
 		for cmd := range info.code {
 			if cmd.isTransclude {
@@ -239,6 +238,7 @@ consumeLoop:
 				)
 				continue consumeLoop
 			} else {
+				// map "$var{number}" in this block to locations like [rsp-8]
 				s := cmd.line
 				match := varNameRegex.FindStringIndex(s)
 				if match != nil {
@@ -306,7 +306,7 @@ func main() {
 	scanner := bufio.NewScanner(source)
 	blocks := make(map[*interface{}]blockInfo)
 	var labelGen labelIdGen
-	var p parser.Parser
+	var parser parsing.Parser
 	var mainProc *interface{}
 	ifCount := 0
 	startGenForBlock := func(node *interface{}, label string, ownerType int) {
@@ -325,17 +325,17 @@ func main() {
 		if len(line) == 0 {
 			continue
 		}
-		isComplete, node, parent, err := p.FeedLine(line)
+		isComplete, node, parent, err := parser.FeedLine(line)
 		if err != nil {
 			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 
-		exprNode, isExpr := (*node).(parser.ExprNode)
-		if !isComplete && isExpr && exprNode.Op == parser.ConstDeclare {
-			_, isProc := exprNode.Right.(parser.ProcNode)
+		exprNode, isExpr := (*node).(parsing.ExprNode)
+		if !isComplete && isExpr && exprNode.Op == parsing.ConstDeclare {
+			_, isProc := exprNode.Right.(parsing.ProcNode)
 			if isProc {
-				procName := string(exprNode.Left.(parser.IdName))
+				procName := string(exprNode.Left.(parsing.IdName))
 				label := "proc_" + procName
 				startGenForBlock(node, label, Proc)
 				if procName == "main" {
@@ -345,8 +345,8 @@ func main() {
 			continue
 		}
 
-		_, isIf := (*node).(parser.IfNode)
-		_, isElse := (*node).(parser.ElseNode)
+		_, isIf := (*node).(parsing.IfNode)
+		_, isElse := (*node).(parsing.ElseNode)
 		if !isComplete && (isIf || isElse) && parent != nil {
 			label := fmt.Sprintf("if_%d", ifCount)
 			startGenForBlock(node, label, If)

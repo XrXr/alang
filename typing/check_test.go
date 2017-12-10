@@ -1,7 +1,7 @@
 package typing
 
 import (
-	"github.com/XrXr/alang/parser"
+	"github.com/XrXr/alang/parsing"
 	"testing"
 )
 
