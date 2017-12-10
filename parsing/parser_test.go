@@ -25,7 +25,9 @@ func TestParseHelloWorld(t *testing.T) {
 			Body: Block{},
 		},
 	}
-	if !reflect.DeepEqual(firstNode, firstLineExpected) {
+	if !reflect.DeepEqual(*firstNode, firstLineExpected) {
+		dump(firstNode)
+		dump(firstLineExpected)
 		t.Errorf("Bad parse for first line. Got %#v", firstNode)
 		return
 	}
@@ -47,21 +49,8 @@ func TestParseHelloWorld(t *testing.T) {
 			},
 		},
 	}
-	if !reflect.DeepEqual(secondNode, secondLineExpected) {
+	if !reflect.DeepEqual(*secondNode, secondLineExpected) {
 		t.Errorf("Bad parse for second line")
-		return
-	}
-	isComplete, thirdNode, parent, _ := p.FeedLine(`}`)
-	if !isComplete {
-		t.Errorf("Third line should be complete")
-		return
-	}
-	if parent != nil {
-		t.Errorf("Third line should't have a parent")
-		return
-	}
-	if !reflect.DeepEqual(thirdNode, firstNode) {
-		t.Errorf("Third node should be first node. Got %#v", thirdNode)
 		return
 	}
 }

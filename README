@@ -1,1 +1,2 @@
 Run `go test -tags integration` to run integration tests
+Run `go generate parsing/*go` to get proper debug printing

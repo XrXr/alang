@@ -4,9 +4,9 @@ package parsing
 
 import "fmt"
 
-const _LiteralType_name = "NumberStringArray"
+const _LiteralType_name = "NumberStringArrayBoolean"
 
-var _LiteralType_index = [...]uint8{0, 6, 12, 17}
+var _LiteralType_index = [...]uint8{0, 6, 12, 17, 24}
 
 func (i LiteralType) String() string {
 	i -= 1
