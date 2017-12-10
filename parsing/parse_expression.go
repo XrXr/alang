@@ -12,12 +12,12 @@ var _ = fmt.Printf // for debugging. remove when done
 var tokToOp = map[string]Operator{
 	"::": ConstDeclare,
 	":=": Declare,
+	"=":  Assign,
 	"+":  Plus,
 	"/":  Divide,
 	"*":  Star,
 	"-":  Minus,
 	".":  Dot,
-	"=":  Assign,
 }
 
 var precedence = map[Operator]int{
@@ -91,6 +91,20 @@ func ParseExpr(tokens []string) (interface{}, error) {
 	} else if (tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{") ||
 		(tokens[0] == "}" && len(tokens) == 3 && tokens[1] == "else" && tokens[2] == "{") {
 		return ElseNode{}, nil
+	}
+	for index, tok := range tokens {
+		op := tokToOp[tok]
+		if op == Declare || op == ConstDeclare || op == Assign {
+			left, err := parseExprWithParen(parsed, tokens, 0, index)
+			if err != nil {
+				return nil, err
+			}
+			right, err := parseExprWithParen(parsed, tokens, index+1, len(tokens))
+			if err != nil {
+				return nil, err
+			}
+			return ExprNode{Op: op, Left: left, Right: right}, nil
+		}
 	}
 	return parseExprWithParen(parsed, tokens, 0, len(tokens))
 }
