@@ -60,7 +60,8 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	for nodePtr := range info.feed {
 		switch node := (*nodePtr).(type) {
 		case parsing.ExprNode:
-			if node.Op == parsing.Declare {
+			switch node.Op {
+			case parsing.Declare:
 				literal, rightIsLiteral := node.Right.(parsing.Literal)
 				varTemplateName := fmt.Sprintf("$var%d", varNum)
 				varNum++
@@ -76,6 +77,7 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 					codeBuf = append(codeBuf, cmd)
 				}
 			}
+
 		case parsing.IfNode:
 			// TODO: factor out the code for generating a single expression
 			var cmd codeGenCommand
@@ -152,6 +154,8 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 						staticDataBuf.WriteRune('\n')
 						argLocations = append(argLocations, labelName)
 					}
+				case parsing.IdName:
+					argLocations = append(argLocations, idToTemplateName[a])
 				}
 			}
 			for i, location := range argLocations {
@@ -372,11 +376,16 @@ func main() {
 	fmt.Fprintln(out, "\tglobal _start")
 	fmt.Fprintln(out, "\tsection .text")
 
-	fmt.Fprintln(out, "_start:")
-	fmt.Fprintln(out, "\tcall proc_main")
-	fmt.Fprintln(out, "\tmov eax, 60")
-	fmt.Fprintln(out, "\txor rdi, rdi")
-	fmt.Fprintln(out, "\tsyscall")
+	fmt.Fprintln(out, `_start:
+	call proc_main
+	mov eax, 60
+	xor rdi, rdi
+	syscall`)
+
+	fmt.Fprintln(out, `exit:
+	mov rdi, rax
+	mov eax, 60
+	syscall`)
 
 	fmt.Fprintln(out, "puts:")
 	fmt.Fprintln(out, "\tmov rdx, [rax]")
