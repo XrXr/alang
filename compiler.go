@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/XrXr/alang/parsing"
@@ -76,8 +77,19 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 					}
 					codeBuf = append(codeBuf, cmd)
 				}
+			case parsing.Assign:
+				right, rightIsExpr := node.Right.(parsing.ExprNode)
+				if rightIsExpr {
+					switch right.Op {
+					case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
+						dest := idToTemplateName[node.Left.(parsing.IdName)]
+						err := genSimpleValuedExpression(&codeBuf, right, dest, &varNum, idToTemplateName)
+						if err != nil {
+							panic(err)
+						}
+					}
+				}
 			}
-
 		case parsing.IfNode:
 			// TODO: factor out the code for generating a single expression
 			var cmd codeGenCommand
@@ -175,6 +187,77 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	sendLinesToChan(&staticDataBuf, &info.static)
 }
 
+func genSimpleValuedExpression(cmdBuf *[]codeGenCommand, node interface{}, dest string, varNum *int, idToTemplateName map[parsing.IdName]string) error {
+	var cmd codeGenCommand
+	switch n := node.(type) {
+	case parsing.Literal:
+		// TODO: assuming that it's a number. This will change when we have type checking
+		cmd.line = fmt.Sprintf("\tmov %s, %s\n", dest, n.Value)
+	case parsing.IdName:
+		cmd.line = fmt.Sprintf("\tmov rax, %s\n", idToTemplateName[n])
+		*cmdBuf = append(*cmdBuf, cmd)
+		cmd.line = fmt.Sprintf("\tmov %s, rax\n", dest)
+	case parsing.ExprNode:
+		switch n.Op {
+		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
+			// TODO: var template cleanup
+			rightDest := fmt.Sprintf("$var%d", *varNum)
+			*varNum += 1
+			err := genSimpleValuedExpression(cmdBuf, n.Left, dest, varNum, idToTemplateName)
+			if err != nil {
+				return err
+			}
+			err = genSimpleValuedExpression(cmdBuf, n.Right, rightDest, varNum, idToTemplateName)
+			if err != nil {
+				return err
+			}
+			var mnemonic string
+			// note that these are all signed insts
+			switch n.Op {
+			case parsing.Star:
+				mnemonic = "imul"
+			case parsing.Minus:
+				mnemonic = "sub"
+			case parsing.Plus:
+				mnemonic = "add"
+			case parsing.Divide:
+				mnemonic = "idiv"
+			}
+			if n.Op == parsing.Star {
+				// with add and sub we can we do directly to an address but
+				// for this we have to do the computation in registers
+				cmd.line = fmt.Sprintf("\tmov r8, %s\n", dest)
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = fmt.Sprintf("\tmov r9, %s\n", rightDest)
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = "\timul r8, r9\n"
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = fmt.Sprintf("\tmov %s, r8\n", dest)
+				*cmdBuf = append(*cmdBuf, cmd)
+			} else if n.Op == parsing.Divide {
+				cmd.line = "\txor rdx, rdx\n"
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = fmt.Sprintf("\tmov rax, %s\n", dest)
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = fmt.Sprintf("\tmov r8, %s\n", rightDest)
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = "\tidiv r8\n"
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = fmt.Sprintf("\tmov %s, rax\n", dest)
+				*cmdBuf = append(*cmdBuf, cmd)
+			} else {
+				cmd.line = fmt.Sprintf("\tmov rax, %s\n", rightDest)
+				*cmdBuf = append(*cmdBuf, cmd)
+				cmd.line = fmt.Sprintf("\t%s %s, rax\n", mnemonic, dest)
+			}
+		default:
+			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
+		}
+	}
+	*cmdBuf = append(*cmdBuf, cmd)
+	return nil
+}
+
 func boolStrToInt(s string) (ret int) {
 	if s == "true" {
 		ret = 1
@@ -246,22 +329,24 @@ consumeLoop:
 				s := cmd.line
 				match := varNameRegex.FindStringIndex(s)
 				if match != nil {
-					fmt.Fprint(out, s[:match[0]])
-
 					varTpl := s[match[0]:match[1]]
-					loc, found := varTable[varTpl]
-					if found {
-						fmt.Fprint(out, loc)
-					} else {
+					_, found := varTable[varTpl]
+					if !found {
 						loc := fmt.Sprintf("qword [rbp-%d]", stackOffset)
 						varTable[varTpl] = loc
-						fmt.Fprint(out, loc)
 						stackOffset += 8
 					}
-					fmt.Fprint(out, s[match[1]:])
-				} else {
-					fmt.Fprint(out, s)
+
+					filled := varNameRegex.ReplaceAllFunc([]byte(s), func(match []byte) []byte {
+						loc, ok := varTable[string(match[:])]
+						if !ok {
+							panic("referenced an undefined variable internally")
+						}
+						return []byte(loc)
+					})
+					s = string(filled[:])
 				}
+				fmt.Fprint(out, s)
 			}
 		}
 		// epilogue
