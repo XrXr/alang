@@ -70,45 +70,38 @@ func (f *frontendGen) newVar() int {
 	return current
 }
 
-func genForBlock(labelGen *labelIdGen, info *blockInfo) {
+func varTemp(varNum int) string {
+	return fmt.Sprintf("$var%d", varNum)
+}
+
+func genForBlock(gen *frontendGen, labelGen *labelIdGen, info *blockInfo) {
 	codeBuf := make([]codeGenCommand, 0)
 	var staticDataBuf bytes.Buffer
-	idToTemplateName := make(map[parsing.IdName]string)
-	var gen frontendGen
-	gen.varTable = make(map[parsing.IdName]int)
 	// var lastNodePtr *interface{}
 	for nodePtr := range info.feed {
 		switch node := (*nodePtr).(type) {
 		case parsing.ExprNode:
 			switch node.Op {
 			case parsing.Declare:
-				literal, rightIsLiteral := node.Right.(parsing.Literal)
+				before := len(gen.opts)
 				varNum := gen.newVar()
-				varTemplateName := fmt.Sprintf("$var%d", varNum)
-				idToTemplateName[node.Left.(parsing.IdName)] = varTemplateName
 				gen.varTable[node.Left.(parsing.IdName)] = varNum
-				if rightIsLiteral {
-					var cmd codeGenCommand
-					switch literal.Type {
-					case parsing.Number:
-						cmd.line = fmt.Sprintf("\tmov %s, %s\n", varTemplateName, literal.Value)
-					case parsing.Boolean:
-						cmd.line = fmt.Sprintf("\tmov %s, %d\n", varTemplateName, boolStrToInt(literal.Value))
-					}
-					codeBuf = append(codeBuf, cmd)
+				err := genSimpleValuedExpression(gen, varNum, node.Right)
+				if err != nil {
+					panic(err)
 				}
+				backend(&codeBuf, gen.opts[before:])
 			case parsing.Assign:
-				leftTemplate := idToTemplateName[node.Left.(parsing.IdName)]
-				leftTemplate = leftTemplate[4:]
-				leftn, err := strconv.Atoi(leftTemplate)
+				before := len(gen.opts)
+				leftVarNum, varFound := gen.varTable[node.Left.(parsing.IdName)]
+				if !varFound {
+					panic("bug in user program! assign to undefined var")
+				}
+				err := genSimpleValuedExpression(gen, leftVarNum, node.Right)
 				if err != nil {
 					panic(err)
 				}
-				err = genSimpleValuedExpression(&gen, leftn, node.Right)
-				if err != nil {
-					panic(err)
-				}
-				backend(&codeBuf, gen)
+				backend(&codeBuf, gen.opts[before:])
 			}
 		case parsing.IfNode:
 			// TODO: factor out the code for generating a single expression
@@ -119,9 +112,9 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 					cmd.line = fmt.Sprintf("\tmov rax, %d\n", boolStrToInt(cond.Value))
 				}
 			case parsing.IdName:
-				templateName, found := idToTemplateName[cond]
+				varNum, found := gen.varTable[cond]
 				if found {
-					cmd.line = fmt.Sprintf("\tmov rax, %s\n", templateName)
+					cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(varNum))
 				} else {
 					//TODO: compile error
 				}
@@ -182,7 +175,7 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 						argLocations = append(argLocations, labelName)
 					}
 				case parsing.IdName:
-					argLocations = append(argLocations, idToTemplateName[a])
+					argLocations = append(argLocations, varTemp(gen.varTable[a]))
 				}
 			}
 			for i, location := range argLocations {
@@ -205,7 +198,18 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) error {
 	switch n := node.(type) {
 	case parsing.Literal:
-		gen.addOpt(ir.AssignImm{dest, n.Value})
+		var value interface{}
+		switch n.Type {
+		case parsing.Number:
+			v, err := strconv.Atoi(n.Value)
+			if err != nil {
+				panic(err)
+			}
+			value = v
+		case parsing.Boolean:
+			value = boolStrToInt(n.Value)
+		}
+		gen.addOpt(ir.AssignImm{dest, value})
 	case parsing.IdName:
 		gen.addOpt(ir.Assign{dest, gen.varTable[n]})
 	case parsing.ExprNode:
@@ -237,12 +241,9 @@ func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) err
 	return nil
 }
 
-func backend(cmdBuf *[]codeGenCommand, frontend frontendGen) {
-	varTemp := func(varNum int) string {
-		return fmt.Sprintf("$var%d", varNum)
-	}
+func backend(cmdBuf *[]codeGenCommand, opts []interface{}) {
 	var cmd codeGenCommand
-	for _, opt := range frontend.opts {
+	for _, opt := range opts {
 		switch opt := opt.(type) {
 		case ir.Assign:
 			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right))
@@ -424,6 +425,8 @@ func main() {
 	scanner := bufio.NewScanner(source)
 	blocks := make(map[*interface{}]blockInfo)
 	var labelGen labelIdGen
+	var frontend frontendGen
+	frontend.varTable = make(map[parsing.IdName]int)
 	var parser parsing.Parser
 	var mainProc *interface{}
 	ifCount := 0
@@ -436,7 +439,7 @@ func main() {
 			label:     label,
 		}
 		blocks[node] = info
-		go genForBlock(&labelGen, &info)
+		go genForBlock(&frontend, &labelGen, &info)
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
