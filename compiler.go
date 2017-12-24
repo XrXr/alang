@@ -74,10 +74,11 @@ func varTemp(varNum int) string {
 	return fmt.Sprintf("$var%d", varNum)
 }
 
-func genForBlock(gen *frontendGen, labelGen *labelIdGen, info *blockInfo) {
+func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	codeBuf := make([]codeGenCommand, 0)
+	var gen frontendGen
+	gen.varTable = make(map[parsing.IdName]int)
 	var staticDataBuf bytes.Buffer
-	// var lastNodePtr *interface{}
 	for nodePtr := range info.feed {
 		switch node := (*nodePtr).(type) {
 		case parsing.ExprNode:
@@ -86,7 +87,7 @@ func genForBlock(gen *frontendGen, labelGen *labelIdGen, info *blockInfo) {
 				before := len(gen.opts)
 				varNum := gen.newVar()
 				gen.varTable[node.Left.(parsing.IdName)] = varNum
-				err := genSimpleValuedExpression(gen, varNum, node.Right)
+				err := genSimpleValuedExpression(&gen, varNum, node.Right)
 				if err != nil {
 					panic(err)
 				}
@@ -97,7 +98,7 @@ func genForBlock(gen *frontendGen, labelGen *labelIdGen, info *blockInfo) {
 				if !varFound {
 					panic("bug in user program! assign to undefined var")
 				}
-				err := genSimpleValuedExpression(gen, leftVarNum, node.Right)
+				err := genSimpleValuedExpression(&gen, leftVarNum, node.Right)
 				if err != nil {
 					panic(err)
 				}
@@ -215,7 +216,8 @@ func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) err
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
-			err := genSimpleValuedExpression(gen, dest, n.Left)
+			leftDest := gen.newVar()
+			err := genSimpleValuedExpression(gen, leftDest, n.Left)
 			if err != nil {
 				return err
 			}
@@ -226,14 +228,15 @@ func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) err
 			}
 			switch n.Op {
 			case parsing.Star:
-				gen.addOpt(ir.Mult{dest, rightDest})
+				gen.addOpt(ir.Mult{leftDest, rightDest})
 			case parsing.Divide:
-				gen.addOpt(ir.Div{dest, rightDest})
+				gen.addOpt(ir.Div{leftDest, rightDest})
 			case parsing.Plus:
-				gen.addOpt(ir.Add{dest, rightDest})
+				gen.addOpt(ir.Add{leftDest, rightDest})
 			case parsing.Minus:
-				gen.addOpt(ir.Sub{dest, rightDest})
+				gen.addOpt(ir.Sub{leftDest, rightDest})
 			}
+			gen.addOpt(ir.Assign{dest, leftDest})
 		default:
 			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
 		}
@@ -425,8 +428,6 @@ func main() {
 	scanner := bufio.NewScanner(source)
 	blocks := make(map[*interface{}]blockInfo)
 	var labelGen labelIdGen
-	var frontend frontendGen
-	frontend.varTable = make(map[parsing.IdName]int)
 	var parser parsing.Parser
 	var mainProc *interface{}
 	ifCount := 0
@@ -439,7 +440,7 @@ func main() {
 			label:     label,
 		}
 		blocks[node] = info
-		go genForBlock(&frontend, &labelGen, &info)
+		go genForBlock(&labelGen, &info)
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
