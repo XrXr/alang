@@ -6,12 +6,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"sync"
 )
 
@@ -52,11 +54,28 @@ type blockInfo struct {
 	label     string
 }
 
+type frontendGen struct {
+	opts       []interface{}
+	nextVarNum int
+	varTable   map[parsing.IdName]int
+}
+
+func (f *frontendGen) addOpt(opt interface{}) {
+	f.opts = append(f.opts, opt)
+}
+
+func (f *frontendGen) newVar() int {
+	current := f.nextVarNum
+	f.nextVarNum++
+	return current
+}
+
 func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	codeBuf := make([]codeGenCommand, 0)
 	var staticDataBuf bytes.Buffer
 	idToTemplateName := make(map[parsing.IdName]string)
-	varNum := 0
+	var gen frontendGen
+	gen.varTable = make(map[parsing.IdName]int)
 	// var lastNodePtr *interface{}
 	for nodePtr := range info.feed {
 		switch node := (*nodePtr).(type) {
@@ -64,9 +83,10 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 			switch node.Op {
 			case parsing.Declare:
 				literal, rightIsLiteral := node.Right.(parsing.Literal)
+				varNum := gen.newVar()
 				varTemplateName := fmt.Sprintf("$var%d", varNum)
-				varNum++
 				idToTemplateName[node.Left.(parsing.IdName)] = varTemplateName
+				gen.varTable[node.Left.(parsing.IdName)] = varNum
 				if rightIsLiteral {
 					var cmd codeGenCommand
 					switch literal.Type {
@@ -78,17 +98,17 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 					codeBuf = append(codeBuf, cmd)
 				}
 			case parsing.Assign:
-				right, rightIsExpr := node.Right.(parsing.ExprNode)
-				if rightIsExpr {
-					switch right.Op {
-					case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
-						dest := idToTemplateName[node.Left.(parsing.IdName)]
-						err := genSimpleValuedExpression(&codeBuf, right, dest, &varNum, idToTemplateName)
-						if err != nil {
-							panic(err)
-						}
-					}
+				leftTemplate := idToTemplateName[node.Left.(parsing.IdName)]
+				leftTemplate = leftTemplate[4:]
+				leftn, err := strconv.Atoi(leftTemplate)
+				if err != nil {
+					panic(err)
 				}
+				err = genSimpleValuedExpression(&gen, leftn, node.Right)
+				if err != nil {
+					panic(err)
+				}
+				backend(&codeBuf, gen)
 			}
 		case parsing.IfNode:
 			// TODO: factor out the code for generating a single expression
@@ -115,9 +135,6 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				codeGenCommand{line: fmt.Sprintf("%s:\n", ifLabel)},
 			)
 		case parsing.ElseNode:
-			// if lastNodePtr != nil {
-			// 	_, lastIsIf := (*lastNodePtr).(parsing.IfNode)
-			// 	if lastIsIf {
 			elseLabel := labelGen.genLabel("else_%d")
 			ifLabelCmd := codeBuf[len(codeBuf)-1]
 			codeBuf[len(codeBuf)-1] =
@@ -127,8 +144,6 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				codeGenCommand{isTransclude: true, transclude: nodePtr},
 				codeGenCommand{line: fmt.Sprintf("%s:\n", elseLabel)},
 			)
-			// 	}
-			// }
 		case parsing.ProcCall:
 			argLocations := make([]string, 0)
 			for _, arg := range node.Args {
@@ -187,75 +202,89 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	sendLinesToChan(&staticDataBuf, &info.static)
 }
 
-func genSimpleValuedExpression(cmdBuf *[]codeGenCommand, node interface{}, dest string, varNum *int, idToTemplateName map[parsing.IdName]string) error {
-	var cmd codeGenCommand
+func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) error {
 	switch n := node.(type) {
 	case parsing.Literal:
-		// TODO: assuming that it's a number. This will change when we have type checking
-		cmd.line = fmt.Sprintf("\tmov %s, %s\n", dest, n.Value)
+		gen.addOpt(ir.AssignImm{dest, n.Value})
 	case parsing.IdName:
-		cmd.line = fmt.Sprintf("\tmov rax, %s\n", idToTemplateName[n])
-		*cmdBuf = append(*cmdBuf, cmd)
-		cmd.line = fmt.Sprintf("\tmov %s, rax\n", dest)
+		gen.addOpt(ir.Assign{dest, gen.varTable[n]})
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
-			// TODO: var template cleanup
-			rightDest := fmt.Sprintf("$var%d", *varNum)
-			*varNum += 1
-			err := genSimpleValuedExpression(cmdBuf, n.Left, dest, varNum, idToTemplateName)
+			err := genSimpleValuedExpression(gen, dest, n.Left)
 			if err != nil {
 				return err
 			}
-			err = genSimpleValuedExpression(cmdBuf, n.Right, rightDest, varNum, idToTemplateName)
+			rightDest := gen.newVar()
+			err = genSimpleValuedExpression(gen, rightDest, n.Right)
 			if err != nil {
 				return err
 			}
-			var mnemonic string
-			// note that these are all signed insts
 			switch n.Op {
 			case parsing.Star:
-				mnemonic = "imul"
-			case parsing.Minus:
-				mnemonic = "sub"
-			case parsing.Plus:
-				mnemonic = "add"
+				gen.addOpt(ir.Mult{dest, rightDest})
 			case parsing.Divide:
-				mnemonic = "idiv"
-			}
-			if n.Op == parsing.Star {
-				// with add and sub we can we do directly to an address but
-				// for this we have to do the computation in registers
-				cmd.line = fmt.Sprintf("\tmov r8, %s\n", dest)
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = fmt.Sprintf("\tmov r9, %s\n", rightDest)
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = "\timul r8, r9\n"
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = fmt.Sprintf("\tmov %s, r8\n", dest)
-				*cmdBuf = append(*cmdBuf, cmd)
-			} else if n.Op == parsing.Divide {
-				cmd.line = "\txor rdx, rdx\n"
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = fmt.Sprintf("\tmov rax, %s\n", dest)
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = fmt.Sprintf("\tmov r8, %s\n", rightDest)
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = "\tidiv r8\n"
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = fmt.Sprintf("\tmov %s, rax\n", dest)
-				*cmdBuf = append(*cmdBuf, cmd)
-			} else {
-				cmd.line = fmt.Sprintf("\tmov rax, %s\n", rightDest)
-				*cmdBuf = append(*cmdBuf, cmd)
-				cmd.line = fmt.Sprintf("\t%s %s, rax\n", mnemonic, dest)
+				gen.addOpt(ir.Div{dest, rightDest})
+			case parsing.Plus:
+				gen.addOpt(ir.Add{dest, rightDest})
+			case parsing.Minus:
+				gen.addOpt(ir.Sub{dest, rightDest})
 			}
 		default:
 			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
 		}
 	}
-	*cmdBuf = append(*cmdBuf, cmd)
 	return nil
+}
+
+func backend(cmdBuf *[]codeGenCommand, frontend frontendGen) {
+	varTemp := func(varNum int) string {
+		return fmt.Sprintf("$var%d", varNum)
+	}
+	var cmd codeGenCommand
+	for _, opt := range frontend.opts {
+		switch opt := opt.(type) {
+		case ir.Assign:
+			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right))
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left))
+			*cmdBuf = append(*cmdBuf, cmd)
+		case ir.AssignImm:
+			// TODO types, assuming int right now
+			cmd.line = fmt.Sprintf("\tmov %s, %v\n", varTemp(opt.Var), opt.Val)
+			*cmdBuf = append(*cmdBuf, cmd)
+		case ir.Add:
+			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right))
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tadd %s, rax\n", varTemp(opt.Left))
+			*cmdBuf = append(*cmdBuf, cmd)
+		case ir.Sub:
+			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right))
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tsub %s, rax\n", varTemp(opt.Left))
+			*cmdBuf = append(*cmdBuf, cmd)
+		case ir.Mult:
+			cmd.line = fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Left))
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tmov r9, %s\n", varTemp(opt.Right))
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = "\timul r8, r9\n"
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tmov %s, r8\n", varTemp(opt.Left))
+			*cmdBuf = append(*cmdBuf, cmd)
+		case ir.Div:
+			cmd.line = "\txor rdx, rdx\n"
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Left))
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Right))
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = "\tidiv r8\n"
+			*cmdBuf = append(*cmdBuf, cmd)
+			cmd.line = fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left))
+			*cmdBuf = append(*cmdBuf, cmd)
+		}
+	}
 }
 
 func boolStrToInt(s string) (ret int) {
