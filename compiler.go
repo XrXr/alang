@@ -62,9 +62,8 @@ type frontendGen struct {
 }
 
 type optBlock struct {
-	upToVarNum int
-	varOffset  int
-	opts       []interface{}
+	varOffset int
+	opts      []interface{}
 }
 
 func (f *frontendGen) addOpt(opt interface{}) {
@@ -161,10 +160,10 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 		lastSegmentEnd = len(gen.opts)
 	}
 
+	info.upToVarNum = gen.nextVarNum
 	for _, segment := range segments {
 		info.code <- segment
 	}
-	info.upToVarNum = gen.nextVarNum
 	close(info.code)
 }
 
@@ -341,7 +340,7 @@ func sendLinesToChan(buf *bytes.Buffer, channel *chan string) {
 
 var varNameRegex = regexp.MustCompile(`\$var[0-9]+`)
 
-func collectIr(mainProc *interface{}, blocks map[*interface{}]blockInfo) []optBlock {
+func collectIr(mainProc *interface{}, blocks map[*interface{}]*blockInfo) []optBlock {
 	var out []optBlock
 	type blockConsumptionInfo struct {
 		block     *interface{}
@@ -357,10 +356,12 @@ consumeLoop:
 		cur := blockConsumptionStack[l-1]
 		blockConsumptionStack = blockConsumptionStack[:l-1]
 		info := blocks[cur.block]
-		if cur.firstTime {
-			nextOffset += info.upToVarNum
-		}
 		for segment := range info.code {
+			if cur.firstTime {
+				nextOffset += info.upToVarNum
+			}
+			cur.firstTime = false
+
 			transOpt, doTransclude := segment[len(segment)-1].(ir.Transclude)
 			if doTransclude {
 				if cur.block == transOpt.Node {
@@ -382,6 +383,7 @@ consumeLoop:
 			} else {
 				var irBlock optBlock
 				irBlock.varOffset = cur.varOffset
+
 				irBlock.opts = segment
 				out = append(out, irBlock)
 			}
@@ -499,13 +501,13 @@ func main() {
 
 	source, err := os.Open(sourcePath)
 	if err != nil {
-		fmt.Printf(`Could not open "%s"\n`, sourcePath)
+		fmt.Printf("Could not open \"%s\"\n", sourcePath)
 		os.Exit(1)
 	}
 	defer source.Close()
 
 	scanner := bufio.NewScanner(source)
-	blocks := make(map[*interface{}]blockInfo)
+	blocks := make(map[*interface{}]*blockInfo)
 	var labelGen labelIdGen
 	var parser parsing.Parser
 	var mainProc *interface{}
@@ -517,7 +519,7 @@ func main() {
 			ownerType: ownerType,
 			label:     label,
 		}
-		blocks[node] = info
+		blocks[node] = &info
 		go genForBlock(&labelGen, &info)
 	}
 	for scanner.Scan() {
@@ -597,6 +599,7 @@ func main() {
 	}
 
 	ir := collectIr(mainProc, blocks)
+	// fmt.Printf("%#v\n", ir)
 	backend(out, &labelGen, ir)
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
