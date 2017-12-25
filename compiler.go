@@ -58,6 +58,7 @@ type frontendGen struct {
 	opts       []interface{}
 	nextVarNum int
 	varTable   map[parsing.IdName]int
+	sawIf      bool
 }
 
 func (f *frontendGen) addOpt(opt interface{}) {
@@ -80,6 +81,8 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 	gen.varTable = make(map[parsing.IdName]int)
 	var staticDataBuf bytes.Buffer
 	for nodePtr := range info.feed {
+		// sawIfLastTime := gen.sawIf
+		gen.sawIf = false
 		switch node := (*nodePtr).(type) {
 		case parsing.ExprNode:
 			switch node.Op {
@@ -105,29 +108,39 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				backend(&codeBuf, gen.opts[before:])
 			}
 		case parsing.IfNode:
+			before := len(gen.opts)
+			condVar := gen.newVar()
+			genSimpleValuedExpression(&gen, condVar, node.Condition)
+			labelForIf := labelGen.genLabel("if_%d")
+			gen.addOpt(ir.JumpIfFalse{condVar, labelForIf})
+			gen.addOpt(ir.Transclude{nodePtr})
+			gen.addOpt(ir.Label{labelForIf})
+			gen.sawIf = true
+			backend(&codeBuf, gen.opts[before:])
+
 			// TODO: factor out the code for generating a single expression
-			var cmd codeGenCommand
-			switch cond := node.Condition.(type) {
-			case parsing.Literal:
-				if cond.Type == parsing.Boolean {
-					cmd.line = fmt.Sprintf("\tmov rax, %d\n", boolStrToInt(cond.Value))
-				}
-			case parsing.IdName:
-				varNum, found := gen.varTable[cond]
-				if found {
-					cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(varNum))
-				} else {
-					//TODO: compile error
-				}
-			}
-			ifLabel := labelGen.genLabel("if_%d")
-			codeBuf = append(codeBuf,
-				cmd,
-				codeGenCommand{line: "\tcmp rax, 0\n"},
-				codeGenCommand{line: fmt.Sprintf("\tjz %s\n", ifLabel)},
-				codeGenCommand{isTransclude: true, transclude: nodePtr},
-				codeGenCommand{line: fmt.Sprintf("%s:\n", ifLabel)},
-			)
+			// var cmd codeGenCommand
+			// switch cond := node.Condition.(type) {
+			// case parsing.Literal:
+			// 	if cond.Type == parsing.Boolean {
+			// 		cmd.line = fmt.Sprintf("\tmov rax, %d\n", boolStrToInt(cond.Value))
+			// 	}
+			// case parsing.IdName:
+			// 	varNum, found := gen.varTable[cond]
+			// 	if found {
+			// 		cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(varNum))
+			// 	} else {
+			// 		//TODO: compile error
+			// 	}
+			// }
+			// ifLabel := labelGen.genLabel("if_%d")
+			// codeBuf = append(codeBuf,
+			// 	cmd,
+			// 	codeGenCommand{line: "\tcmp rax, 0\n"},
+			// 	codeGenCommand{line: fmt.Sprintf("\tjz %s\n", "ifLabel")},
+			// 	codeGenCommand{isTransclude: true, transclude: nodePtr},
+			// 	codeGenCommand{line: fmt.Sprintf("%s:\n", "ifLabel")},
+			// )
 		case parsing.ElseNode:
 			elseLabel := labelGen.genLabel("else_%d")
 			ifLabelCmd := codeBuf[len(codeBuf)-1]
@@ -186,7 +199,6 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 			codeBuf = append(codeBuf,
 				codeGenCommand{line: fmt.Sprintf("\tcall %s\n", node.Callee)})
 		}
-		// lastNodePtr = nodePtr
 	}
 
 	for _, cmd := range codeBuf {
@@ -246,47 +258,43 @@ func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) err
 
 func backend(cmdBuf *[]codeGenCommand, opts []interface{}) {
 	var cmd codeGenCommand
+	addLine := func(line string) {
+		cmd.line = line
+		*cmdBuf = append(*cmdBuf, cmd)
+	}
 	for _, opt := range opts {
 		switch opt := opt.(type) {
 		case ir.Assign:
-			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right))
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left))
-			*cmdBuf = append(*cmdBuf, cmd)
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right)))
+			addLine(fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left)))
 		case ir.AssignImm:
 			// TODO types, assuming int right now
-			cmd.line = fmt.Sprintf("\tmov %s, %v\n", varTemp(opt.Var), opt.Val)
-			*cmdBuf = append(*cmdBuf, cmd)
+			addLine(fmt.Sprintf("\tmov %s, %v\n", varTemp(opt.Var), opt.Val))
 		case ir.Add:
-			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right))
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tadd %s, rax\n", varTemp(opt.Left))
-			*cmdBuf = append(*cmdBuf, cmd)
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right)))
+			addLine(fmt.Sprintf("\tadd %s, rax\n", varTemp(opt.Left)))
 		case ir.Sub:
-			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right))
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tsub %s, rax\n", varTemp(opt.Left))
-			*cmdBuf = append(*cmdBuf, cmd)
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right)))
+			addLine(fmt.Sprintf("\tsub %s, rax\n", varTemp(opt.Left)))
 		case ir.Mult:
-			cmd.line = fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Left))
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tmov r9, %s\n", varTemp(opt.Right))
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = "\timul r8, r9\n"
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tmov %s, r8\n", varTemp(opt.Left))
-			*cmdBuf = append(*cmdBuf, cmd)
+			addLine(fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Left)))
+			addLine(fmt.Sprintf("\tmov r9, %s\n", varTemp(opt.Right)))
+			addLine("\timul r8, r9\n")
+			addLine(fmt.Sprintf("\tmov %s, r8\n", varTemp(opt.Left)))
 		case ir.Div:
-			cmd.line = "\txor rdx, rdx\n"
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Left))
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Right))
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = "\tidiv r8\n"
-			*cmdBuf = append(*cmdBuf, cmd)
-			cmd.line = fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left))
-			*cmdBuf = append(*cmdBuf, cmd)
+			addLine("\txor rdx, rdx\n")
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Left)))
+			addLine(fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Right)))
+			addLine("\tidiv r8\n")
+			addLine(fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left)))
+		case ir.JumpIfFalse:
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.VarToCheck)))
+			addLine("\tcmp rax, 0\n")
+			addLine(fmt.Sprintf("\tjz %s\n", opt.Label))
+		case ir.Label:
+			addLine(fmt.Sprintf("%s:\n", opt.Name))
+		case ir.Transclude:
+			*cmdBuf = append(*cmdBuf, codeGenCommand{isTransclude: true, transclude: opt.Node})
 		}
 	}
 }

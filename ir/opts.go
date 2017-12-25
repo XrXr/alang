@@ -34,3 +34,16 @@ type Div struct {
 	Left  int
 	Right int
 }
+
+type JumpIfFalse struct {
+	VarToCheck int
+	Label      string
+}
+
+type Label struct {
+	Name string
+}
+
+type Transclude struct {
+	Node *interface{}
+}
