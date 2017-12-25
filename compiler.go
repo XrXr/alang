@@ -47,11 +47,11 @@ const (
 )
 
 type blockInfo struct {
-	code      chan codeGenCommand
-	static    chan string
-	feed      chan *interface{}
-	ownerType int
-	label     string
+	code       chan []interface{}
+	feed       chan *interface{}
+	ownerType  int
+	label      string
+	upToVarNum int
 }
 
 type frontendGen struct {
@@ -59,6 +59,12 @@ type frontendGen struct {
 	nextVarNum int
 	varTable   map[parsing.IdName]int
 	sawIf      bool
+}
+
+type optBlock struct {
+	upToVarNum int
+	varOffset  int
+	opts       []interface{}
 }
 
 func (f *frontendGen) addOpt(opt interface{}) {
@@ -76,27 +82,29 @@ func varTemp(varNum int) string {
 }
 
 func genForBlock(labelGen *labelIdGen, info *blockInfo) {
-	codeBuf := make([]codeGenCommand, 0)
+	var segments [][]interface{}
+	lastSegmentEnd := 0
 	var gen frontendGen
 	gen.varTable = make(map[parsing.IdName]int)
-	var staticDataBuf bytes.Buffer
+
+	if info.ownerType == Proc {
+		gen.addOpt(ir.StartProc{info.label})
+	}
+
 	for nodePtr := range info.feed {
-		// sawIfLastTime := gen.sawIf
+		sawIfLastTime := gen.sawIf
 		gen.sawIf = false
 		switch node := (*nodePtr).(type) {
 		case parsing.ExprNode:
 			switch node.Op {
 			case parsing.Declare:
-				before := len(gen.opts)
 				varNum := gen.newVar()
 				gen.varTable[node.Left.(parsing.IdName)] = varNum
 				err := genSimpleValuedExpression(&gen, varNum, node.Right)
 				if err != nil {
 					panic(err)
 				}
-				backend(&codeBuf, gen.opts[before:])
 			case parsing.Assign:
-				before := len(gen.opts)
 				leftVarNum, varFound := gen.varTable[node.Left.(parsing.IdName)]
 				if !varFound {
 					panic("bug in user program! assign to undefined var")
@@ -105,107 +113,59 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				if err != nil {
 					panic(err)
 				}
-				backend(&codeBuf, gen.opts[before:])
+			default:
+				//TODO issue warning here
 			}
 		case parsing.IfNode:
-			before := len(gen.opts)
 			condVar := gen.newVar()
 			genSimpleValuedExpression(&gen, condVar, node.Condition)
 			labelForIf := labelGen.genLabel("if_%d")
 			gen.addOpt(ir.JumpIfFalse{condVar, labelForIf})
 			gen.addOpt(ir.Transclude{nodePtr})
+			segments = append(segments, gen.opts[lastSegmentEnd:])
+			lastSegmentEnd = len(gen.opts)
 			gen.addOpt(ir.Label{labelForIf})
 			gen.sawIf = true
-			backend(&codeBuf, gen.opts[before:])
-
-			// TODO: factor out the code for generating a single expression
-			// var cmd codeGenCommand
-			// switch cond := node.Condition.(type) {
-			// case parsing.Literal:
-			// 	if cond.Type == parsing.Boolean {
-			// 		cmd.line = fmt.Sprintf("\tmov rax, %d\n", boolStrToInt(cond.Value))
-			// 	}
-			// case parsing.IdName:
-			// 	varNum, found := gen.varTable[cond]
-			// 	if found {
-			// 		cmd.line = fmt.Sprintf("\tmov rax, %s\n", varTemp(varNum))
-			// 	} else {
-			// 		//TODO: compile error
-			// 	}
-			// }
-			// ifLabel := labelGen.genLabel("if_%d")
-			// codeBuf = append(codeBuf,
-			// 	cmd,
-			// 	codeGenCommand{line: "\tcmp rax, 0\n"},
-			// 	codeGenCommand{line: fmt.Sprintf("\tjz %s\n", "ifLabel")},
-			// 	codeGenCommand{isTransclude: true, transclude: nodePtr},
-			// 	codeGenCommand{line: fmt.Sprintf("%s:\n", "ifLabel")},
-			// )
 		case parsing.ElseNode:
+			if !sawIfLastTime {
+				panic("Bare else. Should've been caught by the parser")
+			}
 			elseLabel := labelGen.genLabel("else_%d")
-			ifLabelCmd := codeBuf[len(codeBuf)-1]
-			codeBuf[len(codeBuf)-1] =
-				codeGenCommand{line: fmt.Sprintf("\tjmp %s\n", elseLabel)}
-			codeBuf = append(codeBuf,
-				ifLabelCmd,
-				codeGenCommand{isTransclude: true, transclude: nodePtr},
-				codeGenCommand{line: fmt.Sprintf("%s:\n", elseLabel)},
-			)
+			ifLabel := gen.opts[len(gen.opts)-1]
+			gen.opts[len(gen.opts)-1] = ir.Jump{elseLabel}
+			gen.addOpt(ifLabel)
+			gen.addOpt(ir.Transclude{nodePtr})
+			segments = append(segments, gen.opts[lastSegmentEnd:])
+			lastSegmentEnd = len(gen.opts)
+			gen.addOpt(ir.Label{elseLabel})
 		case parsing.ProcCall:
-			argLocations := make([]string, 0)
-			for _, arg := range node.Args {
-				switch a := arg.(type) {
-				case parsing.Literal:
-					if a.Type == parsing.String {
-						var stringInsBuf bytes.Buffer
-						stringInsBuf.WriteString("\tdb\t")
-						byteCount := 0
-						i := 0
-						needToStartQuote := true
-						for ; i < len(a.Value); i++ {
-							if needToStartQuote {
-								stringInsBuf.WriteRune('"')
-								needToStartQuote = false
-							}
-							if a.Value[i] == '\\' && a.Value[i+1] == 'n' {
-								stringInsBuf.WriteString(`",10,`)
-								needToStartQuote = true
-								i++
-							} else {
-								stringInsBuf.WriteString(string(a.Value[i]))
-							}
-							byteCount++
-						}
-						// end the string
-						if !needToStartQuote {
-							stringInsBuf.WriteRune('"')
-						}
-
-						labelName := labelGen.genLabel("label%d")
-						staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
-						staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
-						staticDataBuf.ReadFrom(&stringInsBuf)
-						staticDataBuf.WriteRune('\n')
-						argLocations = append(argLocations, labelName)
-					}
-				case parsing.IdName:
-					argLocations = append(argLocations, varTemp(gen.varTable[a]))
+			var argVars []int
+			for _, argNode := range node.Args {
+				argEval := gen.newVar()
+				err := genSimpleValuedExpression(&gen, argEval, argNode)
+				if err != nil {
+					panic(err)
 				}
+				argVars = append(argVars, argEval)
 			}
-			for i, location := range argLocations {
-				codeBuf = append(codeBuf,
-					codeGenCommand{line: fmt.Sprintf("\tmov %s, %s\n", paramOrder[i], location)})
-			}
-			codeBuf = append(codeBuf,
-				codeGenCommand{line: fmt.Sprintf("\tcall %s\n", node.Callee)})
+			gen.addOpt(ir.Call{string(node.Callee), argVars})
 		}
 	}
 
-	for _, cmd := range codeBuf {
-		info.code <- cmd
+	if info.ownerType == Proc {
+		gen.addOpt(ir.EndProc{})
 	}
+
+	if len(gen.opts[lastSegmentEnd:]) != 0 {
+		segments = append(segments, gen.opts[lastSegmentEnd:])
+		lastSegmentEnd = len(gen.opts)
+	}
+
+	for _, segment := range segments {
+		info.code <- segment
+	}
+	info.upToVarNum = gen.nextVarNum
 	close(info.code)
-	sendLinesToChan(&staticDataBuf, &info.static)
 }
 
 func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) error {
@@ -221,6 +181,8 @@ func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) err
 			value = v
 		case parsing.Boolean:
 			value = boolStrToInt(n.Value)
+		case parsing.String:
+			value = n.Value
 		}
 		gen.addOpt(ir.AssignImm{dest, value})
 	case parsing.IdName:
@@ -256,47 +218,107 @@ func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) err
 	return nil
 }
 
-func backend(cmdBuf *[]codeGenCommand, opts []interface{}) {
-	var cmd codeGenCommand
+func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *labelIdGen, block optBlock) {
 	addLine := func(line string) {
-		cmd.line = line
-		*cmdBuf = append(*cmdBuf, cmd)
+		io.WriteString(out, line)
 	}
-	for _, opt := range opts {
+	varToStack := func(varNum int) string {
+		acutalVar := varNum + block.varOffset
+		//TODO: !! of course not every var is size 8...
+		return fmt.Sprintf("qword [rbp-%d]", acutalVar*8)
+	}
+	for _, opt := range block.opts {
 		switch opt := opt.(type) {
 		case ir.Assign:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right)))
-			addLine(fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left)))
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
+			addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Left)))
 		case ir.AssignImm:
-			// TODO types, assuming int right now
-			addLine(fmt.Sprintf("\tmov %s, %v\n", varTemp(opt.Var), opt.Val))
+			switch value := opt.Val.(type) {
+			case int:
+				addLine(fmt.Sprintf("\tmov %s, %v\n", varToStack(opt.Var), opt.Val))
+			case string:
+				var buf bytes.Buffer
+				buf.WriteString("\tdb\t")
+				byteCount := 0
+				i := 0
+				needToStartQuote := true
+				for ; i < len(value); i++ {
+					if needToStartQuote {
+						buf.WriteRune('"')
+						needToStartQuote = false
+					}
+					if value[i] == '\\' && value[i+1] == 'n' {
+						buf.WriteString(`",10,`)
+						needToStartQuote = true
+						i++
+					} else {
+						buf.WriteString(string(value[i]))
+					}
+					byteCount++
+				}
+				// end the string
+				if !needToStartQuote {
+					buf.WriteRune('"')
+				}
+
+				labelName := labelGen.genLabel("label%d")
+				staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
+				staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
+				staticDataBuf.ReadFrom(&buf)
+				staticDataBuf.WriteRune('\n')
+				addLine(fmt.Sprintf("\tmov %s, %s\n", varToStack(opt.Var), labelName))
+			}
 		case ir.Add:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right)))
-			addLine(fmt.Sprintf("\tadd %s, rax\n", varTemp(opt.Left)))
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
+			addLine(fmt.Sprintf("\tadd %s, rax\n", varToStack(opt.Left)))
 		case ir.Sub:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Right)))
-			addLine(fmt.Sprintf("\tsub %s, rax\n", varTemp(opt.Left)))
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
+			addLine(fmt.Sprintf("\tsub %s, rax\n", varToStack(opt.Left)))
 		case ir.Mult:
-			addLine(fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Left)))
-			addLine(fmt.Sprintf("\tmov r9, %s\n", varTemp(opt.Right)))
+			addLine(fmt.Sprintf("\tmov r8, %s\n", varToStack(opt.Left)))
+			addLine(fmt.Sprintf("\tmov r9, %s\n", varToStack(opt.Right)))
 			addLine("\timul r8, r9\n")
-			addLine(fmt.Sprintf("\tmov %s, r8\n", varTemp(opt.Left)))
+			addLine(fmt.Sprintf("\tmov %s, r8\n", varToStack(opt.Left)))
 		case ir.Div:
 			addLine("\txor rdx, rdx\n")
-			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.Left)))
-			addLine(fmt.Sprintf("\tmov r8, %s\n", varTemp(opt.Right)))
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Left)))
+			addLine(fmt.Sprintf("\tmov r8, %s\n", varToStack(opt.Right)))
 			addLine("\tidiv r8\n")
-			addLine(fmt.Sprintf("\tmov %s, rax\n", varTemp(opt.Left)))
+			addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Left)))
 		case ir.JumpIfFalse:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", varTemp(opt.VarToCheck)))
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.VarToCheck)))
 			addLine("\tcmp rax, 0\n")
 			addLine(fmt.Sprintf("\tjz %s\n", opt.Label))
+		case ir.Call:
+			// TODO: temporary
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.ArgVars[0])))
+			addLine(fmt.Sprintf("\tcall %s\n", opt.Label))
+		case ir.Jump:
+			addLine(fmt.Sprintf("\tjmp %s\n", opt.Label))
 		case ir.Label:
 			addLine(fmt.Sprintf("%s:\n", opt.Name))
+		case ir.StartProc:
+			addLine(fmt.Sprintf("%s:\n", opt.Name))
+			addLine("\tpush rbp\n")
+			addLine("\tmov rbp, rsp\n")
+		case ir.EndProc:
+			addLine("\tpop rbp\n")
+			addLine("\tret\n")
 		case ir.Transclude:
-			*cmdBuf = append(*cmdBuf, codeGenCommand{isTransclude: true, transclude: opt.Node})
+			panic("Should be gone by now")
+		default:
+			panic(opt)
 		}
 	}
+}
+
+func backend(out io.Writer, labelGen *labelIdGen, opts []optBlock) {
+	var staticDataBuf bytes.Buffer
+	for _, block := range opts {
+		backendForOptBlock(out, &staticDataBuf, labelGen, block)
+	}
+	io.WriteString(out, "; ---static data segment start---\n")
+	staticDataBuf.WriteTo(out)
 }
 
 func boolStrToInt(s string) (ret int) {
@@ -319,103 +341,152 @@ func sendLinesToChan(buf *bytes.Buffer, channel *chan string) {
 
 var varNameRegex = regexp.MustCompile(`\$var[0-9]+`)
 
-// collect from blocks and fill in variable offset
-func collectAsm(mainProc *interface{}, blocks map[*interface{}]blockInfo, out io.Writer) {
-	stackOffset := 0
-	type ifBlockInfo struct {
-		offsetBeforeEntry int
-		offsetAfterExit   int
-	}
-	ifBlockInfoStack := make([]ifBlockInfo, 0)
-	var ifEntryOffset int
+func collectIr(mainProc *interface{}, blocks map[*interface{}]blockInfo) []optBlock {
+	var out []optBlock
 	type blockConsumptionInfo struct {
-		block         *interface{}
-		prologPrinted bool
+		block     *interface{}
+		varOffset int
+		firstTime bool
 	}
-	blockConsumptionStack := []blockConsumptionInfo{{mainProc, false}}
+	nextOffset := 0
 
+	blockConsumptionStack := []blockConsumptionInfo{{mainProc, 0, true}}
 consumeLoop:
 	for len(blockConsumptionStack) != 0 {
 		l := len(blockConsumptionStack)
 		cur := blockConsumptionStack[l-1]
 		blockConsumptionStack = blockConsumptionStack[:l-1]
-
 		info := blocks[cur.block]
-		if !cur.prologPrinted {
-			switch info.ownerType {
-			case Proc:
-				fmt.Fprintf(out, "%s:\n", info.label)
-				fmt.Fprintln(out, "\tpush rbp")
-				fmt.Fprintln(out, "\tmov rbp, rsp")
-			case If:
-				ifEntryOffset = stackOffset
-			case Else:
-				info := ifBlockInfoStack[len(ifBlockInfoStack)-1]
-				stackOffset = info.offsetBeforeEntry
-			}
+		if cur.firstTime {
+			nextOffset += info.upToVarNum
 		}
-		varTable := make(map[string]string)
-		for cmd := range info.code {
-			if cmd.isTransclude {
-				if cur.block == cmd.transclude {
+		for segment := range info.code {
+			transOpt, doTransclude := segment[len(segment)-1].(ir.Transclude)
+			if doTransclude {
+				if cur.block == transOpt.Node {
 					panic("a block tried to transclude itself")
 				}
+
+				segment = segment[:len(segment)-1]
+				var irBlock optBlock
+				irBlock.varOffset = cur.varOffset
+				irBlock.opts = segment
+				out = append(out, irBlock)
+				cur.firstTime = false
+				// when we transclude, put the vars from that after the vars of the current block
 				blockConsumptionStack = append(blockConsumptionStack,
-					blockConsumptionInfo{cur.block, true},
-					blockConsumptionInfo{cmd.transclude, false},
+					cur,
+					blockConsumptionInfo{transOpt.Node, nextOffset, true},
 				)
 				continue consumeLoop
 			} else {
-				// map "$var{number}" in this block to locations like [rsp-8]
-				s := cmd.line
-				match := varNameRegex.FindStringIndex(s)
-				if match != nil {
-					varTpl := s[match[0]:match[1]]
-					_, found := varTable[varTpl]
-					if !found {
-						loc := fmt.Sprintf("qword [rbp-%d]", stackOffset)
-						varTable[varTpl] = loc
-						stackOffset += 8
-					}
-
-					filled := varNameRegex.ReplaceAllFunc([]byte(s), func(match []byte) []byte {
-						loc, ok := varTable[string(match[:])]
-						if !ok {
-							panic("referenced an undefined variable internally")
-						}
-						return []byte(loc)
-					})
-					s = string(filled[:])
-				}
-				fmt.Fprint(out, s)
-			}
-		}
-		// epilogue
-		switch info.ownerType {
-		case Proc:
-			fmt.Fprintln(out, "\tpop rbp")
-			fmt.Fprintln(out, "\tret")
-		case If:
-			ifBlockInfoStack = append(ifBlockInfoStack, ifBlockInfo{
-				offsetBeforeEntry: ifEntryOffset,
-				offsetAfterExit:   stackOffset,
-			})
-		case Else:
-			l := len(ifBlockInfoStack)
-			info := ifBlockInfoStack[l-1]
-			ifBlockInfoStack = ifBlockInfoStack[:l-1]
-			if info.offsetAfterExit > stackOffset {
-				stackOffset = info.offsetAfterExit
+				var irBlock optBlock
+				irBlock.varOffset = cur.varOffset
+				irBlock.opts = segment
+				out = append(out, irBlock)
 			}
 		}
 	}
-
-	for _, info := range blocks {
-		for s := range info.static {
-			fmt.Fprint(out, s)
-		}
-	}
+	return out
 }
+
+// // collect from blocks and fill in variable offset
+// func collectAsm(mainProc *interface{}, blocks map[*interface{}]blockInfo, out io.Writer) {
+// 	stackOffset := 0
+// 	type ifBlockInfo struct {
+// 		offsetBeforeEntry int
+// 		offsetAfterExit   int
+// 	}
+// 	ifBlockInfoStack := make([]ifBlockInfo, 0)
+// 	var ifEntryOffset int
+// 	type blockConsumptionInfo struct {
+// 		block         *interface{}
+// 		prologPrinted bool
+// 	}
+// 	blockConsumptionStack := []blockConsumptionInfo{{mainProc, false}}
+
+// consumeLoop:
+// 	for len(blockConsumptionStack) != 0 {
+// 		l := len(blockConsumptionStack)
+// 		cur := blockConsumptionStack[l-1]
+// 		blockConsumptionStack = blockConsumptionStack[:l-1]
+
+// 		info := blocks[cur.block]
+// 		if !cur.prologPrinted {
+// 			switch info.ownerType {
+// 			case Proc:
+// 				fmt.Fprintf(out, "%s:\n", info.label)
+// 				fmt.Fprintln(out, "\tpush rbp")
+// 				fmt.Fprintln(out, "\tmov rbp, rsp")
+// 			case If:
+// 				ifEntryOffset = stackOffset
+// 			case Else:
+// 				info := ifBlockInfoStack[len(ifBlockInfoStack)-1]
+// 				stackOffset = info.offsetBeforeEntry
+// 			}
+// 		}
+// 		varTable := make(map[string]string)
+// 		for cmd := range info.code {
+// 			if cmd.isTransclude {
+// 				if cur.block == cmd.transclude {
+// 					panic("a block tried to transclude itself")
+// 				}
+// 				blockConsumptionStack = append(blockConsumptionStack,
+// 					blockConsumptionInfo{cur.block, true},
+// 					blockConsumptionInfo{cmd.transclude, false},
+// 				)
+// 				continue consumeLoop
+// 			} else {
+// 				// map "$var{number}" in this block to locations like [rsp-8]
+// 				s := cmd.line
+// 				match := varNameRegex.FindStringIndex(s)
+// 				if match != nil {
+// 					varTpl := s[match[0]:match[1]]
+// 					_, found := varTable[varTpl]
+// 					if !found {
+// 						loc := fmt.Sprintf("qword [rbp-%d]", stackOffset)
+// 						varTable[varTpl] = loc
+// 						stackOffset += 8
+// 					}
+
+// 					filled := varNameRegex.ReplaceAllFunc([]byte(s), func(match []byte) []byte {
+// 						loc, ok := varTable[string(match[:])]
+// 						if !ok {
+// 							panic("referenced an undefined variable internally")
+// 						}
+// 						return []byte(loc)
+// 					})
+// 					s = string(filled[:])
+// 				}
+// 				fmt.Fprint(out, s)
+// 			}
+// 		}
+// 		// epilogue
+// 		switch info.ownerType {
+// 		case Proc:
+// 			fmt.Fprintln(out, "\tpop rbp")
+// 			fmt.Fprintln(out, "\tret")
+// 		case If:
+// 			ifBlockInfoStack = append(ifBlockInfoStack, ifBlockInfo{
+// 				offsetBeforeEntry: ifEntryOffset,
+// 				offsetAfterExit:   stackOffset,
+// 			})
+// 		case Else:
+// 			l := len(ifBlockInfoStack)
+// 			info := ifBlockInfoStack[l-1]
+// 			ifBlockInfoStack = ifBlockInfoStack[:l-1]
+// 			if info.offsetAfterExit > stackOffset {
+// 				stackOffset = info.offsetAfterExit
+// 			}
+// 		}
+// 	}
+
+// 	for _, info := range blocks {
+// 		for s := range info.static {
+// 			fmt.Fprint(out, s)
+// 		}
+// 	}
+// }
 
 func main() {
 	outputPath := flag.String("o", "a.out", "path to the binary")
@@ -428,7 +499,7 @@ func main() {
 
 	source, err := os.Open(sourcePath)
 	if err != nil {
-		fmt.Printf("Could not start nasm\n")
+		fmt.Printf(`Could not open "%s"\n`, sourcePath)
 		os.Exit(1)
 	}
 	defer source.Close()
@@ -441,8 +512,7 @@ func main() {
 	ifCount := 0
 	startGenForBlock := func(node *interface{}, label string, ownerType int) {
 		info := blockInfo{
-			code:      make(chan codeGenCommand),
-			static:    make(chan string),
+			code:      make(chan []interface{}),
 			feed:      make(chan *interface{}),
 			ownerType: ownerType,
 			label:     label,
@@ -525,7 +595,9 @@ func main() {
 	for _, info := range blocks {
 		close(info.feed)
 	}
-	collectAsm(mainProc, blocks, out)
+
+	ir := collectIr(mainProc, blocks)
+	backend(out, &labelGen, ir)
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()
