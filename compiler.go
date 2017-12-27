@@ -3,42 +3,18 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"flag"
 	"fmt"
+	"github.com/XrXr/alang/frontend"
 	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
+	"github.com/XrXr/alang/typing"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"regexp"
-	"strconv"
-	"sync"
 )
-
-type labelIdGen struct {
-	sync.Mutex
-	availableId int
-}
-
-func (g *labelIdGen) genLabel(template string) (ret string) {
-	g.Lock()
-	ret = fmt.Sprintf(template, g.availableId)
-	g.availableId++
-	g.Unlock()
-	return
-}
-
-// An output from genForBlock can either be a solid line or a transclusion of
-// another block. There are no unions in golang, so we use this
-type codeGenCommand struct {
-	isTransclude bool
-	line         string
-	transclude   *interface{}
-}
-
-var paramOrder = []string{"rax", "rbx"}
 
 const (
 	Proc = iota + 1
@@ -46,211 +22,7 @@ const (
 	Else
 )
 
-type procWorkOrder struct {
-	out   chan optBlock
-	in    []*interface{}
-	label string
-}
-
-type procGen struct {
-	opts       []interface{}
-	nextVarNum int
-	rootScope  *scope
-}
-
-type scope struct {
-	gen         *procGen
-	parentScope *scope
-	varTable    map[parsing.IdName]int
-}
-
-type optBlock struct {
-	frameSize int
-	opts      []interface{}
-}
-
-func (s *scope) inherit() *scope {
-	sub := scope{
-		gen:         s.gen,
-		parentScope: s,
-		varTable:    make(map[parsing.IdName]int)}
-	// #speed
-	return &sub
-}
-
-func (s *scope) resolve(name parsing.IdName) (int, bool) {
-	cur := s
-	for cur != nil {
-		varNum, found := cur.varTable[name]
-		if found {
-			return varNum, found
-		} else {
-			cur = cur.parentScope
-		}
-	}
-	return 0, false
-}
-
-func (p *procGen) addOpt(opts ...interface{}) {
-	p.opts = append(p.opts, opts...)
-}
-
-func (s *scope) newVar() int {
-	current := s.gen.nextVarNum
-	s.gen.nextVarNum++
-	return current
-}
-
-func (s *scope) newNamedVar(name parsing.IdName) int {
-	varNum := s.newVar()
-	s.varTable[name] = varNum
-	return varNum
-}
-
-func varTemp(varNum int) string {
-	return fmt.Sprintf("$var%d", varNum)
-}
-
-func genForProc(labelGen *labelIdGen, order *procWorkOrder) {
-	var gen procGen
-	gen.rootScope = &scope{
-		gen:      &gen,
-		varTable: make(map[parsing.IdName]int), parentScope: nil}
-
-	gen.addOpt(ir.StartProc{order.label})
-	ret := genForProcSubSection(labelGen, order, gen.rootScope, 0)
-	gen.addOpt(ir.EndProc{})
-	if ret != len(order.in) {
-		panic("gen didn't process whole proc")
-	}
-	// TODO: framesize here
-	order.out <- optBlock{gen.nextVarNum * 8, gen.opts}
-	close(order.out)
-}
-
-// return index to the first unprocessed node
-func genForProcSubSection(labelGen *labelIdGen, order *procWorkOrder, scope *scope, start int) int {
-	gen := scope.gen
-	i := start
-	sawIf := false
-	for i < len(order.in) {
-		nodePtr := order.in[i]
-		i++
-		sawIfLastTime := sawIf
-		sawIf = false
-		switch node := (*nodePtr).(type) {
-		case parsing.ExprNode:
-			switch node.Op {
-			case parsing.Declare:
-				varNum := scope.newNamedVar(node.Left.(parsing.IdName))
-				err := genSimpleValuedExpression(scope, varNum, node.Right)
-				if err != nil {
-					panic(err)
-				}
-			case parsing.Assign:
-				leftVarNum, varFound := scope.resolve(node.Left.(parsing.IdName))
-				if !varFound {
-					panic("bug in user program! assign to undefined var")
-				}
-				err := genSimpleValuedExpression(scope, leftVarNum, node.Right)
-				if err != nil {
-					panic(err)
-				}
-			default:
-				//TODO issue warning here
-			}
-		case parsing.IfNode:
-			sawIf = true
-			condVar := scope.newVar()
-			genSimpleValuedExpression(scope, condVar, node.Condition)
-			labelForIf := labelGen.genLabel("if_%d")
-			gen.addOpt(ir.JumpIfFalse{condVar, labelForIf})
-			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
-			gen.addOpt(ir.Label{labelForIf})
-		case parsing.ElseNode:
-			if !sawIfLastTime {
-				panic("Bare else. Should've been caught by the parser")
-			}
-			elseLabel := labelGen.genLabel("else_%d")
-			ifLabel := gen.opts[len(gen.opts)-1]
-			gen.opts[len(gen.opts)-1] = ir.Jump{elseLabel}
-			gen.addOpt(ifLabel)
-			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
-			gen.addOpt(ir.Label{elseLabel})
-		case parsing.ProcCall:
-			var argVars []int
-			for _, argNode := range node.Args {
-				argEval := scope.newVar()
-				err := genSimpleValuedExpression(scope, argEval, argNode)
-				if err != nil {
-					panic(err)
-				}
-				argVars = append(argVars, argEval)
-			}
-			gen.addOpt(ir.Call{string(node.Callee), argVars})
-		case parsing.BlockEnd:
-			return i
-		}
-	}
-	return i
-}
-
-func genSimpleValuedExpression(scope *scope, dest int, node interface{}) error {
-	gen := scope.gen
-	switch n := node.(type) {
-	case parsing.Literal:
-		var value interface{}
-		switch n.Type {
-		case parsing.Number:
-			v, err := strconv.Atoi(n.Value)
-			if err != nil {
-				panic(err)
-			}
-			value = v
-		case parsing.Boolean:
-			value = boolStrToInt(n.Value)
-		case parsing.String:
-			value = n.Value
-		}
-		gen.addOpt(ir.AssignImm{dest, value})
-	case parsing.IdName:
-		vn, found := scope.resolve(n)
-		if !found {
-			return errors.New("undefined var")
-		}
-		gen.addOpt(ir.Assign{dest, vn})
-	case parsing.ExprNode:
-		switch n.Op {
-		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
-			leftDest := scope.newVar()
-			err := genSimpleValuedExpression(scope, leftDest, n.Left)
-			if err != nil {
-				return err
-			}
-			rightDest := scope.newVar()
-			err = genSimpleValuedExpression(scope, rightDest, n.Right)
-			if err != nil {
-				return err
-			}
-			switch n.Op {
-			case parsing.Star:
-				gen.addOpt(ir.Mult{leftDest, rightDest})
-			case parsing.Divide:
-				gen.addOpt(ir.Div{leftDest, rightDest})
-			case parsing.Plus:
-				gen.addOpt(ir.Add{leftDest, rightDest})
-			case parsing.Minus:
-				gen.addOpt(ir.Sub{leftDest, rightDest})
-			}
-			gen.addOpt(ir.Assign{dest, leftDest})
-		default:
-			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
-		}
-	}
-	return nil
-}
-
-func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *labelIdGen, block optBlock) {
+func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *frontend.LabelIdGen, block frontend.OptBlock) {
 	addLine := func(line string) {
 		io.WriteString(out, line)
 	}
@@ -260,7 +32,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *la
 		// +8 for the return addresss
 		return fmt.Sprintf("qword [rbp-%d]", acutalVar*8+8)
 	}
-	for _, opt := range block.opts {
+	for _, opt := range block.Opts {
 		switch opt := opt.(type) {
 		case ir.Assign:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
@@ -294,7 +66,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *la
 					buf.WriteRune('"')
 				}
 
-				labelName := labelGen.genLabel("label%d")
+				labelName := labelGen.GenLabel("label%d")
 				staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
 				staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
 				staticDataBuf.ReadFrom(&buf)
@@ -334,7 +106,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *la
 			addLine(fmt.Sprintf("%s:\n", opt.Name))
 			addLine("\tpush rbp\n")
 			addLine("\tmov rbp, rsp\n")
-			addLine(fmt.Sprintf("\tsub rsp, %d\n", block.frameSize))
+			addLine(fmt.Sprintf("\tsub rsp, %d\n", block.FrameSize))
 		case ir.EndProc:
 			addLine("\tmov rsp, rbp\n")
 			addLine("\tpop rbp\n")
@@ -347,20 +119,13 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *la
 	}
 }
 
-func backend(out io.Writer, labelGen *labelIdGen, opts []optBlock) {
+func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBlock) {
 	var staticDataBuf bytes.Buffer
 	for _, block := range opts {
 		backendForOptBlock(out, &staticDataBuf, labelGen, block)
 	}
 	io.WriteString(out, "; ---static data segment start---\n")
 	staticDataBuf.WriteTo(out)
-}
-
-func boolStrToInt(s string) (ret int) {
-	if s == "true" {
-		ret = 1
-	}
-	return
 }
 
 func sendLinesToChan(buf *bytes.Buffer, channel *chan string) {
@@ -393,12 +158,13 @@ func main() {
 	defer source.Close()
 
 	scanner := bufio.NewScanner(source)
-	blocks := make(map[*interface{}]*procWorkOrder)
-	var labelGen labelIdGen
+	blocks := make(map[*interface{}]*frontend.ProcWorkOrder)
+	var labelGen frontend.LabelIdGen
 	var parser parsing.Parser
 	var mainProc *interface{}
 	var currentProc *interface{}
 	var nodesForProc []*interface{}
+	var globals typing.EnvRecord
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -432,13 +198,13 @@ func main() {
 		if isEnd && parent == currentProc {
 			procName := string((*currentProc).(parsing.ExprNode).Left.(parsing.IdName))
 			label := "proc_" + procName
-			order := procWorkOrder{
-				out:   make(chan optBlock),
-				in:    nodesForProc,
-				label: label,
+			order := frontend.ProcWorkOrder{
+				Out:   make(chan frontend.OptBlock),
+				In:    nodesForProc,
+				Label: label,
 			}
 			blocks[currentProc] = &order
-			go genForProc(&labelGen, &order)
+			go frontend.GenForProc(&labelGen, &order)
 			nodesForProc = nil
 			continue
 		}
@@ -477,9 +243,10 @@ func main() {
 	fmt.Fprintln(out, "\tsyscall")
 	fmt.Fprintln(out, "\tret")
 
-	ir := <-blocks[mainProc].out
+	ir := <-blocks[mainProc].Out
+	typing.InferAndCheck(&globals, &ir)
 	// fmt.Printf("%#v\n", ir)
-	backend(out, &labelGen, []optBlock{ir})
+	backend(out, &labelGen, []frontend.OptBlock{ir})
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()
