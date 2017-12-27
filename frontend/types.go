@@ -13,8 +13,9 @@ type ProcWorkOrder struct {
 }
 
 type OptBlock struct {
-	FrameSize int
-	Opts      []interface{}
+	FrameSize    int
+	NumberOfVars int
+	Opts         []interface{}
 }
 
 type procGen struct {

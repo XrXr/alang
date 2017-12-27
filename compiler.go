@@ -244,8 +244,12 @@ func main() {
 	fmt.Fprintln(out, "\tret")
 
 	ir := <-blocks[mainProc].Out
-	typing.InferAndCheck(&globals, &ir)
-	// fmt.Printf("%#v\n", ir)
+	typer := typing.NewTyper()
+	err = typer.InferAndCheck(&globals, &ir)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%#v\n", ir)
 	backend(out, &labelGen, []frontend.OptBlock{ir})
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")

@@ -20,8 +20,8 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	if ret != len(order.In) {
 		panic("gen didn't process whole proc")
 	}
-	// TODO: framesize here
-	order.Out <- OptBlock{gen.nextVarNum * 8, gen.opts}
+	// TODO: framesize is wrong
+	order.Out <- OptBlock{gen.nextVarNum * 8, gen.nextVarNum, gen.opts}
 	close(order.Out)
 }
 
