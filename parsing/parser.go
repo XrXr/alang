@@ -1,16 +1,36 @@
 package parsing
 
 type Parser struct {
+	OutBuffer       []statement
 	incompleteStack []*interface{}
 }
 
-func (p *Parser) FeedLine(line string) (isComplete bool, node_ptr *interface{}, parent *interface{}, err error) {
-	getParent := func() (parent *interface{}) {
+type statement struct {
+	IsComplete bool
+	Node       *interface{}
+	Parent     *interface{}
+}
+
+func (p *Parser) FeedLine(line string) (int, error) {
+	before := len(p.OutBuffer)
+	err := p.processLine(line)
+	if err != nil {
+		return 0, err
+	}
+	return len(p.OutBuffer) - before, nil
+}
+
+func (p *Parser) processLine(line string) error {
+	var parent *interface{}
+	getParent := func() *interface{} {
 		l := len(p.incompleteStack)
 		if l >= 1 {
-			parent = p.incompleteStack[l-1]
+			return p.incompleteStack[l-1]
 		}
-		return
+		return nil
+	}
+	addOne := func(isComplete bool, nodePtr *interface{}, parent *interface{}) {
+		p.OutBuffer = append(p.OutBuffer, statement{isComplete, nodePtr, parent})
 	}
 	startNewBlock := func(node *interface{}) {
 		parent = getParent()
@@ -19,7 +39,7 @@ func (p *Parser) FeedLine(line string) (isComplete bool, node_ptr *interface{}, 
 	tokens := Tokenize(line)
 	n, err := ParseExpr(tokens)
 	if err != nil {
-		return false, nil, nil, err
+		return err
 	}
 	switch t := n.(type) {
 	case ExprNode:
@@ -27,26 +47,39 @@ func (p *Parser) FeedLine(line string) (isComplete bool, node_ptr *interface{}, 
 			_, good := t.Right.(ProcNode)
 			if good {
 				startNewBlock(&n)
-				return false, &n, parent, nil
+				addOne(false, &n, parent)
+				return nil
 			}
 		}
 	case IfNode:
 		startNewBlock(&n)
-		return false, &n, parent, nil
+		addOne(false, &n, parent)
+		return nil
 	case ElseNode:
 		if tokens[0] == "}" {
-			p.incompleteStack = p.incompleteStack[:len(p.incompleteStack)-1]
+			l := len(p.incompleteStack)
+			if l == 0 {
+				return &ParseError{0, 0, "Unmatched closing brace"}
+			}
+			top := p.incompleteStack[l-1]
+			p.incompleteStack = p.incompleteStack[:l-1]
+			var end interface{}
+			end = BlockEnd(0)
+			addOne(true, &end, top)
 		}
 		startNewBlock(&n)
-		return false, &n, parent, nil
+		addOne(false, &n, parent)
+		return nil
 	case BlockEnd:
 		l := len(p.incompleteStack)
 		if l == 0 {
-			return false, nil, nil, &ParseError{0, 0, "Unmatched closing brace"}
+			return &ParseError{0, 0, "Unmatched closing brace"}
 		}
 		top := p.incompleteStack[l-1]
 		p.incompleteStack = p.incompleteStack[:l-1]
-		return true, &n, top, nil
+		addOne(true, &n, top)
+		return nil
 	}
-	return true, &n, getParent(), nil
+	addOne(true, &n, getParent())
+	return nil
 }

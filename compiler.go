@@ -46,69 +46,113 @@ const (
 	Else
 )
 
-type blockInfo struct {
-	code       chan []interface{}
-	feed       chan *interface{}
-	ownerType  int
-	label      string
-	upToVarNum int
+type procWorkOrder struct {
+	out   chan optBlock
+	in    []*interface{}
+	label string
 }
 
-type frontendGen struct {
+type procGen struct {
 	opts       []interface{}
 	nextVarNum int
-	varTable   map[parsing.IdName]int
-	sawIf      bool
+	rootScope  *scope
+}
+
+type scope struct {
+	gen         *procGen
+	parentScope *scope
+	varTable    map[parsing.IdName]int
 }
 
 type optBlock struct {
-	varOffset int
+	frameSize int
 	opts      []interface{}
 }
 
-func (f *frontendGen) addOpt(opt interface{}) {
-	f.opts = append(f.opts, opt)
+func (s *scope) inherit() *scope {
+	sub := scope{
+		gen:         s.gen,
+		parentScope: s,
+		varTable:    make(map[parsing.IdName]int)}
+	// #speed
+	return &sub
 }
 
-func (f *frontendGen) newVar() int {
-	current := f.nextVarNum
-	f.nextVarNum++
+func (s *scope) resolve(name parsing.IdName) (int, bool) {
+	cur := s
+	for cur != nil {
+		varNum, found := cur.varTable[name]
+		if found {
+			return varNum, found
+		} else {
+			cur = cur.parentScope
+		}
+	}
+	return 0, false
+}
+
+func (p *procGen) addOpt(opts ...interface{}) {
+	p.opts = append(p.opts, opts...)
+}
+
+func (s *scope) newVar() int {
+	current := s.gen.nextVarNum
+	s.gen.nextVarNum++
 	return current
+}
+
+func (s *scope) newNamedVar(name parsing.IdName) int {
+	varNum := s.newVar()
+	s.varTable[name] = varNum
+	return varNum
 }
 
 func varTemp(varNum int) string {
 	return fmt.Sprintf("$var%d", varNum)
 }
 
-func genForBlock(labelGen *labelIdGen, info *blockInfo) {
-	var segments [][]interface{}
-	lastSegmentEnd := 0
-	var gen frontendGen
-	gen.varTable = make(map[parsing.IdName]int)
+func genForProc(labelGen *labelIdGen, order *procWorkOrder) {
+	var gen procGen
+	gen.rootScope = &scope{
+		gen:      &gen,
+		varTable: make(map[parsing.IdName]int), parentScope: nil}
 
-	if info.ownerType == Proc {
-		gen.addOpt(ir.StartProc{info.label})
+	gen.addOpt(ir.StartProc{order.label})
+	ret := genForProcSubSection(labelGen, order, gen.rootScope, 0)
+	gen.addOpt(ir.EndProc{})
+	if ret != len(order.in) {
+		panic("gen didn't process whole proc")
 	}
+	// TODO: framesize here
+	order.out <- optBlock{gen.nextVarNum * 8, gen.opts}
+	close(order.out)
+}
 
-	for nodePtr := range info.feed {
-		sawIfLastTime := gen.sawIf
-		gen.sawIf = false
+// return index to the first unprocessed node
+func genForProcSubSection(labelGen *labelIdGen, order *procWorkOrder, scope *scope, start int) int {
+	gen := scope.gen
+	i := start
+	sawIf := false
+	for i < len(order.in) {
+		nodePtr := order.in[i]
+		i++
+		sawIfLastTime := sawIf
+		sawIf = false
 		switch node := (*nodePtr).(type) {
 		case parsing.ExprNode:
 			switch node.Op {
 			case parsing.Declare:
-				varNum := gen.newVar()
-				gen.varTable[node.Left.(parsing.IdName)] = varNum
-				err := genSimpleValuedExpression(&gen, varNum, node.Right)
+				varNum := scope.newNamedVar(node.Left.(parsing.IdName))
+				err := genSimpleValuedExpression(scope, varNum, node.Right)
 				if err != nil {
 					panic(err)
 				}
 			case parsing.Assign:
-				leftVarNum, varFound := gen.varTable[node.Left.(parsing.IdName)]
+				leftVarNum, varFound := scope.resolve(node.Left.(parsing.IdName))
 				if !varFound {
 					panic("bug in user program! assign to undefined var")
 				}
-				err := genSimpleValuedExpression(&gen, leftVarNum, node.Right)
+				err := genSimpleValuedExpression(scope, leftVarNum, node.Right)
 				if err != nil {
 					panic(err)
 				}
@@ -116,15 +160,13 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 				//TODO issue warning here
 			}
 		case parsing.IfNode:
-			condVar := gen.newVar()
-			genSimpleValuedExpression(&gen, condVar, node.Condition)
+			sawIf = true
+			condVar := scope.newVar()
+			genSimpleValuedExpression(scope, condVar, node.Condition)
 			labelForIf := labelGen.genLabel("if_%d")
 			gen.addOpt(ir.JumpIfFalse{condVar, labelForIf})
-			gen.addOpt(ir.Transclude{nodePtr})
-			segments = append(segments, gen.opts[lastSegmentEnd:])
-			lastSegmentEnd = len(gen.opts)
+			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
 			gen.addOpt(ir.Label{labelForIf})
-			gen.sawIf = true
 		case parsing.ElseNode:
 			if !sawIfLastTime {
 				panic("Bare else. Should've been caught by the parser")
@@ -133,41 +175,28 @@ func genForBlock(labelGen *labelIdGen, info *blockInfo) {
 			ifLabel := gen.opts[len(gen.opts)-1]
 			gen.opts[len(gen.opts)-1] = ir.Jump{elseLabel}
 			gen.addOpt(ifLabel)
-			gen.addOpt(ir.Transclude{nodePtr})
-			segments = append(segments, gen.opts[lastSegmentEnd:])
-			lastSegmentEnd = len(gen.opts)
+			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
 			gen.addOpt(ir.Label{elseLabel})
 		case parsing.ProcCall:
 			var argVars []int
 			for _, argNode := range node.Args {
-				argEval := gen.newVar()
-				err := genSimpleValuedExpression(&gen, argEval, argNode)
+				argEval := scope.newVar()
+				err := genSimpleValuedExpression(scope, argEval, argNode)
 				if err != nil {
 					panic(err)
 				}
 				argVars = append(argVars, argEval)
 			}
 			gen.addOpt(ir.Call{string(node.Callee), argVars})
+		case parsing.BlockEnd:
+			return i
 		}
 	}
-
-	if info.ownerType == Proc {
-		gen.addOpt(ir.EndProc{})
-	}
-
-	if len(gen.opts[lastSegmentEnd:]) != 0 {
-		segments = append(segments, gen.opts[lastSegmentEnd:])
-		lastSegmentEnd = len(gen.opts)
-	}
-
-	info.upToVarNum = gen.nextVarNum
-	for _, segment := range segments {
-		info.code <- segment
-	}
-	close(info.code)
+	return i
 }
 
-func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) error {
+func genSimpleValuedExpression(scope *scope, dest int, node interface{}) error {
+	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.Literal:
 		var value interface{}
@@ -185,17 +214,21 @@ func genSimpleValuedExpression(gen *frontendGen, dest int, node interface{}) err
 		}
 		gen.addOpt(ir.AssignImm{dest, value})
 	case parsing.IdName:
-		gen.addOpt(ir.Assign{dest, gen.varTable[n]})
+		vn, found := scope.resolve(n)
+		if !found {
+			return errors.New("undefined var")
+		}
+		gen.addOpt(ir.Assign{dest, vn})
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
-			leftDest := gen.newVar()
-			err := genSimpleValuedExpression(gen, leftDest, n.Left)
+			leftDest := scope.newVar()
+			err := genSimpleValuedExpression(scope, leftDest, n.Left)
 			if err != nil {
 				return err
 			}
-			rightDest := gen.newVar()
-			err = genSimpleValuedExpression(gen, rightDest, n.Right)
+			rightDest := scope.newVar()
+			err = genSimpleValuedExpression(scope, rightDest, n.Right)
 			if err != nil {
 				return err
 			}
@@ -222,9 +255,10 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *la
 		io.WriteString(out, line)
 	}
 	varToStack := func(varNum int) string {
-		acutalVar := varNum + block.varOffset
+		acutalVar := varNum
 		//TODO: !! of course not every var is size 8...
-		return fmt.Sprintf("qword [rbp-%d]", acutalVar*8)
+		// +8 for the return addresss
+		return fmt.Sprintf("qword [rbp-%d]", acutalVar*8+8)
 	}
 	for _, opt := range block.opts {
 		switch opt := opt.(type) {
@@ -300,7 +334,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *la
 			addLine(fmt.Sprintf("%s:\n", opt.Name))
 			addLine("\tpush rbp\n")
 			addLine("\tmov rbp, rsp\n")
+			addLine(fmt.Sprintf("\tsub rsp, %d\n", block.frameSize))
 		case ir.EndProc:
+			addLine("\tmov rsp, rbp\n")
 			addLine("\tpop rbp\n")
 			addLine("\tret\n")
 		case ir.Transclude:
@@ -340,156 +376,6 @@ func sendLinesToChan(buf *bytes.Buffer, channel *chan string) {
 
 var varNameRegex = regexp.MustCompile(`\$var[0-9]+`)
 
-func collectIr(mainProc *interface{}, blocks map[*interface{}]*blockInfo) []optBlock {
-	var out []optBlock
-	type blockConsumptionInfo struct {
-		block     *interface{}
-		varOffset int
-		firstTime bool
-	}
-	nextOffset := 0
-
-	blockConsumptionStack := []blockConsumptionInfo{{mainProc, 0, true}}
-consumeLoop:
-	for len(blockConsumptionStack) != 0 {
-		l := len(blockConsumptionStack)
-		cur := blockConsumptionStack[l-1]
-		blockConsumptionStack = blockConsumptionStack[:l-1]
-		info := blocks[cur.block]
-		for segment := range info.code {
-			if cur.firstTime {
-				nextOffset += info.upToVarNum
-			}
-			cur.firstTime = false
-
-			transOpt, doTransclude := segment[len(segment)-1].(ir.Transclude)
-			if doTransclude {
-				if cur.block == transOpt.Node {
-					panic("a block tried to transclude itself")
-				}
-
-				segment = segment[:len(segment)-1]
-				var irBlock optBlock
-				irBlock.varOffset = cur.varOffset
-				irBlock.opts = segment
-				out = append(out, irBlock)
-				cur.firstTime = false
-				// when we transclude, put the vars from that after the vars of the current block
-				blockConsumptionStack = append(blockConsumptionStack,
-					cur,
-					blockConsumptionInfo{transOpt.Node, nextOffset, true},
-				)
-				continue consumeLoop
-			} else {
-				var irBlock optBlock
-				irBlock.varOffset = cur.varOffset
-
-				irBlock.opts = segment
-				out = append(out, irBlock)
-			}
-		}
-	}
-	return out
-}
-
-// // collect from blocks and fill in variable offset
-// func collectAsm(mainProc *interface{}, blocks map[*interface{}]blockInfo, out io.Writer) {
-// 	stackOffset := 0
-// 	type ifBlockInfo struct {
-// 		offsetBeforeEntry int
-// 		offsetAfterExit   int
-// 	}
-// 	ifBlockInfoStack := make([]ifBlockInfo, 0)
-// 	var ifEntryOffset int
-// 	type blockConsumptionInfo struct {
-// 		block         *interface{}
-// 		prologPrinted bool
-// 	}
-// 	blockConsumptionStack := []blockConsumptionInfo{{mainProc, false}}
-
-// consumeLoop:
-// 	for len(blockConsumptionStack) != 0 {
-// 		l := len(blockConsumptionStack)
-// 		cur := blockConsumptionStack[l-1]
-// 		blockConsumptionStack = blockConsumptionStack[:l-1]
-
-// 		info := blocks[cur.block]
-// 		if !cur.prologPrinted {
-// 			switch info.ownerType {
-// 			case Proc:
-// 				fmt.Fprintf(out, "%s:\n", info.label)
-// 				fmt.Fprintln(out, "\tpush rbp")
-// 				fmt.Fprintln(out, "\tmov rbp, rsp")
-// 			case If:
-// 				ifEntryOffset = stackOffset
-// 			case Else:
-// 				info := ifBlockInfoStack[len(ifBlockInfoStack)-1]
-// 				stackOffset = info.offsetBeforeEntry
-// 			}
-// 		}
-// 		varTable := make(map[string]string)
-// 		for cmd := range info.code {
-// 			if cmd.isTransclude {
-// 				if cur.block == cmd.transclude {
-// 					panic("a block tried to transclude itself")
-// 				}
-// 				blockConsumptionStack = append(blockConsumptionStack,
-// 					blockConsumptionInfo{cur.block, true},
-// 					blockConsumptionInfo{cmd.transclude, false},
-// 				)
-// 				continue consumeLoop
-// 			} else {
-// 				// map "$var{number}" in this block to locations like [rsp-8]
-// 				s := cmd.line
-// 				match := varNameRegex.FindStringIndex(s)
-// 				if match != nil {
-// 					varTpl := s[match[0]:match[1]]
-// 					_, found := varTable[varTpl]
-// 					if !found {
-// 						loc := fmt.Sprintf("qword [rbp-%d]", stackOffset)
-// 						varTable[varTpl] = loc
-// 						stackOffset += 8
-// 					}
-
-// 					filled := varNameRegex.ReplaceAllFunc([]byte(s), func(match []byte) []byte {
-// 						loc, ok := varTable[string(match[:])]
-// 						if !ok {
-// 							panic("referenced an undefined variable internally")
-// 						}
-// 						return []byte(loc)
-// 					})
-// 					s = string(filled[:])
-// 				}
-// 				fmt.Fprint(out, s)
-// 			}
-// 		}
-// 		// epilogue
-// 		switch info.ownerType {
-// 		case Proc:
-// 			fmt.Fprintln(out, "\tpop rbp")
-// 			fmt.Fprintln(out, "\tret")
-// 		case If:
-// 			ifBlockInfoStack = append(ifBlockInfoStack, ifBlockInfo{
-// 				offsetBeforeEntry: ifEntryOffset,
-// 				offsetAfterExit:   stackOffset,
-// 			})
-// 		case Else:
-// 			l := len(ifBlockInfoStack)
-// 			info := ifBlockInfoStack[l-1]
-// 			ifBlockInfoStack = ifBlockInfoStack[:l-1]
-// 			if info.offsetAfterExit > stackOffset {
-// 				stackOffset = info.offsetAfterExit
-// 			}
-// 		}
-// 	}
-
-// 	for _, info := range blocks {
-// 		for s := range info.static {
-// 			fmt.Fprint(out, s)
-// 		}
-// 	}
-// }
-
 func main() {
 	outputPath := flag.String("o", "a.out", "path to the binary")
 	flag.Parse()
@@ -507,62 +393,59 @@ func main() {
 	defer source.Close()
 
 	scanner := bufio.NewScanner(source)
-	blocks := make(map[*interface{}]*blockInfo)
+	blocks := make(map[*interface{}]*procWorkOrder)
 	var labelGen labelIdGen
 	var parser parsing.Parser
 	var mainProc *interface{}
-	ifCount := 0
-	startGenForBlock := func(node *interface{}, label string, ownerType int) {
-		info := blockInfo{
-			code:      make(chan []interface{}),
-			feed:      make(chan *interface{}),
-			ownerType: ownerType,
-			label:     label,
-		}
-		blocks[node] = &info
-		go genForBlock(&labelGen, &info)
-	}
+	var currentProc *interface{}
+	var nodesForProc []*interface{}
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if len(line) == 0 {
 			continue
 		}
-		isComplete, node, parent, err := parser.FeedLine(line)
+		numNewEntries, err := parser.FeedLine(line)
 		if err != nil {
 			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 
+		last := len(parser.OutBuffer) - 1
+		isComplete := parser.OutBuffer[last].IsComplete
+		node := parser.OutBuffer[last].Node
+		parent := parser.OutBuffer[last].Parent
+
 		exprNode, isExpr := (*node).(parsing.ExprNode)
 		if !isComplete && isExpr && exprNode.Op == parsing.ConstDeclare {
 			_, isProc := exprNode.Right.(parsing.ProcNode)
 			if isProc {
-				procName := string(exprNode.Left.(parsing.IdName))
-				label := "proc_" + procName
-				startGenForBlock(node, label, Proc)
-				if procName == "main" {
+				currentProc = node
+				if exprNode.Left.(parsing.IdName) == "main" {
 					mainProc = node
 				}
 			}
 			continue
 		}
 
-		_, isIf := (*node).(parsing.IfNode)
-		_, isElse := (*node).(parsing.ElseNode)
-		if !isComplete && (isIf || isElse) && parent != nil {
-			label := fmt.Sprintf("if_%d", ifCount)
-			startGenForBlock(node, label, If)
-			ifCount++
-			parentInfo := blocks[parent]
-			parentInfo.feed <- node
+		_, isEnd := (*node).(parsing.BlockEnd)
+		if isEnd && parent == currentProc {
+			procName := string((*currentProc).(parsing.ExprNode).Left.(parsing.IdName))
+			label := "proc_" + procName
+			order := procWorkOrder{
+				out:   make(chan optBlock),
+				in:    nodesForProc,
+				label: label,
+			}
+			blocks[currentProc] = &order
+			go genForProc(&labelGen, &order)
+			nodesForProc = nil
 			continue
 		}
 
-		if isComplete && parent != nil {
-			info := blocks[parent]
-			info.feed <- node
+		for i := numNewEntries; i > 0; i-- {
+			nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 		}
-
 	}
 	out, err := os.Create("a.asm")
 	if err != nil {
@@ -594,13 +477,9 @@ func main() {
 	fmt.Fprintln(out, "\tsyscall")
 	fmt.Fprintln(out, "\tret")
 
-	for _, info := range blocks {
-		close(info.feed)
-	}
-
-	ir := collectIr(mainProc, blocks)
+	ir := <-blocks[mainProc].out
 	// fmt.Printf("%#v\n", ir)
-	backend(out, &labelGen, ir)
+	backend(out, &labelGen, []optBlock{ir})
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()
