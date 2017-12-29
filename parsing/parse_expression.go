@@ -91,6 +91,8 @@ func ParseExpr(tokens []string) (interface{}, error) {
 	} else if (tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{") ||
 		(tokens[0] == "}" && len(tokens) == 3 && tokens[1] == "else" && tokens[2] == "{") {
 		return ElseNode{}, nil
+	} else if tokens[0] == "struct" && len(tokens) == 3 && tokens[2] == "{" {
+		return StructDeclare{Name: IdName(tokens[1])}, nil
 	}
 	for index, tok := range tokens {
 		op := tokToOp[tok]
@@ -107,6 +109,16 @@ func ParseExpr(tokens []string) (interface{}, error) {
 		}
 	}
 	return parseExprWithParen(parsed, tokens, 0, len(tokens))
+}
+
+func parseStructMembers(tokens []string) (interface{}, error) {
+	if len(tokens) == 1 && tokens[0] == "}" {
+		return BlockEnd(0), nil
+	}
+	if len(tokens) == 2 {
+		return TypeDeclare{Name: IdName(tokens[0]), Type: IdName(tokens[1])}, nil
+	}
+	return nil, &ParseError{0, 0, "Malformed type declaration. Expected a name and a type"}
 }
 
 func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {

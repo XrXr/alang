@@ -160,11 +160,12 @@ func main() {
 	scanner := bufio.NewScanner(source)
 	blocks := make(map[*interface{}]*frontend.ProcWorkOrder)
 	var labelGen frontend.LabelIdGen
-	var parser parsing.Parser
+	parser := parsing.NewParser()
 	var mainProc *interface{}
 	var currentProc *interface{}
 	var nodesForProc []*interface{}
-	var globals typing.EnvRecord
+	var env typing.EnvRecord
+	structs := make(map[*interface{}]*typing.StructRecord)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -194,8 +195,7 @@ func main() {
 			continue
 		}
 
-		_, isEnd := (*node).(parsing.BlockEnd)
-		if isEnd && parent == currentProc {
+		if _, isEnd := (*node).(parsing.BlockEnd); isEnd && parent == currentProc {
 			procName := string((*currentProc).(parsing.ExprNode).Left.(parsing.IdName))
 			label := "proc_" + procName
 			order := frontend.ProcWorkOrder{
@@ -207,6 +207,22 @@ func main() {
 			go frontend.GenForProc(&labelGen, &order)
 			nodesForProc = nil
 			continue
+		}
+
+		if structDeclare, isStructDeclare := (*node).(parsing.StructDeclare); isStructDeclare {
+			newStruct := typing.StructRecord{Name: structDeclare.Name}
+			structs[node] = &newStruct
+		}
+
+		if typeDeclare, isTypeDeclare := (*node).(parsing.TypeDeclare); isTypeDeclare {
+			parentStruct, found := structs[parent]
+			if !found {
+				panic("parser bug")
+			}
+			parentStruct.Members = append(parentStruct.Members, typing.StructField{
+				Name: typeDeclare.Name,
+				Type: typing.Unresolved{Ident: typeDeclare.Type},
+			})
 		}
 
 		for i := numNewEntries; i > 0; i-- {
@@ -245,11 +261,11 @@ func main() {
 
 	ir := <-blocks[mainProc].Out
 	typer := typing.NewTyper()
-	err = typer.InferAndCheck(&globals, &ir)
+	err = typer.InferAndCheck(&env, &ir)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("%#v\n", ir)
+	// fmt.Printf("%#v\n", ir)
 	backend(out, &labelGen, []frontend.OptBlock{ir})
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")

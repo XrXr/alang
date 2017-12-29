@@ -12,6 +12,11 @@ type Declaration struct {
 	Name IdName
 }
 
+type TypeDeclare struct {
+	Type IdName
+	Name IdName
+}
+
 type Block []interface{}
 
 type ProcNode struct {
@@ -66,6 +71,10 @@ type ExprNode struct {
 	Op    Operator
 	Left  interface{} // either a ExprNode or a Literal or a IdName
 	Right interface{}
+}
+
+type StructDeclare struct {
+	Name IdName
 }
 
 type ParseError struct {

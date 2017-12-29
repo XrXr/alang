@@ -17,12 +17,23 @@ type VarType struct {
 	Parameters []TypeRecord
 }
 
+type StructField struct {
+	Name parsing.IdName
+	Type TypeRecord
+}
+
+type StructRecord struct {
+	Name    parsing.IdName
+	Members []StructField
+}
+
 type FuncRecord map[parsing.IdName]FuncType
 type VarRecord map[parsing.IdName]VarType
 
 type EnvRecord struct {
 	Funcs FuncRecord
 	Vars  VarRecord
+	Types []*StructRecord
 }
 
 func (e *EnvRecord) contains(decl parsing.IdName) bool {

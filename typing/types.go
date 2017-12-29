@@ -1,5 +1,9 @@
 package typing
 
+import (
+	"github.com/XrXr/alang/parsing"
+)
+
 type TypeRecord interface {
 	IsNumber() bool
 }
@@ -25,6 +29,11 @@ type U32 struct{ integerType }
 type U16 struct{ integerType }
 
 type U8 struct{ integerType }
+
+type Unresolved struct {
+	normalType
+	Ident parsing.IdName
+}
 
 type normalType struct{}
 

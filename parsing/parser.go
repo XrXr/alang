@@ -1,9 +1,17 @@
 package parsing
 
+type parsingContext int
+
 type Parser struct {
 	OutBuffer       []statement
 	incompleteStack []*interface{}
+	contextStack    []parsingContext
 }
+
+const (
+	globalContext parsingContext = iota + 1
+	structContext
+)
 
 type statement struct {
 	IsComplete bool
@@ -18,6 +26,10 @@ func (p *Parser) FeedLine(line string) (int, error) {
 		return 0, err
 	}
 	return len(p.OutBuffer) - before, nil
+}
+
+func (p *Parser) currentContext() parsingContext {
+	return p.contextStack[len(p.contextStack)-1]
 }
 
 func (p *Parser) processLine(line string) error {
@@ -37,7 +49,13 @@ func (p *Parser) processLine(line string) error {
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
 	tokens := Tokenize(line)
-	n, err := ParseExpr(tokens)
+	var n interface{}
+	var err error
+	if p.currentContext() == structContext {
+		n, err = parseStructMembers(tokens)
+	} else {
+		n, err = ParseExpr(tokens)
+	}
 	if err != nil {
 		return err
 	}
@@ -70,6 +88,15 @@ func (p *Parser) processLine(line string) error {
 		startNewBlock(&n)
 		addOne(false, &n, parent)
 		return nil
+	case StructDeclare:
+		p.contextStack = append(p.contextStack, structContext)
+		addOne(false, &n, parent)
+		startNewBlock(&n)
+		return nil
+	case TypeDeclare:
+		if p.currentContext() != structContext {
+			return &ParseError{0, 0, "This only makes sense in struct declarations"}
+		}
 	case BlockEnd:
 		l := len(p.incompleteStack)
 		if l == 0 {
@@ -77,9 +104,16 @@ func (p *Parser) processLine(line string) error {
 		}
 		top := p.incompleteStack[l-1]
 		p.incompleteStack = p.incompleteStack[:l-1]
+		if _, parentIsStruct := (*top).(StructDeclare); parentIsStruct {
+			p.contextStack = p.contextStack[:len(p.contextStack)-1]
+		}
 		addOne(true, &n, top)
 		return nil
 	}
 	addOne(true, &n, getParent())
 	return nil
+}
+
+func NewParser() *Parser {
+	return &Parser{contextStack: []parsingContext{globalContext}}
 }

@@ -25,6 +25,7 @@ var bounderies = [...]string{
 	"::",
 	"{",
 	"}",
+	"struct",
 }
 
 func Tokenize(in string) []string {
@@ -100,7 +101,12 @@ func Tokenize(in string) []string {
 	}
 	endTok := strings.TrimSpace(in[lastFoundIdx:])
 	if len(endTok) > 0 {
-		result = append(result, endTok)
+		spacedOut := strings.Split(endTok, " ")
+		if len(spacedOut) == 2 && spacedOut[0][0] != '"' {
+			result = append(result, spacedOut...)
+		} else {
+			result = append(result, endTok)
+		}
 	}
 	return result
 }
