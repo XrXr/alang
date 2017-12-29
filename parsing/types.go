@@ -50,6 +50,7 @@ const (
 	Declare
 	ConstDeclare
 	Dereference
+	AddressOf
 )
 
 //go:generate $GOPATH/bin/stringer -type=LiteralType

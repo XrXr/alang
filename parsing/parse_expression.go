@@ -18,6 +18,7 @@ var tokToOp = map[string]Operator{
 	"*":  Star,
 	"-":  Minus,
 	".":  Dot,
+	"&":  AddressOf,
 }
 
 var precedence = map[Operator]int{
@@ -227,7 +228,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 
 		var newNode ExprNode
 		newNode.Op = opTok.op
-		if opTok.index > 0 {
+		if opTok.index > 0 && opTok.index > start {
 			parsed, good := parsed[opTok.index-1]
 			if good {
 				newNode.Left = parsed.node
@@ -236,7 +237,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 				newNode.Left = parseToken(tokens[opTok.index-1])
 			}
 		}
-		if opTok.index < len(tokens)-1 {
+		if opTok.index < len(tokens)-1 && opTok.index < end {
 			parsed, good := parsed[opTok.index+1]
 			if good {
 				newNode.Right = parsed.node

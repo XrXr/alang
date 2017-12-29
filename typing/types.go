@@ -35,6 +35,11 @@ type Unresolved struct {
 	Ident parsing.IdName
 }
 
+type Pointer struct {
+	normalType
+	ToWhat TypeRecord
+}
+
 type normalType struct{}
 
 func (_ normalType) IsNumber() bool {

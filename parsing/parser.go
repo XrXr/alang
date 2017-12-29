@@ -1,5 +1,7 @@
 package parsing
 
+// import "fmt"
+
 type parsingContext int
 
 type Parser struct {
@@ -49,6 +51,7 @@ func (p *Parser) processLine(line string) error {
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
 	tokens := Tokenize(line)
+	// fmt.Printf("%#v\n", tokens)
 	var n interface{}
 	var err error
 	if p.currentContext() == structContext {

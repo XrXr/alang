@@ -113,6 +113,20 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine("\tret\n")
 		case ir.Transclude:
 			panic("Should be gone by now")
+		case ir.TakeAddress:
+			dest := varToStack(opt.Out)
+			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
+			// TODO varToStack size of variables
+			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, opt.Var*8+8))
+		case ir.IndirectWrite:
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Pointer)))
+			addLine(fmt.Sprintf("\tmov rbx, %s\n", varToStack(opt.Data)))
+			// TODO not all writes are qword
+			addLine("\tmov qword [rax], rbx\n")
+		case ir.IndirectLoad:
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Pointer)))
+			addLine("\tmov rax, [rax]\n")
+			addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Out)))
 		default:
 			panic(opt)
 		}

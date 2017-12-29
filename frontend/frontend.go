@@ -32,6 +32,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 	sawIf := false
 	for i < len(order.In) {
 		nodePtr := order.In[i]
+		// parsing.Dump(nodePtr)
 		i++
 		sawIfLastTime := sawIf
 		sawIf = false
@@ -40,18 +41,32 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			switch node.Op {
 			case parsing.Declare:
 				varNum := scope.newNamedVar(node.Left.(parsing.IdName))
-				err := genSimpleValuedExpression(scope, varNum, node.Right)
+				err := genRvalueExpression(scope, varNum, node.Right)
 				if err != nil {
 					panic(err)
 				}
 			case parsing.Assign:
-				leftVarNum, varFound := scope.resolve(node.Left.(parsing.IdName))
-				if !varFound {
-					panic("bug in user program! assign to undefined var")
-				}
-				err := genSimpleValuedExpression(scope, leftVarNum, node.Right)
-				if err != nil {
-					panic(err)
+				leftAsIdent, leftIsIdent := node.Left.(parsing.IdName)
+				if leftIsIdent {
+					leftVarNum, varFound := scope.resolve(leftAsIdent)
+					if !varFound {
+						panic("bug in user program! assign to undefined var")
+					}
+					err := genRvalueExpression(scope, leftVarNum, node.Right)
+					if err != nil {
+						panic(err)
+					}
+				} else {
+					leftResult, err := genLvalueExpression(scope, node.Left)
+					if err != nil {
+						panic(err)
+					}
+					rightResult := scope.newVar()
+					err = genRvalueExpression(scope, rightResult, node.Right)
+					if err != nil {
+						panic(err)
+					}
+					gen.addOpt(ir.IndirectWrite{Pointer: leftResult, Data: rightResult})
 				}
 			default:
 				//TODO issue warning here
@@ -59,7 +74,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		case parsing.IfNode:
 			sawIf = true
 			condVar := scope.newVar()
-			genSimpleValuedExpression(scope, condVar, node.Condition)
+			genRvalueExpression(scope, condVar, node.Condition)
 			labelForIf := labelGen.GenLabel("if_%d")
 			gen.addOpt(ir.JumpIfFalse{condVar, labelForIf})
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
@@ -78,7 +93,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			var argVars []int
 			for _, argNode := range node.Args {
 				argEval := scope.newVar()
-				err := genSimpleValuedExpression(scope, argEval, argNode)
+				err := genRvalueExpression(scope, argEval, argNode)
 				if err != nil {
 					panic(err)
 				}
@@ -92,7 +107,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 	return i
 }
 
-func genSimpleValuedExpression(scope *scope, dest int, node interface{}) error {
+func genRvalueExpression(scope *scope, dest int, node interface{}) error {
 	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.Literal:
@@ -118,14 +133,25 @@ func genSimpleValuedExpression(scope *scope, dest int, node interface{}) error {
 		gen.addOpt(ir.Assign{dest, vn})
 	case parsing.ExprNode:
 		switch n.Op {
-		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
+		case parsing.Star:
+			if n.Left == nil { // unary star
+				rightDest := scope.newVar()
+				err := genRvalueExpression(scope, rightDest, n.Right)
+				if err != nil {
+					return err
+				}
+				gen.addOpt(ir.IndirectLoad{Pointer: rightDest, Out: dest})
+				return nil
+			}
+			fallthrough
+		case parsing.Minus, parsing.Plus, parsing.Divide:
 			leftDest := scope.newVar()
-			err := genSimpleValuedExpression(scope, leftDest, n.Left)
+			err := genRvalueExpression(scope, leftDest, n.Left)
 			if err != nil {
 				return err
 			}
 			rightDest := scope.newVar()
-			err = genSimpleValuedExpression(scope, rightDest, n.Right)
+			err = genRvalueExpression(scope, rightDest, n.Right)
 			if err != nil {
 				return err
 			}
@@ -140,11 +166,36 @@ func genSimpleValuedExpression(scope *scope, dest int, node interface{}) error {
 				gen.addOpt(ir.Sub{leftDest, rightDest})
 			}
 			gen.addOpt(ir.Assign{dest, leftDest})
+		case parsing.AddressOf:
+			// TODO: incomplete: &(someStruct.foo.sdfsd)
+			right := n.Right.(parsing.IdName)
+			vn, found := scope.resolve(right)
+			if !found {
+				return errors.New("undefined var")
+			}
+			gen.addOpt(ir.TakeAddress{Var: vn, Out: dest})
 		default:
 			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
 		}
 	}
 	return nil
+}
+
+// return a var number which stores a pointer
+func genLvalueExpression(scope *scope, node interface{}) (int, error) {
+	switch n := node.(type) {
+	case parsing.IdName:
+		vn, found := scope.resolve(n)
+		if !found {
+			return 0, errors.New("undefined var")
+		}
+		return vn, nil
+	case parsing.ExprNode:
+		if n.Op == parsing.Star && n.Left == nil {
+			return genLvalueExpression(scope, n.Right)
+		}
+	}
+	return 0, errors.New("Can't resolve expression to lvalue")
 }
 
 func boolStrToInt(s string) (ret int) {

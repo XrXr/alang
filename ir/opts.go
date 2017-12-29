@@ -40,6 +40,21 @@ type StartProc struct {
 type EndProc struct {
 }
 
+type TakeAddress struct {
+	Var int
+	Out int
+}
+
+type IndirectLoad struct {
+	Pointer int
+	Out     int
+}
+
+type IndirectWrite struct {
+	Pointer int
+	Data    int
+}
+
 type Call struct {
 	Label   string
 	ArgVars []int

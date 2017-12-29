@@ -60,6 +60,45 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock) error 
 		switch opt := opt.(type) {
 		case ir.AssignImm:
 			typeTable[opt.Var] = t.typeImmediate(opt.Val)
+		case ir.TakeAddress:
+			varType := typeTable[opt.Var]
+			if varType == nil {
+				panic("type should be resolved at this point")
+			}
+			typeTable[opt.Out] = Pointer{ToWhat: varType}
+		case ir.IndirectWrite:
+			varType := typeTable[opt.Pointer]
+			if varType == nil {
+				panic("type should be resolved at this point")
+			}
+			typeForData := typeTable[opt.Data]
+			if varType == nil {
+				panic("type should be resolved at this point")
+			}
+			pointer, varIsPointer := varType.(Pointer)
+			if !varIsPointer {
+				panic("That's not a pointer what are you doing")
+			}
+			if pointer.ToWhat != typeForData {
+				panic("Type mismatch")
+			}
+		case ir.IndirectLoad:
+			ptrType := typeTable[opt.Pointer]
+			if ptrType == nil {
+				panic("type should be resolved at this point")
+			}
+			pointer, isPointer := ptrType.(Pointer)
+			if !isPointer {
+				panic("Can't indirect a non pointer")
+			}
+			typeForOut := typeTable[opt.Out]
+			if typeForOut == nil {
+				typeTable[opt.Out] = pointer.ToWhat
+				typeForOut = pointer.ToWhat
+			}
+			if pointer.ToWhat != typeForOut {
+				panic("Type mismatch")
+			}
 		case ir.Assign:
 			l, r := resolve(ir.BinaryVarOpt(opt))
 			if r == nil {

@@ -4,9 +4,9 @@ package parsing
 
 import "fmt"
 
-const _Operator_name = "DotStarMinusPlusDivideCallAssignDeclareConstDeclareDereference"
+const _Operator_name = "DotStarMinusPlusDivideCallAssignDeclareConstDeclareDereferenceAddressOf"
 
-var _Operator_index = [...]uint8{0, 3, 7, 12, 16, 22, 26, 32, 39, 51, 62}
+var _Operator_index = [...]uint8{0, 3, 7, 12, 16, 22, 26, 32, 39, 51, 62, 71}
 
 func (i Operator) String() string {
 	i -= 1
