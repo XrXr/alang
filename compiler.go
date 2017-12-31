@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/XrXr/alang/frontend"
@@ -13,7 +14,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"regexp"
 )
 
 const (
@@ -22,17 +22,24 @@ const (
 	Else
 )
 
-func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *frontend.LabelIdGen, block frontend.OptBlock) {
+func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *frontend.LabelIdGen, block frontend.OptBlock, typeTable []typing.TypeRecord, env *typing.EnvRecord) {
 	addLine := func(line string) {
 		io.WriteString(out, line)
 	}
-	varToStack := func(varNum int) string {
-		acutalVar := varNum
-		//TODO: !! of course not every var is size 8...
-		// +8 for the return addresss
-		return fmt.Sprintf("qword [rbp-%d]", acutalVar*8+8)
+	varOffset := make([]int, block.NumberOfVars)
+	varOffset[0] = 8 // cause we push rbp in the prolog
+	for i := 0; i < (block.NumberOfVars - 1); i++ {
+		varOffset[i+1] = varOffset[i] + typeTable[i].Size()
 	}
-	for _, opt := range block.Opts {
+	varToStack := func(varNum int) string {
+		return fmt.Sprintf("qword [rbp-%d]", varOffset[varNum])
+	}
+	framesize := 0
+	for _, typeRecord := range typeTable {
+		framesize += typeRecord.Size()
+	}
+	for i, opt := range block.Opts {
+		fmt.Fprintf(out, ";ir line %d\n", i)
 		switch opt := opt.(type) {
 		case ir.Assign:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
@@ -95,9 +102,13 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine("\tcmp rax, 0\n")
 			addLine(fmt.Sprintf("\tjz %s\n", opt.Label))
 		case ir.Call:
-			// TODO: temporary
-			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.ArgVars[0])))
-			addLine(fmt.Sprintf("\tcall %s\n", opt.Label))
+			if _, isStruct := env.Types[parsing.IdName(opt.Label)]; isStruct {
+				// TODO: code to zero the members
+			} else {
+				// TODO: temporary
+				addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.ArgVars[0])))
+				addLine(fmt.Sprintf("\tcall %s\n", opt.Label))
+			}
 		case ir.Jump:
 			addLine(fmt.Sprintf("\tjmp %s\n", opt.Label))
 		case ir.Label:
@@ -106,13 +117,13 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine(fmt.Sprintf("%s:\n", opt.Name))
 			addLine("\tpush rbp\n")
 			addLine("\tmov rbp, rsp\n")
-			addLine(fmt.Sprintf("\tsub rsp, %d\n", block.FrameSize))
+			addLine(fmt.Sprintf("\tsub rsp, %d\n", framesize))
 		case ir.EndProc:
 			addLine("\tmov rsp, rbp\n")
 			addLine("\tpop rbp\n")
 			addLine("\tret\n")
 		case ir.Transclude:
-			panic("Should be gone by now")
+			panic("Transcludes should be gone by now")
 		case ir.TakeAddress:
 			dest := varToStack(opt.Out)
 			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
@@ -127,33 +138,89 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Pointer)))
 			addLine("\tmov rax, [rax]\n")
 			addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Out)))
+		case ir.StructMemberPtr:
+			baseType := typeTable[opt.Base]
+			switch baseType := baseType.(type) {
+			case typing.Pointer:
+				record := baseType.ToWhat.(typing.StructRecord)
+				addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Base)))
+				addLine(fmt.Sprintf("\tadd rax, %d\n", record.Members[opt.Member].Offset))
+			case typing.StructRecord:
+				addLine("\tmov rax, rbp\n")
+				addLine(fmt.Sprintf("\tsub rax, %d\n", varOffset[opt.Base]))
+				addLine(fmt.Sprintf("\tadd rax, %d\n", baseType.Members[opt.Member].Offset))
+			default:
+				panic("Type checker didn't do its job")
+			}
+			addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Out)))
+		case ir.LoadStructMember:
+			// TODO does not account for size of that member atm
+			baseType := typeTable[opt.Base]
+			switch baseType := baseType.(type) {
+			case typing.Pointer:
+				record := baseType.ToWhat.(typing.StructRecord)
+				addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Base)))
+				addLine(fmt.Sprintf("\tmov rax, [rax+%d]\n", record.Members[opt.Member].Offset))
+				addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Out)))
+			case typing.StructRecord:
+				offset := varOffset[opt.Base] - baseType.Members[opt.Member].Offset
+				if offset < 0 {
+					panic("bad struct member offset")
+				}
+				addLine(fmt.Sprintf("\tmov rax, [rbp-%d]\n", offset))
+				addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Out)))
+			default:
+				panic("Type checker didn't do its job")
+			}
 		default:
 			panic(opt)
 		}
 	}
 }
 
-func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBlock) {
+func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord) {
 	var staticDataBuf bytes.Buffer
 	for _, block := range opts {
-		backendForOptBlock(out, &staticDataBuf, labelGen, block)
+		backendForOptBlock(out, &staticDataBuf, labelGen, block, typeTable, globalEnv)
 	}
 	io.WriteString(out, "; ---static data segment start---\n")
 	staticDataBuf.WriteTo(out)
 }
 
-func sendLinesToChan(buf *bytes.Buffer, channel *chan string) {
-	for {
-		line, err := buf.ReadString('\n')
-		*channel <- line
-		if err != nil {
-			close(*channel)
-			break
+// resolve all the type of members in structs and build the global environment
+func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*interface{}]*typing.StructRecord) error {
+	notDone := make(map[string][]*typing.StructField)
+	for _, structRecord := range nodeToStruct {
+		for name, field := range structRecord.Members {
+			unresolved, isUnresolved := field.Type.(typing.Unresolved)
+			if builtin := typer.ResolveBuiltinType(string(unresolved.Ident)); builtin != nil {
+				field.Type = builtin
+			} else if isUnresolved {
+				notDone[name] = append(notDone[name], field)
+			}
 		}
 	}
-}
 
-var varNameRegex = regexp.MustCompile(`\$var[0-9]+`)
+	for node, structRecord := range nodeToStruct {
+		structNode := (*node).(parsing.StructDeclare)
+		name := string(structNode.Name)
+		env.Types[structNode.Name] = *structRecord
+		for _, field := range notDone[name] {
+			field.Type = structRecord
+		}
+		delete(notDone, name)
+	}
+
+	if len(notDone) != 0 {
+		return errors.New("--- does not name a type")
+	}
+
+	for _, structRecord := range nodeToStruct {
+		structRecord.ResolveSizeAndOffset()
+	}
+	return nil
+
+}
 
 func main() {
 	outputPath := flag.String("o", "a.out", "path to the binary")
@@ -178,7 +245,7 @@ func main() {
 	var mainProc *interface{}
 	var currentProc *interface{}
 	var nodesForProc []*interface{}
-	var env typing.EnvRecord
+	env := typing.NewEnvRecord()
 	structs := make(map[*interface{}]*typing.StructRecord)
 
 	for scanner.Scan() {
@@ -224,7 +291,10 @@ func main() {
 		}
 
 		if structDeclare, isStructDeclare := (*node).(parsing.StructDeclare); isStructDeclare {
-			newStruct := typing.StructRecord{Name: structDeclare.Name}
+			newStruct := typing.StructRecord{
+				Name:    string(structDeclare.Name),
+				Members: make(map[string]*typing.StructField),
+			}
 			structs[node] = &newStruct
 		}
 
@@ -233,14 +303,17 @@ func main() {
 			if !found {
 				panic("parser bug")
 			}
-			parentStruct.Members = append(parentStruct.Members, typing.StructField{
-				Name: typeDeclare.Name,
+			newStruct := &typing.StructField{
 				Type: typing.Unresolved{Ident: typeDeclare.Type},
-			})
+			}
+			parentStruct.MemberOrder = append(parentStruct.MemberOrder, newStruct)
+			parentStruct.Members[string(typeDeclare.Name)] = newStruct
 		}
 
-		for i := numNewEntries; i > 0; i-- {
-			nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
+		if currentProc != nil {
+			for i := numNewEntries; i > 0; i-- {
+				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
+			}
 		}
 	}
 	out, err := os.Create("a.asm")
@@ -274,13 +347,21 @@ func main() {
 	fmt.Fprintln(out, "\tret")
 
 	ir := <-blocks[mainProc].Out
+	frontend.Prune(&ir)
+	fmt.Printf("%#v\n", ir)
 	typer := typing.NewTyper()
-	err = typer.InferAndCheck(&env, &ir)
+	buildGlobalEnv(typer, env, structs)
+	typeTable, err := typer.InferAndCheck(env, &ir)
 	if err != nil {
 		panic(err)
 	}
-	// fmt.Printf("%#v\n", ir)
-	backend(out, &labelGen, []frontend.OptBlock{ir})
+	// for i, e := range typeTable {
+	// 	if e == nil {
+	// 		println(i)
+	// 		panic("Bug in typer -- not all vars have types!")
+	// 	}
+	// }
+	backend(out, &labelGen, []frontend.OptBlock{ir}, typeTable, env)
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()

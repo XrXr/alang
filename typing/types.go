@@ -6,38 +6,88 @@ import (
 
 type TypeRecord interface {
 	IsNumber() bool
+	Size() int
+}
+
+type String struct{ normalType }
+
+func (_ String) Size() int {
+	return 16
+}
+
+type Int struct{ integerType }
+
+func (_ Int) Size() int {
+	return 8
 }
 
 type Void struct{ normalType }
 
-type String struct{ normalType }
+func (_ Void) Size() int {
+	return 0
+}
 
-type Int struct{ integerType }
+// type S64 struct{ integerType }
 
-type S64 struct{ integerType }
+// type S32 struct{ integerType }
 
-type S32 struct{ integerType }
+// type S16 struct{ integerType }
 
-type S16 struct{ integerType }
+// type S8 struct{ integerType }
 
-type S8 struct{ integerType }
+// type U64 struct{ integerType }
 
-type U64 struct{ integerType }
+// type U32 struct{ integerType }
 
-type U32 struct{ integerType }
+// type U16 struct{ integerType }
 
-type U16 struct{ integerType }
+// type U8 struct{ integerType }
 
-type U8 struct{ integerType }
+type StructField struct {
+	Type   TypeRecord
+	Offset int
+}
+
+type StructRecord struct {
+	Name        string
+	Members     map[string]*StructField
+	MemberOrder []*StructField
+	size        int
+	normalType
+}
+
+func (s StructRecord) Size() int {
+	return s.size
+}
+
+func (s *StructRecord) ResolveSizeAndOffset() {
+	s.size = 0
+	for _, field := range s.MemberOrder {
+		s.size += field.Type.Size()
+	}
+	s.MemberOrder[0].Offset = 0
+	for i := 1; i < len(s.MemberOrder); i++ {
+		last := s.MemberOrder[i-1]
+		s.MemberOrder[i].Offset = last.Offset + last.Type.Size()
+	}
+}
 
 type Unresolved struct {
 	normalType
 	Ident parsing.IdName
 }
 
+func (_ Unresolved) Size() int {
+	return 0
+}
+
 type Pointer struct {
 	normalType
 	ToWhat TypeRecord
+}
+
+func (_ Pointer) Size() int {
+	return 8
 }
 
 type normalType struct{}

@@ -18,6 +18,8 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	ret := genForProcSubSection(labelGen, order, gen.rootScope, 0)
 	gen.addOpt(ir.EndProc{})
 	if ret != len(order.In) {
+		parsing.Dump(order.In)
+
 		panic("gen didn't process whole proc")
 	}
 	// TODO: framesize is wrong
@@ -89,19 +91,13 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			gen.addOpt(ifLabel)
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
 			gen.addOpt(ir.Label{elseLabel})
-		case parsing.ProcCall:
-			var argVars []int
-			for _, argNode := range node.Args {
-				argEval := scope.newVar()
-				err := genRvalueExpression(scope, argEval, argNode)
-				if err != nil {
-					panic(err)
-				}
-				argVars = append(argVars, argEval)
-			}
-			gen.addOpt(ir.Call{string(node.Callee), argVars})
 		case parsing.BlockEnd:
 			return i
+		default:
+			err := genRvalueExpression(scope, scope.newVar(), node)
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 	return i
@@ -131,6 +127,17 @@ func genRvalueExpression(scope *scope, dest int, node interface{}) error {
 			return errors.New("undefined var")
 		}
 		gen.addOpt(ir.Assign{dest, vn})
+	case parsing.ProcCall:
+		var argVars []int
+		for _, argNode := range n.Args {
+			argEval := scope.newVar()
+			err := genRvalueExpression(scope, argEval, argNode)
+			if err != nil {
+				panic(err)
+			}
+			argVars = append(argVars, argEval)
+		}
+		gen.addOpt(ir.Call{string(n.Callee), argVars, dest})
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.Star:
@@ -174,6 +181,13 @@ func genRvalueExpression(scope *scope, dest int, node interface{}) error {
 				return errors.New("undefined var")
 			}
 			gen.addOpt(ir.TakeAddress{Var: vn, Out: dest})
+		case parsing.Dot:
+			left := scope.newVar()
+			err := genRvalueExpression(scope, left, n.Left)
+			if err != nil {
+				return err
+			}
+			gen.addOpt(ir.LoadStructMember{Base: left, Member: string(n.Right.(parsing.IdName)), Out: dest})
 		default:
 			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
 		}
@@ -183,6 +197,7 @@ func genRvalueExpression(scope *scope, dest int, node interface{}) error {
 
 // return a var number which stores a pointer
 func genLvalueExpression(scope *scope, node interface{}) (int, error) {
+	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.IdName:
 		vn, found := scope.resolve(n)
@@ -194,6 +209,16 @@ func genLvalueExpression(scope *scope, node interface{}) (int, error) {
 		if n.Op == parsing.Star && n.Left == nil {
 			return genLvalueExpression(scope, n.Right)
 		}
+		if n.Op == parsing.Dot {
+			structBase, err := genLvalueExpression(scope, n.Left)
+			if err != nil {
+				return 0, err
+			}
+			member := string(n.Right.(parsing.IdName))
+			out := scope.newVar()
+			gen.addOpt(ir.StructMemberPtr{Base: structBase, Member: member, Out: out})
+			return out, nil
+		}
 	}
 	return 0, errors.New("Can't resolve expression to lvalue")
 }
@@ -203,4 +228,50 @@ func boolStrToInt(s string) (ret int) {
 		ret = 1
 	}
 	return
+}
+
+func Prune(block *OptBlock) {
+	usageLog := make([]struct {
+		count        int
+		fristUseIdx  int
+		secondUseIdx int
+	}, block.NumberOfVars)
+	use := func(varNum int, optIdx int) {
+		if usageLog[varNum].count == 0 {
+			usageLog[varNum].fristUseIdx = optIdx
+		}
+		if usageLog[varNum].count == 1 {
+			usageLog[varNum].secondUseIdx = optIdx
+		}
+		usageLog[varNum].count++
+	}
+	uses := make([]int, 3)
+	for idx, opt := range block.Opts {
+		switch opt := opt.(type) {
+		case ir.Assign:
+			opt.Uses(uses)
+			use(uses[0], idx)
+			use(uses[1], idx)
+		case ir.LoadStructMember:
+			opt.Uses(uses)
+			use(uses[0], idx)
+			use(uses[1], idx)
+		}
+	}
+	for _, log := range usageLog {
+		if log.count != 2 {
+			continue
+		}
+		genesisAssign, fromAssign := block.Opts[log.fristUseIdx].(ir.Assign)
+		if fromAssign {
+			switch opt := block.Opts[log.secondUseIdx].(type) {
+			case ir.Assign:
+				opt.Swap(genesisAssign.Left, genesisAssign.Right)
+				block.Opts[log.secondUseIdx] = opt
+			case ir.LoadStructMember:
+				opt.Swap(genesisAssign.Left, genesisAssign.Right)
+				block.Opts[log.secondUseIdx] = opt
+			}
+		}
+	}
 }
