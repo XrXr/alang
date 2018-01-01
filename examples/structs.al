@@ -5,8 +5,9 @@ struct foo {
 
 main :: proc() {
     a := foo()
+    b := &a
     a.josh = 100
-    a.wendy = 67
+    b.wendy = 67
     puts("exit code should be 167\n")
-    exit(a.josh + a.wendy)
+    exit(b.josh + b.wendy)
 }

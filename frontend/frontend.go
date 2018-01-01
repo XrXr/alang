@@ -265,9 +265,6 @@ func Prune(block *OptBlock) {
 		genesisAssign, fromAssign := block.Opts[log.fristUseIdx].(ir.Assign)
 		if fromAssign {
 			switch opt := block.Opts[log.secondUseIdx].(type) {
-			case ir.Assign:
-				opt.Swap(genesisAssign.Left, genesisAssign.Right)
-				block.Opts[log.secondUseIdx] = opt
 			case ir.LoadStructMember:
 				opt.Swap(genesisAssign.Left, genesisAssign.Right)
 				block.Opts[log.secondUseIdx] = opt

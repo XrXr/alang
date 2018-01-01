@@ -127,8 +127,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 		case ir.TakeAddress:
 			dest := varToStack(opt.Out)
 			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
-			// TODO varToStack size of variables
-			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, opt.Var*8+8))
+			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.Var]))
 		case ir.IndirectWrite:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Pointer)))
 			addLine(fmt.Sprintf("\tmov rbx, %s\n", varToStack(opt.Data)))
@@ -201,22 +200,20 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		}
 	}
 
+	numResolved := 0
 	for node, structRecord := range nodeToStruct {
+		numResolved++
 		structNode := (*node).(parsing.StructDeclare)
 		name := string(structNode.Name)
-		env.Types[structNode.Name] = *structRecord
 		for _, field := range notDone[name] {
 			field.Type = structRecord
 		}
-		delete(notDone, name)
-	}
-
-	if len(notDone) != 0 {
-		return errors.New("--- does not name a type")
-	}
-
-	for _, structRecord := range nodeToStruct {
 		structRecord.ResolveSizeAndOffset()
+		env.Types[structNode.Name] = *structRecord
+	}
+
+	if len(notDone) != numResolved {
+		return errors.New("--- does not name a type")
 	}
 	return nil
 
@@ -347,8 +344,8 @@ func main() {
 	fmt.Fprintln(out, "\tret")
 
 	ir := <-blocks[mainProc].Out
-	frontend.Prune(&ir)
-	fmt.Printf("%#v\n", ir)
+	// frontend.Prune(&ir)
+	frontend.DumpIr(ir)
 	typer := typing.NewTyper()
 	buildGlobalEnv(typer, env, structs)
 	typeTable, err := typer.InferAndCheck(env, &ir)

@@ -140,7 +140,6 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 			}
 		}
 	case ir.Add:
-		parsing.Dump(opt)
 		l, r := resolve(ir.BinaryVarOpt(opt))
 		if !(l.IsNumber() && r.IsNumber()) {
 			return errors.New("operands must be numbers")
