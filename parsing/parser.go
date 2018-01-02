@@ -96,7 +96,7 @@ func (p *Parser) processLine(line string) error {
 		addOne(false, &n, parent)
 		startNewBlock(&n)
 		return nil
-	case TypeDeclare:
+	case Declaration:
 		if p.currentContext() != structContext {
 			return &ParseError{0, 0, "This only makes sense in struct declarations"}
 		}

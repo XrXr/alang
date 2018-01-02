@@ -4,16 +4,15 @@ import (
 	"fmt"
 )
 
-type TypeName string
 type IdName string
 
-type Declaration struct {
-	Type TypeName
-	Name IdName
+type TypeDecl struct {
+	Base               IdName
+	LevelOfIndirection int
 }
 
-type TypeDeclare struct {
-	Type IdName
+type Declaration struct {
+	Type TypeDecl
 	Name IdName
 }
 
@@ -21,12 +20,8 @@ type Block []interface{}
 
 type ProcNode struct {
 	Args []Declaration
-	Ret  TypeName
+	Ret  TypeDecl
 	Body Block
-}
-
-type ExpressionContainer interface {
-	AppendExpression(interface{})
 }
 
 type ProcCall struct {

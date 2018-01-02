@@ -54,7 +54,7 @@ func (o OpHeap) Less(i, j int) bool {
 	preceI := precedence[o[i].op]
 	preceJ := precedence[o[j].op]
 	if preceI == preceJ {
-		return o[i].index > o[j].index
+		return o[i].index < o[j].index
 	} else {
 		return preceI < preceJ
 	}
@@ -116,10 +116,30 @@ func parseStructMembers(tokens []string) (interface{}, error) {
 	if len(tokens) == 1 && tokens[0] == "}" {
 		return BlockEnd(0), nil
 	}
-	if len(tokens) == 2 {
-		return TypeDeclare{Name: IdName(tokens[0]), Type: IdName(tokens[1])}, nil
+	if len(tokens) >= 2 {
+		typeDecl, err := parseTypeDecl(tokens[1:])
+		if err != nil {
+			return nil, err
+		}
+		return Declaration{Name: IdName(tokens[0]), Type: typeDecl}, nil
 	}
 	return nil, &ParseError{0, 0, "Malformed type declaration. Expected a name and a type"}
+}
+
+func parseTypeDecl(tokens []string) (TypeDecl, error) {
+	level := 0
+	var base string
+	for i, tok := range tokens {
+		if tok == "*" {
+			level++
+		} else {
+			if i != len(tokens)-1 {
+				return TypeDecl{}, &ParseError{0, 0, "Junk after the pointed-to type name"}
+			}
+			base = tok
+		}
+	}
+	return TypeDecl{LevelOfIndirection: level, Base: IdName(base)}, nil
 }
 
 func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
@@ -256,7 +276,6 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 			parsed[rightI] = parsedNode{newNode, leftI}
 		}
 	}
-
 	return finalNode, nil
 }
 
@@ -295,7 +314,7 @@ func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 
 func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo) (*ProcNode, int, error) {
 	i := paren.open + 1
-	args := make([]Declaration, 0)
+	var args []Declaration
 	for j := i; j <= paren.end; j++ {
 		tok := tokens[j]
 		if paren.open+1 == paren.end { // no arguments
@@ -308,18 +327,19 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 				return nil, 0, &ParseError{0, 0, `expected a type declaration`}
 			}
 			args = append(args, Declaration{
-				TypeName(last[:spaceIdx]), IdName(last[spaceIdx+1:]),
+				Type: TypeDecl{Base: IdName(last[:spaceIdx])},
+				Name: IdName(last[spaceIdx+1:]),
 			})
 			//TODO error checking
 		}
 	}
 	blockStart := paren.end + 1
-	returnType := TypeName("void")
+	returnType := IdName("void")
 	if paren.end+1 < len(tokens) && tokens[paren.end+1] == "->" {
 		if paren.end+2 >= len(tokens) {
 			return nil, 0, &ParseError{0, 0, "Expected a type"}
 		}
-		returnType = TypeName(tokens[paren.end+2])
+		returnType = IdName(tokens[paren.end+2])
 		blockStart = paren.end + 3
 	}
 
@@ -331,7 +351,7 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 		// TODO translate token idx to col
 		return nil, 0, &ParseError{0, col, "Expected a block"}
 	}
-	return &ProcNode{Ret: returnType, Args: args, Body: Block{}}, blockStart, nil
+	return &ProcNode{Ret: TypeDecl{Base: returnType}, Args: args, Body: Block{}}, blockStart, nil
 }
 
 func parseToken(s string) interface{} {

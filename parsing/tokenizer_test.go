@@ -13,6 +13,7 @@ var fixture = map[string][]string{
 	"minus-5":                    {"minus", "-", "5"},
 	"minus+-5":                   {"minus", "+", "-", "5"},
 	"minus*+5":                   {"minus", "*", "+", "5"},
+	"engage.jolly.cooperation":   {"engage", ".", "jolly", ".", "cooperation"},
 	"minus.food.cat * pop":       {"minus", ".", "food", ".", "cat", "*", "pop"},
 	"123.20 * pop":               {"123.20", "*", "pop"},
 	"-3231.20 * pop":             {"-3231.20", "*", "pop"}, // negative in front

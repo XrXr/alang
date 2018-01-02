@@ -60,7 +60,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		if baseIsPointer {
 			baseType = basePointer.ToWhat
 		}
-		baseStruct, baseIsStruct := baseType.(StructRecord)
+		baseStruct, baseIsStruct := baseType.(*StructRecord)
 		if !baseIsStruct {
 			panic("oprand is not a struct or pointer to a struct")
 		}
@@ -75,7 +75,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		if baseIsPointer {
 			baseType = basePointer.ToWhat
 		}
-		baseStruct, baseIsStruct := baseType.(StructRecord)
+		baseStruct, baseIsStruct := baseType.(*StructRecord)
 		if !baseIsStruct {
 			panic("oprand is not a struct or pointer to a struct")
 		}
@@ -92,7 +92,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 			return nil
 		}
 		// Temporary
-		structRecord := typeRecord.(StructRecord)
+		structRecord := typeRecord.(*StructRecord)
 		typeTable[opt.Out] = structRecord
 	case ir.IndirectWrite:
 		varType := typeTable[opt.Pointer]
@@ -188,7 +188,7 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	return nil
 }
 
-func (t *Typer) ResolveBuiltinType(name string) TypeRecord {
+func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 	switch name {
 	case "void":
 		return t.builtins[voidIdx]
@@ -198,6 +198,25 @@ func (t *Typer) ResolveBuiltinType(name string) TypeRecord {
 		return t.builtins[intIdx]
 	}
 	return nil
+}
+
+func BuildPointer(base TypeRecord, level int) TypeRecord {
+	if level == 0 {
+		return base
+	}
+	current := Pointer{ToWhat: base}
+	for i := 1; i < level; i++ {
+		current = Pointer{ToWhat: current}
+	}
+	return current
+}
+
+func (t *Typer) ConstructTypeRecord(decl parsing.TypeDecl) TypeRecord {
+	base := t.mapToBuiltinType(decl.Base)
+	if base == nil {
+		return Unresolved{Decl: decl}
+	}
+	return BuildPointer(base, decl.LevelOfIndirection)
 }
 
 const (

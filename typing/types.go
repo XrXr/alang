@@ -74,7 +74,7 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 
 type Unresolved struct {
 	normalType
-	Ident parsing.IdName
+	Decl parsing.TypeDecl
 }
 
 func (_ Unresolved) Size() int {

@@ -1,6 +1,6 @@
-- structs
- □ handle more complex types
- √ test auto deref @done (18-01-01 15:01)
-- arrays
-- loops
-- procedures
+ √ structs @done (18-01-01 21:06)
+   √ handle more complex types @done (18-01-01 21:06)
+   √ test auto deref @done (18-01-01 15:01)
+□ arrays
+□ loops
+□ procedures

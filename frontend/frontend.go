@@ -34,7 +34,6 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 	sawIf := false
 	for i < len(order.In) {
 		nodePtr := order.In[i]
-		// parsing.Dump(nodePtr)
 		i++
 		sawIfLastTime := sawIf
 		sawIf = false
