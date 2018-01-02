@@ -16,6 +16,7 @@ var tokToOp = map[string]Operator{
 	"=":  Assign,
 	"+":  Plus,
 	"/":  Divide,
+	"@":  Dereference,
 	"*":  Star,
 	"-":  Minus,
 	".":  Dot,
@@ -23,12 +24,13 @@ var tokToOp = map[string]Operator{
 }
 
 var precedence = map[Operator]int{
-	Dot:    0,
-	Star:   10,
-	Divide: 10,
-	Plus:   20,
-	Minus:  20,
-	Assign: 100,
+	Dot:         0,
+	Dereference: 5,
+	Star:        10,
+	Divide:      10,
+	Plus:        20,
+	Minus:       20,
+	Assign:      100,
 }
 
 type parsedNode struct {
@@ -274,7 +276,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 
 		var newNode ExprNode
 		newNode.Op = opTok.op
-		if opTok.index > 0 && opTok.index > start {
+		if opTok.index > 0 && opTok.index > start && opTok.op != Dereference {
 			parsed, good := parsed[opTok.index-1]
 			if good {
 				newNode.Left = parsed.node

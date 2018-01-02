@@ -141,18 +141,18 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 		gen.addOpt(ir.Call{string(n.Callee), argVars, dest})
 	case parsing.ExprNode:
 		switch n.Op {
-		case parsing.Star:
-			if n.Left == nil { // unary star
-				rightDest := scope.newVar()
-				err := genExpressionRhs(scope, rightDest, n.Right)
-				if err != nil {
-					return err
-				}
-				gen.addOpt(ir.IndirectLoad{Pointer: rightDest, Out: dest})
-				return nil
+		case parsing.Dereference:
+			if n.Left != nil {
+				panic("parser bug")
 			}
-			fallthrough
-		case parsing.Minus, parsing.Plus, parsing.Divide:
+			rightDest := scope.newVar()
+			err := genExpressionRhs(scope, rightDest, n.Right)
+			if err != nil {
+				return err
+			}
+			gen.addOpt(ir.IndirectLoad{Pointer: rightDest, Out: dest})
+			return nil
+		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
 			leftDest := scope.newVar()
 			err := genExpressionRhs(scope, leftDest, n.Left)
 			if err != nil {
@@ -204,7 +204,7 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.ExprNode:
-		if n.Op == parsing.Star && n.Left == nil {
+		if n.Op == parsing.Dereference {
 			if ident, bareDeref := n.Right.(parsing.IdName); bareDeref {
 				vn, found := scope.resolve(ident)
 				if !found {
