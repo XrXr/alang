@@ -21,18 +21,9 @@ type FuncRecord map[parsing.IdName]FuncType
 type VarRecord map[parsing.IdName]VarType
 
 type EnvRecord struct {
-	Funcs FuncRecord
+	Procs FuncRecord
 	Vars  VarRecord
 	Types map[parsing.IdName]TypeRecord
-}
-
-func (e *EnvRecord) contains(decl parsing.IdName) bool {
-	_, found := e.Vars[decl]
-	if found {
-		return true
-	}
-	_, found = e.Funcs[decl]
-	return found
 }
 
 type Typer struct {
@@ -87,8 +78,12 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 	case ir.Call:
 		typeRecord, ok := env.Types[parsing.IdName(opt.Label)]
 		if !ok {
-			// TODO
-			typeTable[opt.Out] = Unresolved{}
+			procRecord, ok := env.Procs[parsing.IdName(opt.Label)]
+			if !ok {
+				panic("Call to undefined procedure")
+			}
+			//TODO check arg types
+			typeTable[opt.Out] = procRecord.Return
 			return nil
 		}
 		// Temporary
@@ -108,6 +103,8 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 			panic("That's not a pointer what are you doing")
 		}
 		if pointer.ToWhat != typeForData {
+			parsing.Dump(pointer.ToWhat)
+			parsing.Dump(typeForData)
 			panic("Type mismatch")
 		}
 	case ir.IndirectLoad:
@@ -141,8 +138,10 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		}
 	case ir.Add:
 		l, r := resolve(ir.BinaryVarOpt(opt))
-		if !(l.IsNumber() && r.IsNumber()) {
-			return errors.New("operands must be numbers")
+		if _, lIsPointer := l.(Pointer); !(lIsPointer && r.IsNumber()) {
+			if !(l.IsNumber() && r.IsNumber()) {
+				return errors.New("add not available for these types")
+			}
 		}
 	case ir.Sub:
 		l, r := resolve(ir.BinaryVarOpt(opt))
@@ -167,7 +166,9 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 
 func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock) ([]TypeRecord, error) {
 	typeTable := make([]TypeRecord, toCheck.NumberOfVars)
-	for _, opt := range toCheck.Opts {
+	for i, opt := range toCheck.Opts {
+		_ = i
+		// println(i)
 		err := t.checkAndInferOpt(env, opt, typeTable)
 		if err != nil {
 			return nil, err
@@ -178,11 +179,13 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock) ([]Typ
 }
 
 func (t *Typer) typeImmediate(val interface{}) TypeRecord {
-	switch val.(type) {
+	switch val := val.(type) {
 	case int:
 		return t.builtins[intIdx]
 	case string:
 		return t.builtins[stringIdx]
+	case parsing.TypeDecl:
+		return t.ConstructTypeRecord(val)
 	}
 	panic("this must work")
 	return nil
@@ -200,6 +203,13 @@ func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 	return nil
 }
 
+func BuildArray(contained TypeRecord, nesting []int) TypeRecord {
+	if len(nesting) == 0 {
+		return contained
+	}
+	return Array{Nesting: nesting, OfWhat: contained}
+}
+
 func BuildPointer(base TypeRecord, level int) TypeRecord {
 	if level == 0 {
 		return base
@@ -212,10 +222,16 @@ func BuildPointer(base TypeRecord, level int) TypeRecord {
 }
 
 func (t *Typer) ConstructTypeRecord(decl parsing.TypeDecl) TypeRecord {
-	base := t.mapToBuiltinType(decl.Base)
+	var base TypeRecord
+	if decl.ArrayBase != nil {
+		base = t.ConstructTypeRecord(*decl.ArrayBase)
+	} else {
+		base = t.mapToBuiltinType(decl.Base)
+	}
 	if base == nil {
 		return Unresolved{Decl: decl}
 	}
+	base = BuildArray(base, decl.ArraySizes)
 	return BuildPointer(base, decl.LevelOfIndirection)
 }
 
@@ -235,8 +251,14 @@ func NewTyper() *Typer {
 	return &typer
 }
 
-func NewEnvRecord() *EnvRecord {
+func NewEnvRecord(typer *Typer) *EnvRecord {
+	void := typer.builtins[voidIdx]
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
+		Procs: FuncRecord{
+			"exit": FuncType{Return: void},
+			"puts": FuncType{Return: void},
+			"cast": FuncType{Return: Pointer{ToWhat: typer.builtins[intIdx]}},
+		},
 	}
 }

@@ -1,6 +1,8 @@
 package parsing
 
-// import "fmt"
+import "fmt"
+
+var _ = fmt.Printf
 
 type parsingContext int
 
@@ -51,7 +53,7 @@ func (p *Parser) processLine(line string) error {
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
 	tokens := Tokenize(line)
-	// fmt.Printf("%#v\n", tokens)
+	fmt.Printf("%#v\n", tokens)
 	var n interface{}
 	var err error
 	if p.currentContext() == structContext {
@@ -97,9 +99,6 @@ func (p *Parser) processLine(line string) error {
 		startNewBlock(&n)
 		return nil
 	case Declaration:
-		if p.currentContext() != structContext {
-			return &ParseError{0, 0, "This only makes sense in struct declarations"}
-		}
 	case BlockEnd:
 		l := len(p.incompleteStack)
 		if l == 0 {

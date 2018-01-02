@@ -6,8 +6,12 @@ import (
 
 type IdName string
 
+// Either Base is set or ArraySizes and ArrayBase is set.
+// Indirection always happens before the base/array
 type TypeDecl struct {
 	Base               IdName
+	ArraySizes         []int
+	ArrayBase          *TypeDecl
 	LevelOfIndirection int
 }
 

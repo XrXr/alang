@@ -69,7 +69,9 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 	for i := 1; i < len(s.MemberOrder); i++ {
 		last := s.MemberOrder[i-1]
 		s.MemberOrder[i].Offset = last.Offset + last.Type.Size()
+		println(s.MemberOrder[i].Offset)
 	}
+	println(s.Name, "---", s.size)
 }
 
 type Unresolved struct {
@@ -78,7 +80,7 @@ type Unresolved struct {
 }
 
 func (_ Unresolved) Size() int {
-	return 0
+	return -999999999999
 }
 
 type Pointer struct {
@@ -88,6 +90,20 @@ type Pointer struct {
 
 func (_ Pointer) Size() int {
 	return 8
+}
+
+type Array struct {
+	normalType
+	Nesting []int
+	OfWhat  TypeRecord
+}
+
+func (a Array) Size() int {
+	product := 1
+	for _, size := range a.Nesting {
+		product *= size
+	}
+	return product * a.OfWhat.Size()
 }
 
 type normalType struct{}

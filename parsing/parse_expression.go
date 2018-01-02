@@ -3,6 +3,7 @@ package parsing
 import (
 	"container/heap"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -94,6 +95,8 @@ func ParseExpr(tokens []string) (interface{}, error) {
 		return ElseNode{}, nil
 	} else if tokens[0] == "struct" && len(tokens) == 3 && tokens[2] == "{" {
 		return StructDeclare{Name: IdName(tokens[1])}, nil
+	} else if tokens[0] == "var" {
+		return parseDecl(tokens[1:])
 	}
 	for index, tok := range tokens {
 		op := tokToOp[tok]
@@ -112,34 +115,57 @@ func ParseExpr(tokens []string) (interface{}, error) {
 	return parseExprWithParen(parsed, tokens, 0, len(tokens))
 }
 
+func parseDecl(tokens []string) (interface{}, error) {
+	typeDecl, err := parseTypeDecl(tokens[1:])
+	if err != nil {
+		return nil, err
+	}
+	return Declaration{Name: IdName(tokens[0]), Type: typeDecl}, nil
+}
+
 func parseStructMembers(tokens []string) (interface{}, error) {
 	if len(tokens) == 1 && tokens[0] == "}" {
 		return BlockEnd(0), nil
 	}
 	if len(tokens) >= 2 {
-		typeDecl, err := parseTypeDecl(tokens[1:])
-		if err != nil {
-			return nil, err
-		}
-		return Declaration{Name: IdName(tokens[0]), Type: typeDecl}, nil
+		return parseDecl(tokens)
 	}
 	return nil, &ParseError{0, 0, "Malformed type declaration. Expected a name and a type"}
 }
 
 func parseTypeDecl(tokens []string) (TypeDecl, error) {
-	level := 0
+	indirect := 0
 	var base string
 	for i, tok := range tokens {
 		if tok == "*" {
-			level++
+			indirect++
 		} else {
-			if i != len(tokens)-1 {
+			if i+2 < len(tokens)-1 && tok == "[" && tokens[i+2] == "]" {
+				arraySize, err := strconv.Atoi(tokens[i+1])
+				if err != nil {
+					return TypeDecl{}, &ParseError{0, 0, "Not a valid array size. Must be an integer"}
+				}
+				containedSegment := tokens[i+3:]
+				if len(containedSegment) == 0 {
+					return TypeDecl{}, &ParseError{0, 0, "Arrays must contain some type"}
+				}
+				containedType, err := parseTypeDecl(containedSegment)
+				if err != nil {
+					return TypeDecl{}, err
+				}
+				return TypeDecl{
+					LevelOfIndirection: indirect,
+					ArraySizes:         []int{arraySize},
+					ArrayBase:          &containedType,
+				}, nil
+			} else if i != len(tokens)-1 {
 				return TypeDecl{}, &ParseError{0, 0, "Junk after the pointed-to type name"}
+			} else {
+				base = tok
 			}
-			base = tok
 		}
 	}
-	return TypeDecl{LevelOfIndirection: level, Base: IdName(base)}, nil
+	return TypeDecl{LevelOfIndirection: indirect, Base: IdName(base)}, nil
 }
 
 func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
@@ -235,7 +261,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 	if len(ops) == 0 {
 		parsed, found := parsed[start]
 		if !found || parsed.otherEnd != end-1 {
-			return nil, &ParseError{0, 0, "Expected an operator"}
+			return nil, &ParseError{start, end, "Expected an operator"}
 		}
 		return parsed.node, nil
 	}
@@ -355,7 +381,9 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 }
 
 func parseToken(s string) interface{} {
-	if s == "}" {
+	if tokenIsOperator(s) {
+		return nil
+	} else if s == "}" {
 		return BlockEnd(0)
 	} else if unicode.IsDigit(rune(s[0])) || s[0] == '-' {
 		return Literal{Number, s}

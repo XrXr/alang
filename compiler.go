@@ -21,6 +21,16 @@ const (
 	Else
 )
 
+func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
+	fmt.Println("framesize", framesize)
+	if len(typeTable) != len(offsetTable) {
+		panic("what?")
+	}
+	for i, typeRecord := range typeTable {
+		fmt.Printf("var %d type: %#v offset %d\n", i, typeRecord, offsetTable[i])
+	}
+}
+
 func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *frontend.LabelIdGen, block frontend.OptBlock, typeTable []typing.TypeRecord, env *typing.EnvRecord) {
 	addLine := func(line string) {
 		io.WriteString(out, line)
@@ -37,6 +47,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 	for _, typeRecord := range typeTable {
 		framesize += typeRecord.Size()
 	}
+	backendDebug(framesize, typeTable, varOffset)
 	for i, opt := range block.Opts {
 		fmt.Fprintf(out, ";ir line %d\n", i)
 		switch opt := opt.(type) {
@@ -81,6 +92,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			}
 		case ir.Add:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
+			if pointer, leftIsPointer := typeTable[opt.Left].(typing.Pointer); leftIsPointer {
+				addLine(fmt.Sprintf("\timul rax, %d\n", pointer.ToWhat.Size()))
+			}
 			addLine(fmt.Sprintf("\tadd %s, rax\n", varToStack(opt.Left)))
 		case ir.Sub:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
@@ -103,6 +117,10 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 		case ir.Call:
 			if _, isStruct := env.Types[parsing.IdName(opt.Label)]; isStruct {
 				// TODO: code to zero the members
+			} else if opt.Label == "cast" {
+				// TODO: HACK!!!!
+				addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.ArgVars[0])))
+				addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Out)))
 			} else {
 				// TODO: temporary
 				addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.ArgVars[0])))
@@ -212,10 +230,11 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			field.Type = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
 		}
 		numResolved += increment
-		structRecord.ResolveSizeAndOffset()
 		env.Types[structNode.Name] = structRecord
 	}
-
+	for _, structRecord := range nodeToStruct {
+		structRecord.ResolveSizeAndOffset()
+	}
 	if len(notDone) != numResolved {
 		for typeName := range notDone {
 			return fmt.Errorf("%s does not name a type", typeName)
@@ -249,7 +268,7 @@ func main() {
 	var mainProc *interface{}
 	var currentProc *interface{}
 	var nodesForProc []*interface{}
-	env := typing.NewEnvRecord()
+	env := typing.NewEnvRecord(typer)
 	structs := make(map[*interface{}]*typing.StructRecord)
 
 	for scanner.Scan() {
@@ -304,14 +323,13 @@ func main() {
 
 		if typeDeclare, isDecl := (*node).(parsing.Declaration); isDecl {
 			parentStruct, found := structs[parent]
-			if !found {
-				panic("parser bug")
+			if found {
+				newField := &typing.StructField{
+					Type: typer.ConstructTypeRecord(typeDeclare.Type),
+				}
+				parentStruct.MemberOrder = append(parentStruct.MemberOrder, newField)
+				parentStruct.Members[string(typeDeclare.Name)] = newField
 			}
-			newStruct := &typing.StructField{
-				Type: typer.ConstructTypeRecord(typeDeclare.Type),
-			}
-			parentStruct.MemberOrder = append(parentStruct.MemberOrder, newStruct)
-			parentStruct.Members[string(typeDeclare.Name)] = newStruct
 		}
 
 		if currentProc != nil {
@@ -352,7 +370,7 @@ func main() {
 
 	ir := <-blocks[mainProc].Out
 	frontend.Prune(&ir)
-	// frontend.DumpIr(ir)
+	frontend.DumpIr(ir)
 	err = buildGlobalEnv(typer, env, structs)
 	if err != nil {
 		panic(err)

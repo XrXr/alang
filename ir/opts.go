@@ -107,6 +107,21 @@ func (s *LoadStructMember) Swap(original int, new int) {
 	}
 }
 
+func (s *StructMemberPtr) Uses(out []int) int {
+	out[0] = s.Base
+	out[1] = s.Out
+	return 2
+}
+
+func (s *StructMemberPtr) Swap(original int, new int) {
+	if s.Base == original {
+		s.Base = new
+	}
+	if s.Out == original {
+		s.Out = new
+	}
+}
+
 type ReNumber interface {
 	Uses([]int) int
 	Swap(int, int)

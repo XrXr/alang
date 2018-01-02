@@ -13,7 +13,6 @@ type ProcWorkOrder struct {
 }
 
 type OptBlock struct {
-	FrameSize    int
 	NumberOfVars int
 	Opts         []interface{}
 }
