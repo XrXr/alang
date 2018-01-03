@@ -92,6 +92,10 @@ type IfNode struct {
 	Condition interface{}
 }
 
+type Loop struct {
+	Condition interface{}
+}
+
 type ElseNode struct{}
 
 type BlockEnd int

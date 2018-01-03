@@ -95,6 +95,22 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			gen.addOpt(ifLabel)
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
 			gen.addOpt(ir.Label{elseLabel})
+		case parsing.Loop:
+			loopStart := labelGen.GenLabel("loop_%d")
+			loopEnd := labelGen.GenLabel("loopend_%d")
+			gen.addOpt(ir.Label{loopStart})
+			loopScope := scope.inherit()
+			if node.Condition != nil {
+				condVar := loopScope.newVar()
+				err := genExpressionRhs(loopScope, condVar, node.Condition)
+				if err != nil {
+					panic(err)
+				}
+				gen.addOpt(ir.JumpIfFalse{condVar, loopEnd})
+			}
+			i = genForProcSubSection(labelGen, order, loopScope, i)
+			gen.addOpt(ir.Jump{loopStart})
+			gen.addOpt(ir.Label{loopEnd})
 		case parsing.BlockEnd:
 			return i
 		default:

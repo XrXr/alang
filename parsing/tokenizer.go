@@ -32,6 +32,7 @@ var bounderies = [...]string{
 	"[",
 	"]",
 	"var",
+	"for",
 	"{",
 	"}",
 	"struct",

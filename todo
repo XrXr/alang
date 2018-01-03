@@ -3,13 +3,13 @@
    √ test auto deref @done (18-01-01 15:01)
  √ arrays @done (18-01-02 17:06)
  √ less than and greater than @done (18-01-02 22:59)
- □ range loop
  □ while loop
+ □ range loop
  □ procedures
  □ print numbers (big milestone!)
 
  □ refactor ir for better pruning (no more type switching)
  □ [] operatator (make sure that it works on both sides of =)
  □ type casting
-
-
+ □ error reporting
+   □ parse errors: binary operators missing operands ("i++" parses atm)

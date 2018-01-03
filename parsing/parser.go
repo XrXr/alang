@@ -74,7 +74,7 @@ func (p *Parser) processLine(line string) error {
 				return nil
 			}
 		}
-	case IfNode:
+	case IfNode, Loop:
 		startNewBlock(&n)
 		addOne(false, &n, parent)
 		return nil

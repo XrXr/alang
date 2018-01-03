@@ -99,6 +99,21 @@ func ParseExpr(tokens []string) (interface{}, error) {
 		return IfNode{
 			Condition: parsed,
 		}, nil
+	} else if tokens[0] == "for" {
+		if tokens[len(tokens)-1] != "{" {
+			return nil, &ParseError{0, 0, "loop header must end in {"}
+		}
+		if len(tokens) == 2 {
+			// "for {"
+			return Loop{}, nil
+		}
+		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens)-1)
+		if err != nil {
+			return nil, err
+		}
+		return Loop{
+			Condition: parsed,
+		}, nil
 	} else if (tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{") ||
 		(tokens[0] == "}" && len(tokens) == 3 && tokens[1] == "else" && tokens[2] == "{") {
 		return ElseNode{}, nil
