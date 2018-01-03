@@ -89,6 +89,13 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		// Temporary
 		structRecord := typeRecord.(*StructRecord)
 		typeTable[opt.Out] = structRecord
+	case ir.Compare:
+		l := typeTable[opt.Left]
+		r := typeTable[opt.Right]
+		if !(l.IsNumber() && r.IsNumber()) {
+			return errors.New("operands must be numbers")
+		}
+		typeTable[opt.Out] = t.builtins[boolIdx]
 	case ir.IndirectWrite:
 		varType := typeTable[opt.Pointer]
 		if varType == nil {
@@ -199,6 +206,8 @@ func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 		return t.builtins[stringIdx]
 	case "int":
 		return t.builtins[intIdx]
+	case "bool":
+		return t.builtins[boolIdx]
 	}
 	return nil
 }
@@ -239,6 +248,7 @@ const (
 	voidIdx int = iota
 	stringIdx
 	intIdx
+	boolIdx
 )
 
 func NewTyper() *Typer {
@@ -247,6 +257,7 @@ func NewTyper() *Typer {
 		Void{},
 		String{},
 		Int{},
+		Boolean{},
 	}
 	return &typer
 }

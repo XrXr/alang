@@ -76,6 +76,23 @@ type Call struct {
 	Out     int
 }
 
+type Compare struct {
+	How   Comparative
+	Left  int
+	Right int
+	Out   int
+}
+
+type Comparative int
+
+const (
+	Lesser Comparative = iota
+	Greater
+	GreaterOrEqual
+	LesserOrEqual
+	AreEqual
+)
+
 type Transclude struct {
 	Node *interface{}
 }

@@ -111,8 +111,8 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine("\tidiv r8\n")
 			addLine(fmt.Sprintf("\tmov %s, rax\n", varToStack(opt.Left)))
 		case ir.JumpIfFalse:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.VarToCheck)))
-			addLine("\tcmp rax, 0\n")
+			addLine(fmt.Sprintf("\tmov al, byte %s\n", varToStack(opt.VarToCheck)))
+			addLine("\tcmp al, 0\n")
 			addLine(fmt.Sprintf("\tjz %s\n", opt.Label))
 		case ir.Call:
 			if _, isStruct := env.Types[parsing.IdName(opt.Label)]; isStruct {
@@ -139,6 +139,26 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine("\tmov rsp, rbp\n")
 			addLine("\tpop rbp\n")
 			addLine("\tret\n")
+		case ir.Compare:
+			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Left)))
+			addLine(fmt.Sprintf("\tmov rbx, %s\n", varToStack(opt.Right)))
+			addLine(fmt.Sprintf("\tmov byte %s, 1\n", varToStack(opt.Out)))
+			addLine("\tcmp rax, rbx\n")
+			labelName := labelGen.GenLabel("cmp%d")
+			switch opt.How {
+			case ir.Greater:
+				addLine(fmt.Sprintf("\tjg %s\n", labelName))
+			case ir.Lesser:
+				addLine(fmt.Sprintf("\tjl %s\n", labelName))
+			case ir.GreaterOrEqual:
+				addLine(fmt.Sprintf("\tjge %s\n", labelName))
+			case ir.LesserOrEqual:
+				addLine(fmt.Sprintf("\tjle %s\n", labelName))
+			case ir.AreEqual:
+				addLine(fmt.Sprintf("\tje %s\n", labelName))
+			}
+			addLine(fmt.Sprintf("\tmov byte %s, 0\n", varToStack(opt.Out)))
+			addLine(fmt.Sprintf("%s:\n", labelName))
 		case ir.Transclude:
 			panic("Transcludes should be gone by now")
 		case ir.TakeAddress:

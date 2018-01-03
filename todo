@@ -1,6 +1,15 @@
  √ structs @done (18-01-01 21:06)
    √ handle more complex types @done (18-01-01 21:06)
    √ test auto deref @done (18-01-01 15:01)
-□ arrays
-□ loops
-□ procedures
+ √ arrays @done (18-01-02 17:06)
+ √ less than and greater than @done (18-01-02 22:59)
+ □ range loop
+ □ while loop
+ □ procedures
+ □ print numbers (big milestone!)
+
+ □ refactor ir for better pruning (no more type switching)
+ □ [] operatator (make sure that it works on both sides of =)
+ □ type casting
+
+

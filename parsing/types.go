@@ -47,6 +47,11 @@ const (
 	Call
 	Assign
 	Declare
+	Lesser
+	LesserEqual
+	Greater
+	GreaterEqual
+	DoubleEqual
 	ConstDeclare
 	Dereference
 	AddressOf

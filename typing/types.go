@@ -27,6 +27,12 @@ func (_ Void) Size() int {
 	return 0
 }
 
+type Boolean struct{ normalType }
+
+func (_ Boolean) Size() int {
+	return 1
+}
+
 // type S64 struct{ integerType }
 
 // type S32 struct{ integerType }

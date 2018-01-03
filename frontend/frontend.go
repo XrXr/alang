@@ -77,7 +77,10 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		case parsing.IfNode:
 			sawIf = true
 			condVar := scope.newVar()
-			genExpressionRhs(scope, condVar, node.Condition)
+			err := genExpressionRhs(scope, condVar, node.Condition)
+			if err != nil {
+				panic(err)
+			}
 			labelForIf := labelGen.GenLabel("if_%d")
 			gen.addOpt(ir.JumpIfFalse{condVar, labelForIf})
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
@@ -152,7 +155,10 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			gen.addOpt(ir.IndirectLoad{Pointer: rightDest, Out: dest})
 			return nil
-		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide:
+		case parsing.Star, parsing.Minus, parsing.Plus,
+			parsing.Divide, parsing.Greater, parsing.GreaterEqual,
+			parsing.Lesser, parsing.LesserEqual, parsing.DoubleEqual:
+
 			leftDest := scope.newVar()
 			err := genExpressionRhs(scope, leftDest, n.Left)
 			if err != nil {
@@ -166,14 +172,28 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			switch n.Op {
 			case parsing.Star:
 				gen.addOpt(ir.Mult{leftDest, rightDest})
+				gen.addOpt(ir.Assign{dest, leftDest})
+
 			case parsing.Divide:
 				gen.addOpt(ir.Div{leftDest, rightDest})
+				gen.addOpt(ir.Assign{dest, leftDest})
 			case parsing.Plus:
 				gen.addOpt(ir.Add{leftDest, rightDest})
+				gen.addOpt(ir.Assign{dest, leftDest})
 			case parsing.Minus:
 				gen.addOpt(ir.Sub{leftDest, rightDest})
+				gen.addOpt(ir.Assign{dest, leftDest})
+			case parsing.Greater:
+				gen.addOpt(ir.Compare{ir.Greater, leftDest, rightDest, dest})
+			case parsing.GreaterEqual:
+				gen.addOpt(ir.Compare{ir.GreaterOrEqual, leftDest, rightDest, dest})
+			case parsing.Lesser:
+				gen.addOpt(ir.Compare{ir.Lesser, leftDest, rightDest, dest})
+			case parsing.LesserEqual:
+				gen.addOpt(ir.Compare{ir.LesserOrEqual, leftDest, rightDest, dest})
+			case parsing.DoubleEqual:
+				gen.addOpt(ir.Compare{ir.AreEqual, leftDest, rightDest, dest})
 			}
-			gen.addOpt(ir.Assign{dest, leftDest})
 		case parsing.AddressOf:
 			// TODO: incomplete: &(someStruct.foo.sdfsd)
 			right := n.Right.(parsing.IdName)

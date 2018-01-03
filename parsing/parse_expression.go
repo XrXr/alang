@@ -13,6 +13,11 @@ var _ = fmt.Printf // for debugging. remove when done
 var tokToOp = map[string]Operator{
 	"::": ConstDeclare,
 	":=": Declare,
+	"<":  Lesser,
+	"<=": LesserEqual,
+	">":  Greater,
+	">=": GreaterEqual,
+	"==": DoubleEqual,
 	"=":  Assign,
 	"+":  Plus,
 	"/":  Divide,
@@ -30,6 +35,8 @@ var precedence = map[Operator]int{
 	Divide:      10,
 	Plus:        20,
 	Minus:       20,
+	Lesser:      30,
+	Greater:     30,
 	Assign:      100,
 }
 
