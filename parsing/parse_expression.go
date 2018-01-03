@@ -12,6 +12,7 @@ var _ = fmt.Printf // for debugging. remove when done
 
 var tokToOp = map[string]Operator{
 	"::": ConstDeclare,
+	"..": Range,
 	":=": Declare,
 	"<":  Lesser,
 	"<=": LesserEqual,
@@ -38,6 +39,7 @@ var precedence = map[Operator]int{
 	Lesser:      30,
 	Greater:     30,
 	Assign:      100,
+	Range:       90,
 }
 
 type parsedNode struct {
@@ -112,7 +114,7 @@ func ParseExpr(tokens []string) (interface{}, error) {
 			return nil, err
 		}
 		return Loop{
-			Condition: parsed,
+			Expression: parsed,
 		}, nil
 	} else if (tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{") ||
 		(tokens[0] == "}" && len(tokens) == 3 && tokens[1] == "else" && tokens[2] == "{") {

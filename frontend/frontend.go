@@ -98,18 +98,77 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		case parsing.Loop:
 			loopStart := labelGen.GenLabel("loop_%d")
 			loopEnd := labelGen.GenLabel("loopend_%d")
-			gen.addOpt(ir.Label{loopStart})
 			loopScope := scope.inherit()
-			if node.Condition != nil {
+
+			var iterationVar int
+			var varUsed bool
+			usingRangeExpr := false
+			var rangeExpr parsing.ExprNode
+
+			if loopExpr, loopExprIsExprNode := node.Expression.(parsing.ExprNode); loopExprIsExprNode {
+				switch loopExpr.Op {
+				case parsing.Declare:
+					// parser gurantee
+					usingRangeExpr = true
+					rangeExpr = loopExpr.Right.(parsing.ExprNode)
+					iterationVar = loopScope.newNamedVar(loopExpr.Left.(parsing.IdName))
+					varUsed = true
+					fallthrough
+				case parsing.Range:
+					if !usingRangeExpr {
+						rangeExpr = loopExpr
+					}
+					if !varUsed {
+						varUsed = true
+						iterationVar = scope.newVar()
+					}
+					usingRangeExpr = true
+					if rangeExpr.Op != parsing.Range {
+						panic("parser bug")
+					}
+					endVar := scope.newVar()
+					err := genExpressionRhs(loopScope, endVar, rangeExpr.Right)
+					if err != nil {
+						panic(err)
+					}
+
+					err = genExpressionRhs(loopScope, iterationVar, rangeExpr.Left)
+					if err != nil {
+						panic(err)
+					}
+					condVar := loopScope.newVar()
+					gen.addOpt(ir.Label{loopStart})
+					gen.addOpt(ir.Compare{
+						How: ir.LesserOrEqual, Left: iterationVar, Right: endVar,
+						Out: condVar,
+					})
+					gen.addOpt(ir.JumpIfFalse{condVar, loopEnd})
+				}
+			}
+			if !usingRangeExpr {
+				gen.addOpt(ir.Label{loopStart})
 				condVar := loopScope.newVar()
-				err := genExpressionRhs(loopScope, condVar, node.Condition)
+				err := genExpressionRhs(loopScope, condVar, node.Expression)
 				if err != nil {
 					panic(err)
 				}
 				gen.addOpt(ir.JumpIfFalse{condVar, loopEnd})
 			}
+
+			var genContinueCode func(gen *procGen)
+			if usingRangeExpr {
+				genContinueCode = func(gen *procGen) {
+					gen.addOpt(ir.Increment{iterationVar})
+					gen.addOpt(ir.Jump{loopStart})
+				}
+			} else {
+				genContinueCode = func(gen *procGen) {
+					gen.addOpt(ir.Jump{loopStart})
+				}
+			}
+
 			i = genForProcSubSection(labelGen, order, loopScope, i)
-			gen.addOpt(ir.Jump{loopStart})
+			genContinueCode(gen)
 			gen.addOpt(ir.Label{loopEnd})
 		case parsing.BlockEnd:
 			return i

@@ -43,6 +43,7 @@ const (
 	Star
 	Minus
 	Plus
+	Range
 	Divide
 	Call
 	Assign
@@ -93,7 +94,7 @@ type IfNode struct {
 }
 
 type Loop struct {
-	Condition interface{}
+	Expression interface{}
 }
 
 type ElseNode struct{}

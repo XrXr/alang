@@ -25,6 +25,7 @@ var bounderies = [...]string{
 	"@",
 	"(",
 	")",
+	"..",
 	",",
 	":=",
 	"=",
@@ -46,21 +47,21 @@ func Tokenize(in string) []string {
 		found := false
 	outter:
 		for j := i; j < len(in); j++ {
+			if in[j] == '-' && isDigit(safeCharAt(in, j+1)) &&
+				(j == 0 || isSpace(safeCharAt(in, j-1))) {
+				numLitEnd := iAfterNumLiteral(in, j+1)
+				result = append(result, in[j:numLitEnd])
+				i = iAfterWs(in, numLitEnd)
+				found = true
+				break outter
+			}
+			if in[j] == '\n' {
+				result = append(result, in[i:j])
+				i = j + 1
+				found = true
+				break outter
+			}
 			for _, bound := range bounderies {
-				if in[j] == '-' && isDigit(safeCharAt(in, j+1)) &&
-					(j == 0 || isSpace(safeCharAt(in, j-1))) {
-					numLitEnd := iAfterNumLiteral(in, j+1)
-					result = append(result, in[j:numLitEnd])
-					i = iAfterWs(in, numLitEnd)
-					found = true
-					break outter
-				}
-				if in[j] == '\n' {
-					result = append(result, in[i:j])
-					i = j + 1
-					found = true
-					break outter
-				}
 				if strings.HasPrefix(in[j:], bound) {
 					if i == j {
 						result = append(result, bound)
@@ -71,36 +72,34 @@ func Tokenize(in string) []string {
 					found = true
 					break outter
 				}
-				if j+3 <= len(in) && in[j:j+3] == "if " && (j == 0 || isSpace(in[j-1])) {
-					result = append(result, "if")
-					i = iAfterWs(in, j+3)
-					found = true
-					break outter
-				}
-				if in[j] == '.' {
-					found = true
-					if isDigit(safeCharAt(in, j+1)) {
-						// TODO this function should return error for "asd.123"
-						k := j + 1
-						for ; k < len(in); k++ {
-							if !unicode.IsDigit(rune(in[k])) {
-								break
-							}
+			}
+			if j+3 <= len(in) && in[j:j+3] == "if " && (j == 0 || isSpace(in[j-1])) {
+				result = append(result, "if")
+				i = iAfterWs(in, j+3)
+				found = true
+				break outter
+			}
+			if in[j] == '.' {
+				found = true
+				if isDigit(safeCharAt(in, j+1)) {
+					// TODO this function should return error for "asd.123"
+					k := j + 1
+					for ; k < len(in); k++ {
+						if !unicode.IsDigit(rune(in[k])) {
+							break
 						}
-						result = append(result, in[i:k])
-						i = iAfterWs(in, k)
-
-					} else {
-						if i == j {
-							result = append(result, ".")
-						} else {
-							result = append(result, strings.TrimSpace(in[i:j]), ".")
-						}
-						i = j + 1
-
 					}
-					break outter
+					result = append(result, in[i:k])
+					i = iAfterWs(in, k)
+				} else {
+					if i == j {
+						result = append(result, ".")
+					} else {
+						result = append(result, strings.TrimSpace(in[i:j]), ".")
+					}
+					i = j + 1
 				}
+				break outter
 			}
 		}
 		if found {

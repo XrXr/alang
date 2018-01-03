@@ -55,6 +55,14 @@ type StartProc struct {
 type EndProc struct {
 }
 
+type Increment struct {
+	Var int
+}
+
+type Decrement struct {
+	Var int
+}
+
 type TakeAddress struct {
 	Var int
 	Out int
@@ -91,6 +99,7 @@ const (
 	GreaterOrEqual
 	LesserOrEqual
 	AreEqual
+	NotEqual
 )
 
 type Transclude struct {

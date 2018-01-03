@@ -96,6 +96,10 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				addLine(fmt.Sprintf("\timul rax, %d\n", pointer.ToWhat.Size()))
 			}
 			addLine(fmt.Sprintf("\tadd %s, rax\n", varToStack(opt.Left)))
+		case ir.Increment:
+			addLine(fmt.Sprintf("\tinc %s\n", varToStack(opt.Var)))
+		case ir.Decrement:
+			addLine(fmt.Sprintf("\tdec %s\n", varToStack(opt.Var)))
 		case ir.Sub:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", varToStack(opt.Right)))
 			addLine(fmt.Sprintf("\tsub %s, rax\n", varToStack(opt.Left)))
@@ -156,6 +160,8 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				addLine(fmt.Sprintf("\tjle %s\n", labelName))
 			case ir.AreEqual:
 				addLine(fmt.Sprintf("\tje %s\n", labelName))
+			case ir.NotEqual:
+				addLine(fmt.Sprintf("\tjne %s\n", labelName))
 			}
 			addLine(fmt.Sprintf("\tmov byte %s, 0\n", varToStack(opt.Out)))
 			addLine(fmt.Sprintf("%s:\n", labelName))
