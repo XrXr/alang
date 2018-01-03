@@ -7,13 +7,15 @@ import (
 )
 
 type ProcWorkOrder struct {
-	Out   chan OptBlock
-	In    []*interface{}
-	Label string
+	Out      chan OptBlock
+	In       []*interface{}
+	Name     parsing.IdName
+	ProcDecl parsing.ProcDecl
 }
 
 type OptBlock struct {
 	NumberOfVars int
+	NumberOfArgs int
 	Opts         []interface{}
 }
 

@@ -12,7 +12,7 @@ type TypeRecord interface {
 type String struct{ normalType }
 
 func (_ String) Size() int {
-	return 16
+	return 8
 }
 
 type Int struct{ integerType }

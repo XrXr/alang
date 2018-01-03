@@ -379,8 +379,8 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 				return nil, 0, &ParseError{0, 0, `expected a type declaration`}
 			}
 			args = append(args, Declaration{
-				Type: TypeDecl{Base: IdName(last[:spaceIdx])},
-				Name: IdName(last[spaceIdx+1:]),
+				Type: TypeDecl{Base: IdName(last[spaceIdx+1:])},
+				Name: IdName(last[:spaceIdx]),
 			})
 			//TODO error checking
 		}
@@ -403,7 +403,8 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 		// TODO translate token idx to col
 		return nil, 0, &ParseError{0, col, "Expected a block"}
 	}
-	return &ProcNode{Ret: TypeDecl{Base: returnType}, Args: args, Body: Block{}}, blockStart, nil
+	return &ProcNode{
+		ProcDecl: ProcDecl{Return: TypeDecl{Base: returnType}, Args: args}, Body: Block{}}, blockStart, nil
 }
 
 func parseToken(s string) interface{} {

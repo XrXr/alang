@@ -79,7 +79,7 @@ type IndirectWrite struct {
 }
 
 type Call struct {
-	Label   string
+	Name    string
 	ArgVars []int
 	Out     int
 }

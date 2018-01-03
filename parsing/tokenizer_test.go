@@ -34,6 +34,8 @@ var fixture = map[string][]string{
 	"     if big {":              {"if", "big", "{"},
 	"if big {":                   {"if", "big", "{"},
 	"iffifodif":                  {"iffifodif"},
+	` "progress 3/4" `:           {`"progress 3/4"`},
+	` "progress 3+4" `:           {`"progress 3+4"`},
 	"\t\t   {":                   {"{"},
 }
 

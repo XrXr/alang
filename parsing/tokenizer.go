@@ -61,6 +61,25 @@ func Tokenize(in string) []string {
 				found = true
 				break outter
 			}
+			if in[j] == '"' {
+				k := j + 1
+				for k < len(in) {
+					this := in[k]
+					if this == '\\' {
+						//TODO: escape sequence
+						k += 2
+						continue
+					}
+					if this == '"' {
+						found = true
+						i = k + 1
+						result = append(result, in[j:k+1])
+						break outter
+					}
+					k++
+				}
+				panic("unmatched \" in user program")
+			}
 			for _, bound := range bounderies {
 				if strings.HasPrefix(in[j:], bound) {
 					if i == j {

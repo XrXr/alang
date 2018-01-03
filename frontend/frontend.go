@@ -11,17 +11,26 @@ import (
 func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	var gen procGen
 	gen.rootScope = &scope{
-		gen:      &gen,
-		varTable: make(map[parsing.IdName]int), parentScope: nil}
+		gen:         &gen,
+		varTable:    make(map[parsing.IdName]int),
+		parentScope: nil,
+	}
 
-	gen.addOpt(ir.StartProc{order.Label})
+	fmt.Printf("frontend: generating for %s\n", order.Name)
+	for i, arg := range order.ProcDecl.Args {
+		_ = i
+		gen.rootScope.newNamedVar(arg.Name)
+		fmt.Printf("arg %d is named %s\n", i, arg.Name)
+	}
+
+	gen.addOpt(ir.StartProc{string(order.Name)})
 	ret := genForProcSubSection(labelGen, order, gen.rootScope, 0)
 	gen.addOpt(ir.EndProc{})
 	if ret != len(order.In) {
 		parsing.Dump(order.In)
 		panic("gen didn't process whole proc")
 	}
-	order.Out <- OptBlock{NumberOfVars: gen.nextVarNum, Opts: gen.opts}
+	order.Out <- OptBlock{NumberOfVars: gen.nextVarNum, NumberOfArgs: len(order.ProcDecl.Args), Opts: gen.opts}
 	close(order.Out)
 }
 
@@ -195,7 +204,7 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			value = v
 		case parsing.Boolean:
-			value = boolStrToInt(n.Value)
+			value = boolStrToBool(n.Value)
 		case parsing.String:
 			value = n.Value
 		}
@@ -328,11 +337,11 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 	return 0, errors.New("Can't resolve expression to lvalue")
 }
 
-func boolStrToInt(s string) (ret int) {
+func boolStrToBool(s string) bool {
 	if s == "true" {
-		ret = 1
+		return true
 	}
-	return
+	return false
 }
 
 func Prune(block *OptBlock) {

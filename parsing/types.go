@@ -20,11 +20,15 @@ type Declaration struct {
 	Name IdName
 }
 
+type ProcDecl struct {
+	Args   []Declaration
+	Return TypeDecl
+}
+
 type Block []interface{}
 
 type ProcNode struct {
-	Args []Declaration
-	Ret  TypeDecl
+	ProcDecl
 	Body Block
 }
 

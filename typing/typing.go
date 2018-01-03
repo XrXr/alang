@@ -7,22 +7,19 @@ import (
 	"github.com/XrXr/alang/parsing"
 )
 
-type FuncType struct {
-	Return TypeRecord
-	Args   []TypeRecord
-}
+const (
+	Cdecl int = iota + 1
+	Register
+)
 
-type VarType struct {
-	Base       TypeRecord
-	Parameters []TypeRecord
+type ProcRecord struct {
+	Return            TypeRecord
+	Args              []TypeRecord
+	CallingConvention int
 }
-
-type FuncRecord map[parsing.IdName]FuncType
-type VarRecord map[parsing.IdName]VarType
 
 type EnvRecord struct {
-	Procs FuncRecord
-	Vars  VarRecord
+	Procs map[parsing.IdName]ProcRecord
 	Types map[parsing.IdName]TypeRecord
 }
 
@@ -76,10 +73,11 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		}
 		typeTable[opt.Out] = field.Type
 	case ir.Call:
-		typeRecord, ok := env.Types[parsing.IdName(opt.Label)]
+		typeRecord, ok := env.Types[parsing.IdName(opt.Name)]
 		if !ok {
-			procRecord, ok := env.Procs[parsing.IdName(opt.Label)]
+			procRecord, ok := env.Procs[parsing.IdName(opt.Name)]
 			if !ok {
+				println(parsing.IdName(opt.Name))
 				panic("Call to undefined procedure")
 			}
 			//TODO check arg types
@@ -93,7 +91,17 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		l := typeTable[opt.Left]
 		r := typeTable[opt.Right]
 		if !(l.IsNumber() && r.IsNumber()) {
-			return errors.New("operands must be numbers")
+			good := false
+			if opt.How == ir.AreEqual || opt.How == ir.NotEqual {
+				_, lIsBool := l.(Boolean)
+				_, rIsBool := r.(Boolean)
+				good = lIsBool && rIsBool
+			}
+			if !good {
+				parsing.Dump(l)
+				parsing.Dump(r)
+				return errors.New("operands must be numbers")
+			}
 		}
 		typeTable[opt.Out] = t.builtins[boolIdx]
 	case ir.IndirectWrite:
@@ -171,11 +179,15 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 	return nil
 }
 
-func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock) ([]TypeRecord, error) {
+func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDecl parsing.ProcDecl) ([]TypeRecord, error) {
 	typeTable := make([]TypeRecord, toCheck.NumberOfVars)
+	for i, arg := range procDecl.Args {
+		typeTable[i] = t.ConstructTypeRecord(arg.Type)
+	}
+
 	for i, opt := range toCheck.Opts {
 		_ = i
-		// println(i)
+		println(i)
 		err := t.checkAndInferOpt(env, opt, typeTable)
 		if err != nil {
 			return nil, err
@@ -191,6 +203,8 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 		return t.builtins[intIdx]
 	case string:
 		return t.builtins[stringIdx]
+	case bool:
+		return t.builtins[boolIdx]
 	case parsing.TypeDecl:
 		return t.ConstructTypeRecord(val)
 	}
@@ -266,10 +280,10 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 	void := typer.builtins[voidIdx]
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
-		Procs: FuncRecord{
-			"exit": FuncType{Return: void},
-			"puts": FuncType{Return: void},
-			"cast": FuncType{Return: Pointer{ToWhat: typer.builtins[intIdx]}},
+		Procs: map[parsing.IdName]ProcRecord{
+			"exit": {Return: void, CallingConvention: Register},
+			"puts": {Return: void, CallingConvention: Register},
+			"cast": {Return: Pointer{ToWhat: typer.builtins[intIdx]}},
 		},
 	}
 }
