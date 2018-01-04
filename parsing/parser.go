@@ -53,6 +53,12 @@ func (p *Parser) processLine(line string) error {
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
 	tokens := Tokenize(line)
+	if len(tokens) == 0 {
+		return nil
+	}
+	if tokens[0] == "//" {
+		return nil
+	}
 	// fmt.Printf("%#v\n", tokens)
 	var n interface{}
 	var err error

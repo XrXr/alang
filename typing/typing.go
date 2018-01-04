@@ -118,9 +118,11 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 			panic("That's not a pointer what are you doing")
 		}
 		if pointer.ToWhat != typeForData {
-			parsing.Dump(pointer.ToWhat)
-			parsing.Dump(typeForData)
-			panic("Type mismatch")
+			if !(pointer.ToWhat == t.builtins[u8Idx] && typeForData == t.builtins[intIdx]) {
+				parsing.Dump(pointer.ToWhat)
+				parsing.Dump(typeForData)
+				panic("Type mismatch")
+			}
 		}
 	case ir.IndirectLoad:
 		ptrType := typeTable[opt.Pointer]
@@ -152,11 +154,20 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 			}
 		}
 	case ir.ArrayToPointer:
-		array, lIsArray := typeTable[opt.Array].(Array)
-		if !lIsArray {
+		good := false
+		switch array := typeTable[opt.Array].(type) {
+		case Array:
+			good = true
+			typeTable[opt.Out] = Pointer{ToWhat: array.OfWhat}
+		case Pointer:
+			if array, isArray := array.ToWhat.(Array); isArray {
+				good = true
+				typeTable[opt.Out] = Pointer{ToWhat: array.OfWhat}
+			}
+		}
+		if !good {
 			return errors.New(" must be an array")
 		}
-		typeTable[opt.Out] = Pointer{ToWhat: array.OfWhat}
 	case ir.Add:
 		l, r := resolve(ir.BinaryVarOpt(opt))
 		if _, lIsPointer := l.(Pointer); !(lIsPointer && r.IsNumber()) {

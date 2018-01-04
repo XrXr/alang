@@ -294,13 +294,32 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.Var]))
 		case ir.ArrayToPointer:
 			dest := qwordVarToStack(opt.Out)
-			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
-			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.Array]))
+			switch typeTable[opt.Array].(type) {
+			case typing.Array:
+				addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
+				addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.Array]))
+			case typing.Pointer:
+				simpleCopy(opt.Array, qwordVarToStack(opt.Out))
+			default:
+				panic("must be array or pointer to an array")
+			}
 		case ir.IndirectWrite:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Pointer)))
 			addLine(fmt.Sprintf("\tmov rbx, %s\n", qwordVarToStack(opt.Data)))
-			// TODO not all writes are qword
-			addLine("\tmov qword [rax], rbx\n")
+			var prefix string
+			var register string
+			switch typeTable[opt.Pointer].(typing.Pointer).ToWhat.Size() {
+			case 1:
+				prefix = "byte"
+				register = "bl"
+			case 4:
+				prefix = "word"
+				register = "ebx"
+			case 8:
+				prefix = "qword"
+				register = "rbx"
+			}
+			addLine(fmt.Sprintf("\tmov %s [rax], %s\n", prefix, register))
 		case ir.IndirectLoad:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Pointer)))
 			addLine("\tmov rax, [rax]\n")
@@ -471,6 +490,9 @@ func main() {
 			fmt.Println(err.Error())
 			os.Exit(1)
 		}
+		if numNewEntries == 0 {
+			continue
+		}
 
 		last := len(parser.OutBuffer) - 1
 		isComplete := parser.OutBuffer[last].IsComplete
@@ -521,14 +543,14 @@ func main() {
 				parentStruct.Members[string(typeDeclare.Name)] = newField
 			}
 		}
-		fmt.Println("Line ", line)
+		// fmt.Println("Line ", line)
 		if currentProc != nil {
 			for i := numNewEntries; i > 0; i-- {
 				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
-		fmt.Println("Gave: ")
-		parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
+		// fmt.Println("Gave: ")
+		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
 	}
 	out, err := os.Create("a.asm")
 	if err != nil {

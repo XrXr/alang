@@ -332,18 +332,29 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 			}
 			return pointerVar, nil
 		case parsing.ArrayAccess:
-			base := scope.newVar()
-			err := genExpressionRhs(scope, base, n.Left)
-			if err != nil {
-				return 0, err
+			array := scope.newVar()
+			if left, leftIsExpr := n.Left.(parsing.ExprNode); leftIsExpr && left.Op == parsing.Dot {
+				// for foo.bar[324] = 234234
+				structBase := scope.newVar()
+				err := genExpressionRhs(scope, structBase, left.Left)
+				if err != nil {
+					return 0, err
+				}
+				member := string(left.Right.(parsing.IdName))
+				gen.addOpt(ir.StructMemberPtr{Base: structBase, Member: member, Out: array})
+			} else {
+				err := genExpressionRhs(scope, array, n.Left)
+				if err != nil {
+					return 0, err
+				}
 			}
 			position := scope.newVar()
-			err = genExpressionRhs(scope, position, n.Right)
+			err := genExpressionRhs(scope, position, n.Right)
 			if err != nil {
 				return 0, err
 			}
 			dataPointer := scope.newVar()
-			gen.addOpt(ir.ArrayToPointer{Array: base, Out: dataPointer})
+			gen.addOpt(ir.ArrayToPointer{Array: array, Out: dataPointer})
 			gen.addOpt(ir.Add{Left: dataPointer, Right: position})
 			return dataPointer, nil
 		case parsing.Dot:

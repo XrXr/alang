@@ -168,6 +168,7 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	i := start
 	for i < end {
 		tok := tokens[i]
+		println(tok)
 		if tok == "(" {
 			openStack = append(openStack, i)
 		} else if tok == ")" {
@@ -185,7 +186,7 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 
 	for _, paren := range parenInfo {
 		// it's a call or a proc expression
-		if paren.open-1 >= 0 && tokenIsId(tokens[paren.open-1]) {
+		if paren.open-1 >= start && tokenIsId(tokens[paren.open-1]) {
 			var node interface{}
 			end := paren.end
 			if tokens[paren.open-1] == "proc" {
@@ -213,11 +214,12 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			parsed[paren.end] = parsedNode{node, paren.open}
 		}
 	}
-
+	Dump(parsed)
 	outterMost, found := parsed[0]
 	if found && outterMost.otherEnd == len(tokens)-1 {
 		return outterMost.node, nil
 	}
+	println("happ")
 	return parseExprUnit(parsed, tokens, start, end)
 }
 
@@ -252,6 +254,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		}
 		i++
 		if tok == "(" {
+			Dump(tokens[start:end])
 			panic("parseExprUnit() shouldn't see any open parenthesis tokens")
 		}
 	}

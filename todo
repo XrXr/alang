@@ -6,7 +6,7 @@
  √ while loop @done (18-01-03 13:11)
  √ range loop @done (18-01-03 13:11)
  √ procedures @done (18-01-04 00:14)
- □ print numbers (big milestone!)
+ √ print numbers (big milestone!) @done (18-01-04 18:56)
 
  □ refactor ir for better pruning (no more type switching)
  □ support types of different sizes. Right now pointers to u8 are broken for example
@@ -14,6 +14,7 @@
  □ tokenizer should break up spaces better. Search for todo in parse_expression.go
  □ type casting
  □ return values
+ □ better typing for numbers. There is a hack in place for assigning an int to u8 atm
  □ the whole Unresolved type situation
    □ procs that take parameters which reference structs -- they are left as unresolved type for now
    □ can't have array of structs/array of pointer to structs in your struct
