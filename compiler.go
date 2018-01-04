@@ -139,8 +139,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				staticDataBuf.ReadFrom(&buf)
 				staticDataBuf.WriteRune('\n')
 				addLine(fmt.Sprintf("\tmov %s, %s\n", qwordVarToStack(opt.Var), labelName))
+			case parsing.TypeDecl:
+				// TODO zero out decl
 			default:
-				parsing.Dump(opt)
 				panic("unknown immediate value type")
 			}
 		case ir.Add:
