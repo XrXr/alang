@@ -73,7 +73,7 @@ func Tokenize(in string) []string {
 					}
 					if this == '"' {
 						found = true
-						i = k + 1
+						i = iAfterWs(in, k+1)
 						result = append(result, in[j:k+1])
 						break outter
 					}

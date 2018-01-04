@@ -36,6 +36,7 @@ var fixture = map[string][]string{
 	"iffifodif":                  {"iffifodif"},
 	` "progress 3/4" `:           {`"progress 3/4"`},
 	` "progress 3+4" `:           {`"progress 3+4"`},
+	` "progress" + 3 `:           {`"progress"`, `+`, `3`},
 	"\t\t   {":                   {"{"},
 }
 
