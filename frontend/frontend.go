@@ -239,9 +239,9 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			gen.addOpt(ir.IndirectLoad{Pointer: rightDest, Out: dest})
 			return nil
-		case parsing.Star, parsing.Minus, parsing.Plus,
-			parsing.Divide, parsing.Greater, parsing.GreaterEqual,
-			parsing.Lesser, parsing.LesserEqual, parsing.DoubleEqual:
+		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
+			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
+			parsing.LesserEqual, parsing.DoubleEqual, parsing.ArrayAccess:
 
 			leftDest := scope.newVar()
 			err := genExpressionRhs(scope, leftDest, n.Left)
@@ -257,7 +257,6 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			case parsing.Star:
 				gen.addOpt(ir.Mult{leftDest, rightDest})
 				gen.addOpt(ir.Assign{dest, leftDest})
-
 			case parsing.Divide:
 				gen.addOpt(ir.Div{leftDest, rightDest})
 				gen.addOpt(ir.Assign{dest, leftDest})
@@ -277,6 +276,11 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 				gen.addOpt(ir.Compare{ir.LesserOrEqual, leftDest, rightDest, dest})
 			case parsing.DoubleEqual:
 				gen.addOpt(ir.Compare{ir.AreEqual, leftDest, rightDest, dest})
+			case parsing.ArrayAccess:
+				dataPointer := scope.newVar()
+				gen.addOpt(ir.ArrayToPointer{Array: leftDest, Out: dataPointer})
+				gen.addOpt(ir.Add{dataPointer, rightDest})
+				gen.addOpt(ir.IndirectLoad{Pointer: dataPointer, Out: dest})
 			}
 		case parsing.AddressOf:
 			// TODO: incomplete: &(someStruct.foo.sdfsd)
@@ -308,7 +312,8 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.ExprNode:
-		if n.Op == parsing.Dereference {
+		switch n.Op {
+		case parsing.Dereference:
 			if ident, bareDeref := n.Right.(parsing.IdName); bareDeref {
 				vn, found := scope.resolve(ident)
 				if !found {
@@ -322,7 +327,22 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 				return 0, err
 			}
 			return pointerVar, nil
-		} else if n.Op == parsing.Dot {
+		case parsing.ArrayAccess:
+			base := scope.newVar()
+			err := genExpressionRhs(scope, base, n.Left)
+			if err != nil {
+				return 0, err
+			}
+			position := scope.newVar()
+			err = genExpressionRhs(scope, position, n.Right)
+			if err != nil {
+				return 0, err
+			}
+			dataPointer := scope.newVar()
+			gen.addOpt(ir.ArrayToPointer{Array: base, Out: dataPointer})
+			gen.addOpt(ir.Add{Left: dataPointer, Right: position})
+			return dataPointer, nil
+		case parsing.Dot:
 			structBase := scope.newVar()
 			err := genExpressionRhs(scope, structBase, n.Left)
 			if err != nil {
@@ -334,7 +354,7 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 			return out, nil
 		}
 	}
-	return 0, errors.New("Can't resolve expression to lvalue")
+	return 0, errors.New("Can't assign to that")
 }
 
 func boolStrToBool(s string) bool {
@@ -350,7 +370,7 @@ func Prune(block *OptBlock) {
 		fristUseIdx  int
 		secondUseIdx int
 	}, block.NumberOfVars)
-	use := func(varNum int, optIdx int) {
+	recordUsage := func(varNum int, optIdx int) {
 		if usageLog[varNum].count == 0 {
 			usageLog[varNum].fristUseIdx = optIdx
 		}
@@ -364,16 +384,20 @@ func Prune(block *OptBlock) {
 		switch opt := opt.(type) {
 		case ir.Assign:
 			opt.Uses(uses)
-			use(uses[0], idx)
-			use(uses[1], idx)
+			recordUsage(uses[0], idx)
+			recordUsage(uses[1], idx)
 		case ir.LoadStructMember:
 			opt.Uses(uses)
-			use(uses[0], idx)
-			use(uses[1], idx)
+			recordUsage(uses[0], idx)
+			recordUsage(uses[1], idx)
 		case ir.StructMemberPtr:
 			opt.Uses(uses)
-			use(uses[0], idx)
-			use(uses[1], idx)
+			recordUsage(uses[0], idx)
+			recordUsage(uses[1], idx)
+		case ir.ArrayToPointer:
+			opt.Uses(uses)
+			recordUsage(uses[0], idx)
+			recordUsage(uses[1], idx)
 		}
 	}
 	for _, log := range usageLog {
@@ -387,6 +411,9 @@ func Prune(block *OptBlock) {
 				opt.Swap(genesisAssign.Left, genesisAssign.Right)
 				block.Opts[log.secondUseIdx] = opt
 			case ir.StructMemberPtr:
+				opt.Swap(genesisAssign.Left, genesisAssign.Right)
+				block.Opts[log.secondUseIdx] = opt
+			case ir.ArrayToPointer:
 				opt.Swap(genesisAssign.Left, genesisAssign.Right)
 				block.Opts[log.secondUseIdx] = opt
 			}

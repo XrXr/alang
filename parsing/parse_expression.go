@@ -13,6 +13,7 @@ var _ = fmt.Printf // for debugging. remove when done
 var tokToOp = map[string]Operator{
 	"::": ConstDeclare,
 	"..": Range,
+	"[]": ArrayAccess,
 	":=": Declare,
 	"<":  Lesser,
 	"<=": LesserEqual,

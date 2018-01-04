@@ -6,6 +6,7 @@ import (
 )
 
 var bounderies = [...]string{
+	"[]",
 	"->",
 	"==",
 	"+",

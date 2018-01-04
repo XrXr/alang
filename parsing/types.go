@@ -60,6 +60,7 @@ const (
 	ConstDeclare
 	Dereference
 	AddressOf
+	ArrayAccess
 )
 
 //go:generate $GOPATH/bin/stringer -type=LiteralType

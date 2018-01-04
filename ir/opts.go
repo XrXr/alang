@@ -68,6 +68,11 @@ type TakeAddress struct {
 	Out int
 }
 
+type ArrayToPointer struct {
+	Array int
+	Out   int
+}
+
 type IndirectLoad struct {
 	Pointer int
 	Out     int
@@ -148,7 +153,17 @@ func (s *StructMemberPtr) Swap(original int, new int) {
 	}
 }
 
-type ReNumber interface {
-	Uses([]int) int
-	Swap(int, int)
+func (s *ArrayToPointer) Uses(out []int) int {
+	out[0] = s.Array
+	out[1] = s.Out
+	return 2
+}
+
+func (s *ArrayToPointer) Swap(original int, new int) {
+	if s.Array == original {
+		s.Array = new
+	}
+	if s.Out == original {
+		s.Out = new
+	}
 }

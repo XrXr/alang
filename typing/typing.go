@@ -151,6 +151,12 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 				return errors.New("incompatible types")
 			}
 		}
+	case ir.ArrayToPointer:
+		array, lIsArray := typeTable[opt.Array].(Array)
+		if !lIsArray {
+			return errors.New(" must be an array")
+		}
+		typeTable[opt.Out] = Pointer{ToWhat: array.OfWhat}
 	case ir.Add:
 		l, r := resolve(ir.BinaryVarOpt(opt))
 		if _, lIsPointer := l.(Pointer); !(lIsPointer && r.IsNumber()) {
@@ -283,7 +289,6 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 		Procs: map[parsing.IdName]ProcRecord{
 			"exit": {Return: void, CallingConvention: Register},
 			"puts": {Return: void, CallingConvention: Register},
-			"cast": {Return: Pointer{ToWhat: typer.builtins[intIdx]}},
 		},
 	}
 }

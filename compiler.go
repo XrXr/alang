@@ -169,10 +169,6 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 		case ir.Call:
 			if _, isStruct := env.Types[parsing.IdName(opt.Name)]; isStruct {
 				// TODO: code to zero the members
-			} else if opt.Name == "cast" {
-				// TODO: HACK!!!!
-				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.ArgVars[0])))
-				addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out)))
 			} else {
 				// TODO: this can done once
 				totalArgSize := 0
@@ -250,6 +246,10 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			dest := qwordVarToStack(opt.Out)
 			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
 			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.Var]))
+		case ir.ArrayToPointer:
+			dest := qwordVarToStack(opt.Out)
+			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
+			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.Array]))
 		case ir.IndirectWrite:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Pointer)))
 			addLine(fmt.Sprintf("\tmov rbx, %s\n", qwordVarToStack(opt.Data)))
@@ -497,7 +497,7 @@ func main() {
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
 		frontend.Prune(&ir)
-		// frontend.DumpIr(ir)
+		frontend.DumpIr(ir)
 		// parsing.Dump(env)
 		typeTable, err := typer.InferAndCheck(env, &ir, workOrder.ProcDecl)
 		if err != nil {
