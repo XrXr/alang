@@ -313,28 +313,64 @@ func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBl
 // resolve all the type of members in structs and build the global environment
 func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*interface{}]*typing.StructRecord, workOrders []*frontend.ProcWorkOrder) error {
 	notDone := make(map[parsing.IdName][]*typing.StructField)
+	type argsMut struct {
+		argTypes []typing.TypeRecord
+		idx      int
+	}
+	argsNotDone := make(map[parsing.IdName][]argsMut)
 	for _, structRecord := range nodeToStruct {
 		for _, field := range structRecord.Members {
 			unresolved, isUnresolved := field.Type.(typing.Unresolved)
 			name := unresolved.Decl.Base
+			println("needs to resolve", name)
 			if isUnresolved {
 				notDone[name] = append(notDone[name], field)
 			}
 		}
 	}
+	for _, order := range workOrders {
+		argRecords := make([]typing.TypeRecord, len(order.ProcDecl.Args))
+		for i, argDecl := range order.ProcDecl.Args {
+			record := typer.ConstructTypeRecord(argDecl.Type)
+			if _, recordIsUnresolved := record.(typing.Unresolved); recordIsUnresolved {
+				if argDecl.Type.ArrayBase != nil {
+					panic("Not implemented")
+				}
+				argsNotDone[argDecl.Type.Base] = append(argsNotDone[argDecl.Type.Base], argsMut{
+					argRecords,
+					i,
+				})
+			}
+			argRecords[i] = record
+		}
+		env.Procs[order.Name] = typing.ProcRecord{
+			typer.ConstructTypeRecord(order.ProcDecl.Return),
+			argRecords,
+			typing.Cdecl,
+		}
+	}
 
 	numResolved := 0
+	numArgResolved := 0
 	for node, structRecord := range nodeToStruct {
 		structNode := (*node).(parsing.StructDeclare)
 		name := structNode.Name
 		increment := 0
+		argIncrement := 0
 		for _, field := range notDone[name] {
 			increment = 1
 			// safe because we checked above
 			unresolved := field.Type.(typing.Unresolved)
 			field.Type = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
 		}
+		for _, mutRecord := range argsNotDone[name] {
+			argIncrement = 1
+			// safe because we checked above
+			unresolved := mutRecord.argTypes[mutRecord.idx].(typing.Unresolved)
+			mutRecord.argTypes[mutRecord.idx] = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
+		}
 		numResolved += increment
+		numArgResolved += argIncrement
 		env.Types[structNode.Name] = structRecord
 	}
 	for _, structRecord := range nodeToStruct {
@@ -345,21 +381,13 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			return fmt.Errorf("%s does not name a type", typeName)
 		}
 	}
-
-	for _, order := range workOrders {
-		argRecords := make([]typing.TypeRecord, len(order.ProcDecl.Args))
-		for i, argDecl := range order.ProcDecl.Args {
-			argRecords[i] = typer.ConstructTypeRecord(argDecl.Type)
-		}
-
-		env.Procs[order.Name] = typing.ProcRecord{
-			typer.ConstructTypeRecord(order.ProcDecl.Return),
-			argRecords,
-			typing.Cdecl,
+	if len(argsNotDone) != numArgResolved {
+		for typeName := range argsNotDone {
+			return fmt.Errorf("%s does not name a type", typeName)
 		}
 	}
-	return nil
 
+	return nil
 }
 
 func main() {
@@ -409,9 +437,6 @@ func main() {
 			_, isProc := exprNode.Right.(parsing.ProcNode)
 			if isProc {
 				currentProc = node
-				// if exprNode.Left.(parsing.IdName) == "main" {
-				// 	mainProc = node
-				// }
 			}
 			continue
 		}
@@ -429,6 +454,7 @@ func main() {
 			workOrders = append(workOrders, &order)
 			go frontend.GenForProc(&labelGen, &order)
 			nodesForProc = nil
+			currentProc = nil
 			continue
 		}
 
@@ -493,13 +519,14 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	// fmt.Printf("%#v\n", env.Types)
 
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
 		frontend.Prune(&ir)
 		frontend.DumpIr(ir)
 		// parsing.Dump(env)
-		typeTable, err := typer.InferAndCheck(env, &ir, workOrder.ProcDecl)
+		typeTable, err := typer.InferAndCheck(env, &ir, env.Procs[workOrder.Name])
 		if err != nil {
 			panic(err)
 		}

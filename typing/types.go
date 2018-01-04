@@ -33,6 +33,12 @@ func (_ Boolean) Size() int {
 	return 1
 }
 
+type U8 struct{ integerType }
+
+func (_ U8) Size() int {
+	return 1
+}
+
 // type S64 struct{ integerType }
 
 // type S32 struct{ integerType }
@@ -46,8 +52,6 @@ func (_ Boolean) Size() int {
 // type U32 struct{ integerType }
 
 // type U16 struct{ integerType }
-
-// type U8 struct{ integerType }
 
 type StructField struct {
 	Type   TypeRecord

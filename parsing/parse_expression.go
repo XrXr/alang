@@ -378,22 +378,37 @@ func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo) (*ProcNode, int, error) {
 	i := paren.open + 1
 	var args []Declaration
+	leftBoundary := i
 	for j := i; j <= paren.end; j++ {
 		tok := tokens[j]
 		if paren.open+1 == paren.end { // no arguments
 			break
 		}
-		if tok == "," || j == paren.end {
-			last := tokens[j-1]
-			spaceIdx := strings.IndexRune(last, ' ')
-			if spaceIdx == -1 {
-				return nil, 0, &ParseError{0, 0, `expected a type declaration`}
+		tokIsComma := tok == ","
+		if tokIsComma || j == paren.end {
+			var decl Declaration
+			if j-leftBoundary == 1 {
+				//TODO this should be done in the tokenizer
+				last := tokens[j-1]
+				spaceIdx := strings.IndexRune(last, ' ')
+				if spaceIdx == -1 {
+					return nil, 0, &ParseError{0, 0, `expected a type declaration`}
+				}
+				decl = Declaration{
+					Type: TypeDecl{Base: IdName(last[spaceIdx+1:])},
+					Name: IdName(last[:spaceIdx]),
+				}
+			} else {
+				parsed, err := parseDecl(tokens[leftBoundary:j])
+				if err != nil {
+					return nil, 0, err
+				}
+				decl = parsed.(Declaration)
 			}
-			args = append(args, Declaration{
-				Type: TypeDecl{Base: IdName(last[spaceIdx+1:])},
-				Name: IdName(last[:spaceIdx]),
-			})
-			//TODO error checking
+			args = append(args, decl)
+		}
+		if tokIsComma {
+			leftBoundary = j + 1
 		}
 	}
 	blockStart := paren.end + 1

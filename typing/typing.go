@@ -185,10 +185,10 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 	return nil
 }
 
-func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDecl parsing.ProcDecl) ([]TypeRecord, error) {
+func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDecl ProcRecord) ([]TypeRecord, error) {
 	typeTable := make([]TypeRecord, toCheck.NumberOfVars)
 	for i, arg := range procDecl.Args {
-		typeTable[i] = t.ConstructTypeRecord(arg.Type)
+		typeTable[i] = arg
 	}
 
 	for i, opt := range toCheck.Opts {
@@ -228,6 +228,8 @@ func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 		return t.builtins[intIdx]
 	case "bool":
 		return t.builtins[boolIdx]
+	case "u8":
+		return t.builtins[u8Idx]
 	}
 	return nil
 }
@@ -269,6 +271,7 @@ const (
 	stringIdx
 	intIdx
 	boolIdx
+	u8Idx
 )
 
 func NewTyper() *Typer {
@@ -278,6 +281,7 @@ func NewTyper() *Typer {
 		String{},
 		Int{},
 		Boolean{},
+		U8{},
 	}
 	return &typer
 }

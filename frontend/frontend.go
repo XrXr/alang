@@ -301,7 +301,7 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
 		}
 	default:
-		panic(n)
+		parsing.Dump(n)
 		panic("unknown type of node")
 	}
 	return nil

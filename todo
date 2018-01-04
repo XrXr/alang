@@ -10,6 +10,7 @@
 
  □ refactor ir for better pruning (no more type switching)
  □ [] operatator (make sure that it works on both sides of =)
+ □ tokenizer should break up spaces better. Search for todo in parse_expression.go
  □ type casting
  □ return values
  □ procs that take parameters which reference structs -- they are left as unresolved type for now
