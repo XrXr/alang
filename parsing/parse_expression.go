@@ -42,6 +42,10 @@ var precedence = map[Operator]int{
 	Range:       90,
 }
 
+var isUnary = map[Operator]bool{
+	Dereference: true,
+}
+
 type parsedNode struct {
 	node     interface{}
 	otherEnd int
@@ -297,6 +301,12 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		opTok := heap.Pop(&ops).(opToken)
 		leftI := opTok.index - 1
 		rightI := opTok.index + 1
+
+		if isUnary[opTok.op] {
+			// We store the parsed node at the boundary index of the expression.
+			// The boundary for a unary operator is the op token.
+			leftI = opTok.index
+		}
 
 		var newNode ExprNode
 		newNode.Op = opTok.op

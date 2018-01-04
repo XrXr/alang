@@ -7,7 +7,7 @@ main :: proc() {
     @(base +  3) = 3
     @(base +  4) = 1
 
-    ret := *(base + 0)
+    ret := @(base + 0)
     ret = ret / @(base + 1)
     ret = ret / @(base + 2)
     ret = ret * @(base + 3)

@@ -75,9 +75,7 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 	for i := 1; i < len(s.MemberOrder); i++ {
 		last := s.MemberOrder[i-1]
 		s.MemberOrder[i].Offset = last.Offset + last.Type.Size()
-		println(s.MemberOrder[i].Offset)
 	}
-	println(s.Name, "---", s.size)
 }
 
 type Unresolved struct {

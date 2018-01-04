@@ -187,7 +187,7 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 
 	for i, opt := range toCheck.Opts {
 		_ = i
-		println(i)
+		// println(i)
 		err := t.checkAndInferOpt(env, opt, typeTable)
 		if err != nil {
 			return nil, err

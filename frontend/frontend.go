@@ -16,11 +16,11 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 		parentScope: nil,
 	}
 
-	fmt.Printf("frontend: generating for %s\n", order.Name)
+	// fmt.Printf("frontend: generating for %s\n", order.Name)
 	for i, arg := range order.ProcDecl.Args {
 		_ = i
 		gen.rootScope.newNamedVar(arg.Name)
-		fmt.Printf("arg %d is named %s\n", i, arg.Name)
+		// fmt.Printf("arg %d is named %s\n", i, arg.Name)
 	}
 
 	gen.addOpt(ir.StartProc{string(order.Name)})

@@ -81,7 +81,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 	for _, typeRecord := range typeTable {
 		framesize += typeRecord.Size()
 	}
-	backendDebug(framesize, typeTable, varOffset)
+	// backendDebug(framesize, typeTable, varOffset)
 	for i, opt := range block.Opts {
 		fmt.Fprintf(out, ";ir line %d\n", i)
 		switch opt := opt.(type) {
@@ -351,7 +351,7 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		for i, argDecl := range order.ProcDecl.Args {
 			argRecords[i] = typer.ConstructTypeRecord(argDecl.Type)
 		}
-		println(order.Name)
+
 		env.Procs[order.Name] = typing.ProcRecord{
 			typer.ConstructTypeRecord(order.ProcDecl.Return),
 			argRecords,
@@ -450,12 +450,14 @@ func main() {
 				parentStruct.Members[string(typeDeclare.Name)] = newField
 			}
 		}
-
+		// fmt.Println("Line ", line)
 		if currentProc != nil {
 			for i := numNewEntries; i > 0; i-- {
 				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
+		// fmt.Println("Gave: ")
+		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
 	}
 	out, err := os.Create("a.asm")
 	if err != nil {
@@ -495,7 +497,7 @@ func main() {
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
 		frontend.Prune(&ir)
-		frontend.DumpIr(ir)
+		// frontend.DumpIr(ir)
 		// parsing.Dump(env)
 		typeTable, err := typer.InferAndCheck(env, &ir, workOrder.ProcDecl)
 		if err != nil {
