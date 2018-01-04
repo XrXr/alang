@@ -10,7 +10,6 @@ thisBetterWork :: proc () {
     puts("no args 1/1\n")
 }
 
-
 booleans :: proc (a bool, b bool, c bool, d bool) {
     if a {
         puts("bad\n")

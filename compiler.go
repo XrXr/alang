@@ -46,9 +46,11 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 	}
 
 	firstLocal := block.NumberOfArgs
-	varOffset[firstLocal] = typeTable[firstLocal].Size()
-	for i := firstLocal + 1; i < block.NumberOfVars; i++ {
-		varOffset[i] = varOffset[i-1] + typeTable[i].Size()
+	if firstLocal < block.NumberOfVars {
+		varOffset[firstLocal] = typeTable[firstLocal].Size()
+		for i := firstLocal + 1; i < block.NumberOfVars; i++ {
+			varOffset[i] = varOffset[i-1] + typeTable[i].Size()
+		}
 	}
 	qwordVarToStack := func(varNum int) string {
 		return fmt.Sprintf("qword [rbp-%d]", varOffset[varNum])
@@ -98,7 +100,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			simpleCopy(opt.Right, dest)
 		case ir.AssignImm:
 			switch value := opt.Val.(type) {
-			case int:
+			case int64, uint64, int:
 				addLine(fmt.Sprintf("\tmov %s, %d\n", qwordVarToStack(opt.Var), opt.Val))
 			case bool:
 				val := 0
@@ -137,6 +139,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				staticDataBuf.ReadFrom(&buf)
 				staticDataBuf.WriteRune('\n')
 				addLine(fmt.Sprintf("\tmov %s, %s\n", qwordVarToStack(opt.Var), labelName))
+			default:
+				parsing.Dump(opt)
+				panic("unknown immediate value type")
 			}
 		case ir.Add:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Right)))
@@ -197,10 +202,22 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 						offset += thisArgSize
 					}
 				case typing.Register:
-					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.ArgVars[0])))
+					regOrder := [...]string{"rax", "rbx", "rcx"}
+					for i, arg := range opt.ArgVars {
+						addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
+					}
 				}
 				addLine(fmt.Sprintf("\tcall proc_%s\n", opt.Name))
 				switch procReocrd.CallingConvention {
+				case typing.Register:
+					switch typeTable[opt.Out].Size() {
+					case 1:
+						addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Out)))
+					case 4:
+						addLine(fmt.Sprintf("\tmov %s, eax\n", wordVarToStack(opt.Out)))
+					case 8:
+						addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out)))
+					}
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tadd rsp, %d\n", totalArgSize))
 				}
@@ -219,10 +236,38 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine("\tpop rbp\n")
 			addLine("\tret\n")
 		case ir.Compare:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Left)))
-			addLine(fmt.Sprintf("\tmov rbx, %s\n", qwordVarToStack(opt.Right)))
+			lt := typeTable[opt.Left]
+			rt := typeTable[opt.Right]
+			smaller := lt
+			if rt.Size() < lt.Size() {
+				smaller = rt
+			}
+			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) {
+				// array & struct compare
+				panic("Not yet")
+			}
+
+			var lReg string
+			var rReg string
+			switch smaller.Size() {
+			case 1:
+				lReg = "al"
+				rReg = "bl"
+				addLine(fmt.Sprintf("\tmov %s, %s\n", lReg, byteVarToStack(opt.Left)))
+				addLine(fmt.Sprintf("\tmov %s, %s\n", rReg, byteVarToStack(opt.Right)))
+			case 4:
+				lReg = "eax"
+				rReg = "ebx"
+				addLine(fmt.Sprintf("\tmov %s, %s\n", lReg, wordVarToStack(opt.Left)))
+				addLine(fmt.Sprintf("\tmov %s, %s\n", rReg, wordVarToStack(opt.Right)))
+			case 8:
+				lReg = "rax"
+				rReg = "rbx"
+				addLine(fmt.Sprintf("\tmov %s, %s\n", lReg, qwordVarToStack(opt.Left)))
+				addLine(fmt.Sprintf("\tmov %s, %s\n", rReg, qwordVarToStack(opt.Right)))
+			}
 			addLine(fmt.Sprintf("\tmov %s, 1\n", byteVarToStack(opt.Out)))
-			addLine("\tcmp rax, rbx\n")
+			addLine(fmt.Sprintf("\tcmp %s, %s\n", lReg, rReg))
 			labelName := labelGen.GenLabel("cmp%d")
 			switch opt.How {
 			case ir.Greater:
@@ -322,7 +367,6 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		for _, field := range structRecord.Members {
 			unresolved, isUnresolved := field.Type.(typing.Unresolved)
 			name := unresolved.Decl.Base
-			println("needs to resolve", name)
 			if isUnresolved {
 				notDone[name] = append(notDone[name], field)
 			}
@@ -476,14 +520,14 @@ func main() {
 				parentStruct.Members[string(typeDeclare.Name)] = newField
 			}
 		}
-		// fmt.Println("Line ", line)
+		fmt.Println("Line ", line)
 		if currentProc != nil {
 			for i := numNewEntries; i > 0; i-- {
 				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
-		// fmt.Println("Gave: ")
-		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
+		fmt.Println("Gave: ")
+		parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
 	}
 	out, err := os.Create("a.asm")
 	if err != nil {
@@ -492,28 +536,7 @@ func main() {
 	}
 	defer out.Close()
 
-	fmt.Fprintln(out, "\tglobal _start")
-	fmt.Fprintln(out, "\tsection .text")
-
-	fmt.Fprintln(out, `_start:
-	call proc_main
-	mov eax, 60
-	xor rdi, rdi
-	syscall`)
-
-	fmt.Fprintln(out, `proc_exit:
-	mov rdi, rax
-	mov eax, 60
-	syscall`)
-
-	fmt.Fprintln(out, "proc_puts:")
-	fmt.Fprintln(out, "\tmov rdx, [rax]")
-	fmt.Fprintln(out, "\tmov rsi, rax")
-	fmt.Fprintln(out, "\tadd rsi, 8")
-	fmt.Fprintln(out, "\tmov rax, 1")
-	fmt.Fprintln(out, "\tmov rdi, 1")
-	fmt.Fprintln(out, "\tsyscall")
-	fmt.Fprintln(out, "\tret")
+	writeAssemblyPrologue(out)
 
 	err = buildGlobalEnv(typer, env, structs, workOrders)
 	if err != nil {
@@ -538,6 +561,8 @@ func main() {
 		}
 		backend(out, &labelGen, []frontend.OptBlock{ir}, typeTable, env)
 	}
+	writeDecimalTable(out)
+
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()
 	if err != nil {

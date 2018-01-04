@@ -198,11 +198,15 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 		var value interface{}
 		switch n.Type {
 		case parsing.Number:
-			v, err := strconv.Atoi(n.Value)
-			if err != nil {
-				panic(err)
+			v, err := strconv.ParseInt(n.Value, 10, 64)
+			if err == nil {
+				value = v
+			} else {
+				value, err = strconv.ParseUint(n.Value, 10, 64)
+				if err != nil {
+					panic(err)
+				}
 			}
-			value = v
 		case parsing.Boolean:
 			value = boolStrToBool(n.Value)
 		case parsing.String:

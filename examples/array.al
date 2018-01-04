@@ -4,7 +4,7 @@ main :: proc() {
     array [] 1 = 25
     array [] 2 = 2
     array [] 3 = 3
-    array [] 4 = 1
+    array [] (2+2) = 1
 
     ret := array [] 0
     ret = ret / array [] 1

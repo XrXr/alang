@@ -10,43 +10,6 @@ import (
 
 var _ = fmt.Printf // for debugging. remove when done
 
-var tokToOp = map[string]Operator{
-	"::": ConstDeclare,
-	"..": Range,
-	"[]": ArrayAccess,
-	":=": Declare,
-	"<":  Lesser,
-	"<=": LesserEqual,
-	">":  Greater,
-	">=": GreaterEqual,
-	"==": DoubleEqual,
-	"=":  Assign,
-	"+":  Plus,
-	"/":  Divide,
-	"@":  Dereference,
-	"*":  Star,
-	"-":  Minus,
-	".":  Dot,
-	"&":  AddressOf,
-}
-
-var precedence = map[Operator]int{
-	Dot:         0,
-	Dereference: 5,
-	Star:        10,
-	Divide:      10,
-	Plus:        20,
-	Minus:       20,
-	Lesser:      30,
-	Greater:     30,
-	Assign:      100,
-	Range:       90,
-}
-
-var isUnary = map[Operator]bool{
-	Dereference: true,
-}
-
 type parsedNode struct {
 	node     interface{}
 	otherEnd int
@@ -281,6 +244,10 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		tok := tokens[i]
 		op, good := tokToOp[tok]
 		if good {
+			if _, hasPrecendence := precedence[op]; !hasPrecendence {
+				println(op.String())
+				panic("need precedence info for this to work")
+			}
 			heap.Push(&ops, opToken{i, op})
 		}
 		i++

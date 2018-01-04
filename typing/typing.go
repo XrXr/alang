@@ -177,6 +177,8 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 	case ir.Div:
 		l, r := resolve(ir.BinaryVarOpt(opt))
 		if !(l.IsNumber() && r.IsNumber()) {
+			parsing.Dump(l)
+			parsing.Dump(r)
 			return errors.New("operands must be numbers")
 		}
 		// TODO: issue warning for addition between float and ints
@@ -193,7 +195,7 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 
 	for i, opt := range toCheck.Opts {
 		_ = i
-		// println(i)
+		println(i)
 		err := t.checkAndInferOpt(env, opt, typeTable)
 		if err != nil {
 			return nil, err
@@ -205,7 +207,7 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 
 func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	switch val := val.(type) {
-	case int:
+	case int64, uint64, int:
 		return t.builtins[intIdx]
 	case string:
 		return t.builtins[stringIdx]
@@ -287,12 +289,17 @@ func NewTyper() *Typer {
 }
 
 func NewEnvRecord(typer *Typer) *EnvRecord {
-	void := typer.builtins[voidIdx]
+	boolType := typer.builtins[boolIdx]
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
-			"exit": {Return: void, CallingConvention: Register},
-			"puts": {Return: void, CallingConvention: Register},
+			"exit":    {Return: boolType, CallingConvention: Register},
+			"puts":    {Return: boolType, CallingConvention: Register},
+			"testbit": {Return: boolType, CallingConvention: Register},
+			"binToDecTable": {
+				Return:            BuildPointer(typer.builtins[intIdx], 1),
+				CallingConvention: Register,
+			},
 		},
 	}
 }
