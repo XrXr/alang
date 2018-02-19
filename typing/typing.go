@@ -27,23 +27,23 @@ type Typer struct {
 	builtins []TypeRecord
 }
 
-func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []TypeRecord) error {
-	resolve := func(opt ir.BinaryVarOpt) (TypeRecord, TypeRecord) {
-		l := typeTable[opt.Left]
-		r := typeTable[opt.Right]
+func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRecord) error {
+	resolve := func(opt ir.Inst) (TypeRecord, TypeRecord) {
+		l := typeTable[opt.Oprand1]
+		r := typeTable[opt.Oprand2]
 		return l, r
 	}
-	switch opt := opt.(type) {
+	switch opt.Type {
 	case ir.AssignImm:
-		typeTable[opt.Var] = t.typeImmediate(opt.Val)
+		typeTable[opt.Oprand1] = t.typeImmediate(opt.Extra)
 	case ir.TakeAddress:
-		varType := typeTable[opt.Var]
+		varType := typeTable[opt.In()]
 		if varType == nil {
 			panic("type should be resolved at this point")
 		}
-		typeTable[opt.Out] = Pointer{ToWhat: varType}
+		typeTable[opt.Out()] = Pointer{ToWhat: varType}
 	case ir.StructMemberPtr:
-		baseType := typeTable[opt.Base]
+		baseType := typeTable[opt.In()]
 		basePointer, baseIsPointer := baseType.(Pointer)
 		if baseIsPointer {
 			baseType = basePointer.ToWhat
@@ -52,13 +52,13 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		if !baseIsStruct {
 			panic("oprand is not a struct or pointer to a struct")
 		}
-		field, ok := baseStruct.Members[opt.Member]
+		field, ok := baseStruct.Members[opt.Extra.(string)]
 		if !ok {
 			panic("--- is not a member of the struct")
 		}
-		typeTable[opt.Out] = Pointer{ToWhat: field.Type}
+		typeTable[opt.Out()] = Pointer{ToWhat: field.Type}
 	case ir.LoadStructMember:
-		baseType := typeTable[opt.Base]
+		baseType := typeTable[opt.In()]
 		basePointer, baseIsPointer := baseType.(Pointer)
 		if baseIsPointer {
 			baseType = basePointer.ToWhat
@@ -67,32 +67,34 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		if !baseIsStruct {
 			panic("oprand is not a struct or pointer to a struct")
 		}
-		field, ok := baseStruct.Members[opt.Member]
+		field, ok := baseStruct.Members[opt.Extra.(string)]
 		if !ok {
 			panic("--- is not a member of the struct")
 		}
-		typeTable[opt.Out] = field.Type
+		typeTable[opt.Out()] = field.Type
 	case ir.Call:
-		typeRecord, ok := env.Types[parsing.IdName(opt.Name)]
+		extra := opt.Extra.(ir.CallExtra)
+		typeRecord, ok := env.Types[parsing.IdName(extra.Name)]
 		if !ok {
-			procRecord, ok := env.Procs[parsing.IdName(opt.Name)]
+			procRecord, ok := env.Procs[parsing.IdName(extra.Name)]
 			if !ok {
-				println(parsing.IdName(opt.Name))
+				println(parsing.IdName(extra.Name))
 				panic("Call to undefined procedure")
 			}
 			//TODO check arg types
-			typeTable[opt.Out] = procRecord.Return
+			typeTable[opt.Oprand1] = procRecord.Return
 			return nil
 		}
-		// Temporary
+		// TODO Temporary hack for making a struct
 		structRecord := typeRecord.(*StructRecord)
-		typeTable[opt.Out] = structRecord
+		typeTable[opt.Oprand1] = structRecord
 	case ir.Compare:
-		l := typeTable[opt.Left]
-		r := typeTable[opt.Right]
+		l := typeTable[opt.Left()]
+		r := typeTable[opt.Right()]
+		extra := opt.Extra.(ir.CompareExtra)
 		if !(l.IsNumber() && r.IsNumber()) {
 			good := false
-			if opt.How == ir.AreEqual || opt.How == ir.NotEqual {
+			if extra.How == ir.AreEqual || extra.How == ir.NotEqual {
 				_, lIsBool := l.(Boolean)
 				_, rIsBool := r.(Boolean)
 				good = lIsBool && rIsBool
@@ -103,13 +105,13 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 				return errors.New("operands must be numbers")
 			}
 		}
-		typeTable[opt.Out] = t.builtins[boolIdx]
+		typeTable[extra.Out] = t.builtins[boolIdx]
 	case ir.IndirectWrite:
-		varType := typeTable[opt.Pointer]
+		varType := typeTable[opt.Left()]
 		if varType == nil {
 			panic("type should be resolved at this point")
 		}
-		typeForData := typeTable[opt.Data]
+		typeForData := typeTable[opt.Right()]
 		if varType == nil {
 			panic("type should be resolved at this point")
 		}
@@ -125,7 +127,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 			}
 		}
 	case ir.IndirectLoad:
-		ptrType := typeTable[opt.Pointer]
+		ptrType := typeTable[opt.In()]
 		if ptrType == nil {
 			panic("type should be resolved at this point")
 		}
@@ -133,60 +135,60 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt interface{}, typeTable []Ty
 		if !isPointer {
 			panic("Can't indirect a non pointer")
 		}
-		typeForOut := typeTable[opt.Out]
+		typeForOut := typeTable[opt.Out()]
 		if typeForOut == nil {
-			typeTable[opt.Out] = pointer.ToWhat
+			typeTable[opt.Out()] = pointer.ToWhat
 			typeForOut = pointer.ToWhat
 		}
 		if pointer.ToWhat != typeForOut {
 			panic("Type mismatch")
 		}
 	case ir.Assign:
-		l, r := resolve(ir.BinaryVarOpt(opt))
+		l, r := resolve(opt)
 		if r == nil {
 			panic("type should be resolved at this point")
 		}
 		if l != r {
 			if l == nil {
-				typeTable[opt.Left] = r
+				typeTable[opt.Left()] = r
 			} else {
 				return errors.New("incompatible types")
 			}
 		}
 	case ir.ArrayToPointer:
 		good := false
-		switch array := typeTable[opt.Array].(type) {
+		switch array := typeTable[opt.In()].(type) {
 		case Array:
 			good = true
-			typeTable[opt.Out] = Pointer{ToWhat: array.OfWhat}
+			typeTable[opt.Out()] = Pointer{ToWhat: array.OfWhat}
 		case Pointer:
 			if array, isArray := array.ToWhat.(Array); isArray {
 				good = true
-				typeTable[opt.Out] = Pointer{ToWhat: array.OfWhat}
+				typeTable[opt.Out()] = Pointer{ToWhat: array.OfWhat}
 			}
 		}
 		if !good {
 			return errors.New(" must be an array")
 		}
 	case ir.Add:
-		l, r := resolve(ir.BinaryVarOpt(opt))
+		l, r := resolve(opt)
 		if _, lIsPointer := l.(Pointer); !(lIsPointer && r.IsNumber()) {
 			if !(l.IsNumber() && r.IsNumber()) {
 				return errors.New("add not available for these types")
 			}
 		}
 	case ir.Sub:
-		l, r := resolve(ir.BinaryVarOpt(opt))
+		l, r := resolve(opt)
 		if !(l.IsNumber() && r.IsNumber()) {
 			return errors.New("operands must be numbers")
 		}
 	case ir.Mult:
-		l, r := resolve(ir.BinaryVarOpt(opt))
+		l, r := resolve(opt)
 		if !(l.IsNumber() && r.IsNumber()) {
 			return errors.New("operands must be numbers")
 		}
 	case ir.Div:
-		l, r := resolve(ir.BinaryVarOpt(opt))
+		l, r := resolve(opt)
 		if !(l.IsNumber() && r.IsNumber()) {
 			parsing.Dump(l)
 			parsing.Dump(r)

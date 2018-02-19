@@ -168,7 +168,6 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	i := start
 	for i < end {
 		tok := tokens[i]
-		println(tok)
 		if tok == "(" {
 			openStack = append(openStack, i)
 		} else if tok == ")" {
@@ -214,12 +213,10 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			parsed[paren.end] = parsedNode{node, paren.open}
 		}
 	}
-	Dump(parsed)
 	outterMost, found := parsed[0]
 	if found && outterMost.otherEnd == len(tokens)-1 {
 		return outterMost.node, nil
 	}
-	println("happ")
 	return parseExprUnit(parsed, tokens, start, end)
 }
 

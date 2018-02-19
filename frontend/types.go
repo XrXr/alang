@@ -2,6 +2,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
 	"sync"
 )
@@ -16,16 +17,16 @@ type ProcWorkOrder struct {
 type OptBlock struct {
 	NumberOfVars int
 	NumberOfArgs int
-	Opts         []interface{}
+	Opts         []ir.Inst
 }
 
 type procGen struct {
-	opts       []interface{}
+	opts       []ir.Inst
 	nextVarNum int
 	rootScope  *scope
 }
 
-func (p *procGen) addOpt(opts ...interface{}) {
+func (p *procGen) addOpt(opts ...ir.Inst) {
 	p.opts = append(p.opts, opts...)
 }
 

@@ -23,9 +23,9 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 		// fmt.Printf("arg %d is named %s\n", i, arg.Name)
 	}
 
-	gen.addOpt(ir.StartProc{string(order.Name)})
+	gen.addOpt(ir.Inst{Type: ir.StartProc, Extra: string(order.Name)})
 	ret := genForProcSubSection(labelGen, order, gen.rootScope, 0)
-	gen.addOpt(ir.EndProc{})
+	gen.addOpt(ir.Inst{Type: ir.EndProc})
 	if ret != len(order.In) {
 		parsing.Dump(order.In)
 		panic("gen didn't process whole proc")
@@ -48,7 +48,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		case parsing.Declaration:
 			// these are declaration without values i.e. not foo := 3
 			newVar := scope.newNamedVar(node.Name)
-			gen.addOpt(ir.AssignImm{Var: newVar, Val: node.Type})
+			gen.addOpt(ir.MakeUnaryInstWithAux(ir.AssignImm, newVar, node.Type))
 		case parsing.ExprNode:
 			switch node.Op {
 			case parsing.Declare:
@@ -78,7 +78,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 					if err != nil {
 						panic(err)
 					}
-					gen.addOpt(ir.IndirectWrite{Pointer: leftResult, Data: rightResult})
+					gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectWrite, leftResult, rightResult, nil))
 				}
 			default:
 				//TODO issue warning here
@@ -91,19 +91,19 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				panic(err)
 			}
 			labelForIf := labelGen.GenLabel("if_%d")
-			gen.addOpt(ir.JumpIfFalse{condVar, labelForIf})
+			gen.addOpt(ir.MakeUnaryInstWithAux(ir.JumpIfFalse, condVar, labelForIf))
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
-			gen.addOpt(ir.Label{labelForIf})
+			gen.addOpt(labelInst(labelForIf))
 		case parsing.ElseNode:
 			if !sawIfLastTime {
 				panic("Bare else. Should've been caught by the parser")
 			}
 			elseLabel := labelGen.GenLabel("else_%d")
 			ifLabel := gen.opts[len(gen.opts)-1]
-			gen.opts[len(gen.opts)-1] = ir.Jump{elseLabel}
+			gen.opts[len(gen.opts)-1] = ir.MakeUnaryInstWithAux(ir.Jump, 0, elseLabel)
 			gen.addOpt(ifLabel)
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
-			gen.addOpt(ir.Label{elseLabel})
+			gen.addOpt(labelInst(elseLabel))
 		case parsing.Loop:
 			loopStart := labelGen.GenLabel("loop_%d")
 			loopEnd := labelGen.GenLabel("loopend_%d")
@@ -146,39 +146,40 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 						panic(err)
 					}
 					condVar := loopScope.newVar()
-					gen.addOpt(ir.Label{loopStart})
-					gen.addOpt(ir.Compare{
-						How: ir.LesserOrEqual, Left: iterationVar, Right: endVar,
-						Out: condVar,
-					})
-					gen.addOpt(ir.JumpIfFalse{condVar, loopEnd})
+					gen.addOpt(labelInst(loopStart))
+					gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, iterationVar, endVar,
+						ir.CompareExtra{
+							How: ir.LesserOrEqual,
+							Out: condVar,
+						}))
+					gen.addOpt(ir.MakeUnaryInstWithAux(ir.JumpIfFalse, condVar, loopEnd))
 				}
 			}
 			if !usingRangeExpr {
-				gen.addOpt(ir.Label{loopStart})
+				gen.addOpt(labelInst(loopStart))
 				condVar := loopScope.newVar()
 				err := genExpressionRhs(loopScope, condVar, node.Expression)
 				if err != nil {
 					panic(err)
 				}
-				gen.addOpt(ir.JumpIfFalse{condVar, loopEnd})
+				gen.addOpt(ir.MakeUnaryInstWithAux(ir.JumpIfFalse, condVar, loopEnd))
 			}
 
 			var genContinueCode func(gen *procGen)
 			if usingRangeExpr {
 				genContinueCode = func(gen *procGen) {
-					gen.addOpt(ir.Increment{iterationVar})
-					gen.addOpt(ir.Jump{loopStart})
+					gen.addOpt(ir.MakeUnaryInstWithAux(ir.Increment, iterationVar, nil))
+					gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, loopStart))
 				}
 			} else {
 				genContinueCode = func(gen *procGen) {
-					gen.addOpt(ir.Jump{loopStart})
+					gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, loopStart))
 				}
 			}
 
 			i = genForProcSubSection(labelGen, order, loopScope, i)
 			genContinueCode(gen)
-			gen.addOpt(ir.Label{loopEnd})
+			gen.addOpt(labelInst(loopEnd))
 		case parsing.BlockEnd:
 			return i
 		default:
@@ -212,13 +213,13 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 		case parsing.String:
 			value = n.Value
 		}
-		gen.addOpt(ir.AssignImm{dest, value})
+		gen.addOpt(ir.MakeUnaryInstWithAux(ir.AssignImm, dest, value))
 	case parsing.IdName:
 		vn, found := scope.resolve(n)
 		if !found {
 			panic(fmt.Errorf("undefined var %s", n))
 		}
-		gen.addOpt(ir.Assign{dest, vn})
+		gen.addOpt(ir.MakeBinaryInstWithAux(ir.Assign, dest, vn, nil))
 	case parsing.ProcCall:
 		var argVars []int
 		for _, argNode := range n.Args {
@@ -229,7 +230,10 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			argVars = append(argVars, argEval)
 		}
-		gen.addOpt(ir.Call{string(n.Callee), argVars, dest})
+		gen.addOpt(ir.MakeUnaryInstWithAux(ir.Call, dest, ir.CallExtra{
+			Name:    string(n.Callee),
+			ArgVars: argVars,
+		}))
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.Dereference:
@@ -241,7 +245,7 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			if err != nil {
 				return err
 			}
-			gen.addOpt(ir.IndirectLoad{Pointer: rightDest, Out: dest})
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectLoad, rightDest, dest, nil))
 			return nil
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
 			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
@@ -259,32 +263,32 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			switch n.Op {
 			case parsing.Star:
-				gen.addOpt(ir.Mult{leftDest, rightDest})
-				gen.addOpt(ir.Assign{dest, leftDest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Mult, leftDest, rightDest, nil))
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Assign, dest, leftDest, nil))
 			case parsing.Divide:
-				gen.addOpt(ir.Div{leftDest, rightDest})
-				gen.addOpt(ir.Assign{dest, leftDest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Div, leftDest, rightDest, nil))
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Assign, dest, leftDest, nil))
 			case parsing.Plus:
-				gen.addOpt(ir.Add{leftDest, rightDest})
-				gen.addOpt(ir.Assign{dest, leftDest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Add, leftDest, rightDest, nil))
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Assign, dest, leftDest, nil))
 			case parsing.Minus:
-				gen.addOpt(ir.Sub{leftDest, rightDest})
-				gen.addOpt(ir.Assign{dest, leftDest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Sub, leftDest, rightDest, nil))
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Assign, dest, leftDest, nil))
 			case parsing.Greater:
-				gen.addOpt(ir.Compare{ir.Greater, leftDest, rightDest, dest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.Greater, Out: dest}))
 			case parsing.GreaterEqual:
-				gen.addOpt(ir.Compare{ir.GreaterOrEqual, leftDest, rightDest, dest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.GreaterOrEqual, Out: dest}))
 			case parsing.Lesser:
-				gen.addOpt(ir.Compare{ir.Lesser, leftDest, rightDest, dest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.Lesser, Out: dest}))
 			case parsing.LesserEqual:
-				gen.addOpt(ir.Compare{ir.LesserOrEqual, leftDest, rightDest, dest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.LesserOrEqual, Out: dest}))
 			case parsing.DoubleEqual:
-				gen.addOpt(ir.Compare{ir.AreEqual, leftDest, rightDest, dest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.AreEqual, Out: dest}))
 			case parsing.ArrayAccess:
 				dataPointer := scope.newVar()
-				gen.addOpt(ir.ArrayToPointer{Array: leftDest, Out: dataPointer})
-				gen.addOpt(ir.Add{dataPointer, rightDest})
-				gen.addOpt(ir.IndirectLoad{Pointer: dataPointer, Out: dest})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.ArrayToPointer, leftDest, dataPointer, nil))
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Add, dataPointer, rightDest, nil))
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectLoad, dataPointer, dest, nil))
 			}
 		case parsing.AddressOf:
 			// TODO: incomplete: &(someStruct.foo.sdfsd)
@@ -293,14 +297,14 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			if !found {
 				return errors.New("undefined var")
 			}
-			gen.addOpt(ir.TakeAddress{Var: vn, Out: dest})
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.TakeAddress, vn, dest, nil))
 		case parsing.Dot:
 			left := scope.newVar()
 			err := genExpressionRhs(scope, left, n.Left)
 			if err != nil {
 				return err
 			}
-			gen.addOpt(ir.LoadStructMember{Base: left, Member: string(n.Right.(parsing.IdName)), Out: dest})
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.LoadStructMember, left, dest, string(n.Right.(parsing.IdName))))
 		default:
 			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
 		}
@@ -341,7 +345,7 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 					return 0, err
 				}
 				member := string(left.Right.(parsing.IdName))
-				gen.addOpt(ir.StructMemberPtr{Base: structBase, Member: member, Out: array})
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.StructMemberPtr, structBase, array, member))
 			} else {
 				err := genExpressionRhs(scope, array, n.Left)
 				if err != nil {
@@ -354,8 +358,8 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 				return 0, err
 			}
 			dataPointer := scope.newVar()
-			gen.addOpt(ir.ArrayToPointer{Array: array, Out: dataPointer})
-			gen.addOpt(ir.Add{Left: dataPointer, Right: position})
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.ArrayToPointer, array, dataPointer, nil))
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.Add, dataPointer, position, nil))
 			return dataPointer, nil
 		case parsing.Dot:
 			structBase := scope.newVar()
@@ -365,7 +369,7 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 			}
 			member := string(n.Right.(parsing.IdName))
 			out := scope.newVar()
-			gen.addOpt(ir.StructMemberPtr{Base: structBase, Member: member, Out: out})
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.StructMemberPtr, structBase, out, member))
 			return out, nil
 		}
 	}
@@ -394,44 +398,35 @@ func Prune(block *OptBlock) {
 		}
 		usageLog[varNum].count++
 	}
-	uses := make([]int, 3)
 	for idx, opt := range block.Opts {
-		switch opt := opt.(type) {
-		case ir.Assign:
-			opt.Uses(uses)
-			recordUsage(uses[0], idx)
-			recordUsage(uses[1], idx)
-		case ir.LoadStructMember:
-			opt.Uses(uses)
-			recordUsage(uses[0], idx)
-			recordUsage(uses[1], idx)
-		case ir.StructMemberPtr:
-			opt.Uses(uses)
-			recordUsage(uses[0], idx)
-			recordUsage(uses[1], idx)
-		case ir.ArrayToPointer:
-			opt.Uses(uses)
-			recordUsage(uses[0], idx)
-			recordUsage(uses[1], idx)
+		if opt.Type > ir.UnaryInstructions {
+			recordUsage(opt.Oprand1, idx)
+		}
+		if opt.Type > ir.BinaryInstructions {
+			recordUsage(opt.Oprand2, idx)
 		}
 	}
 	for _, log := range usageLog {
 		if log.count != 2 {
 			continue
 		}
-		genesisAssign, fromAssign := block.Opts[log.fristUseIdx].(ir.Assign)
-		if fromAssign {
-			switch opt := block.Opts[log.secondUseIdx].(type) {
+
+		genesis := block.Opts[log.fristUseIdx]
+		if genesis.Type == ir.Assign {
+			switch block.Opts[log.secondUseIdx].Type {
 			case ir.LoadStructMember:
-				opt.Swap(genesisAssign.Left, genesisAssign.Right)
-				block.Opts[log.secondUseIdx] = opt
+				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
 			case ir.StructMemberPtr:
-				opt.Swap(genesisAssign.Left, genesisAssign.Right)
-				block.Opts[log.secondUseIdx] = opt
+				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
 			case ir.ArrayToPointer:
-				opt.Swap(genesisAssign.Left, genesisAssign.Right)
-				block.Opts[log.secondUseIdx] = opt
+				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
 			}
 		}
 	}
+}
+
+func labelInst(name string) ir.Inst {
+	label := ir.Inst{Type: ir.Label}
+	label.Extra = name
+	return label
 }
