@@ -367,12 +367,14 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 			if err != nil {
 				return 0, err
 			}
+			parsing.Dump(n)
 			member := string(n.Right.(parsing.IdName))
 			out := scope.newVar()
 			gen.addOpt(ir.MakeBinaryInstWithAux(ir.StructMemberPtr, structBase, out, member))
 			return out, nil
 		}
 	}
+	parsing.Dump(node)
 	return 0, errors.New("Can't assign to that")
 }
 

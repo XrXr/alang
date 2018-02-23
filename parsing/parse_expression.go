@@ -15,7 +15,15 @@ type parsedNode struct {
 	otherEnd int
 }
 
+type bracketType int
+
+const (
+	round bracketType = iota
+	square
+)
+
 type bracketInfo struct { //index to the opening bracket and the closing
+	kind bracketType
 	open int
 	end  int
 }
@@ -168,13 +176,24 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	i := start
 	for i < end {
 		tok := tokens[i]
-		if tok == "(" {
+		switch tok {
+		case "(", "[":
 			openStack = append(openStack, i)
-		} else if tok == ")" {
+		case ")", "]":
 			if len(openStack) == 0 {
+				return nil, &ParseError{0, 0 /* tokenToCol(i)*/, fmt.Sprintf(`unmatched "%s"`, tok)}
+			}
+			if tok == ")" && tokens[openStack[len(openStack)-1]] != "(" {
 				return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `unmatched ")"`}
 			}
-			parenInfo = append(parenInfo, bracketInfo{openStack[len(openStack)-1], i})
+			if tok == "]" && tokens[openStack[len(openStack)-1]] != "[" {
+				return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `unmatched "]"`}
+			}
+			kind := round
+			if tok == "]" {
+				kind = square
+			}
+			parenInfo = append(parenInfo, bracketInfo{kind, openStack[len(openStack)-1], i})
 			openStack = openStack[:len(openStack)-1]
 		}
 		i++
@@ -184,8 +203,28 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	}
 
 	for _, paren := range parenInfo {
-		// it's a call or a proc expression
-		if paren.open-1 >= start && tokenIsId(tokens[paren.open-1]) {
+		if paren.kind == square {
+			if paren.open == start {
+				return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `this bracket doesn't make sense here`}
+			}
+			left, alreadyParsed := parsed[paren.open-1]
+			if !alreadyParsed {
+				if !tokenIsId(tokens[paren.open-1]) {
+					// I can't think of a situation where the left of the square bracket wouldn't already be parsed
+					return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `this bracket doesn't make sense here`}
+				}
+				left.node = parseToken(tokens[paren.open-1])
+				left.otherEnd = paren.open - 1
+			}
+			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
+			if err != nil {
+				return nil, err
+			}
+			arrayAccessNode := ExprNode{ArrayAccess, left.node, node}
+			parsed[left.otherEnd] = parsedNode{arrayAccessNode, paren.end}
+			parsed[paren.end] = parsedNode{arrayAccessNode, left.otherEnd}
+		} else if paren.kind == round && paren.open-1 >= start && tokenIsId(tokens[paren.open-1]) {
+			// it's a call or a proc expression
 			var node interface{}
 			end := paren.end
 			if tokens[paren.open-1] == "proc" {
@@ -259,6 +298,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 	if len(ops) == 0 {
 		parsed, found := parsed[start]
 		if !found || parsed.otherEnd != end-1 {
+			fmt.Printf("%v\n", tokens)
 			return nil, &ParseError{start, end, "Expected an operator"}
 		}
 		return parsed.node, nil

@@ -3,7 +3,6 @@ package parsing
 var tokToOp = map[string]Operator{
 	"::": ConstDeclare,
 	"..": Range,
-	"[]": ArrayAccess,
 	":=": Declare,
 	"<":  Lesser,
 	"<=": LesserEqual,
