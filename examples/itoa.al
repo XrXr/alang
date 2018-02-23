@@ -1,3 +1,4 @@
+// A convoluted way to convert numbers to strings
 main :: proc () {
     buffer := asciiNumber()
 

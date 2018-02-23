@@ -278,7 +278,9 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 
 		var newNode ExprNode
 		newNode.Op = opTok.op
-		if opTok.index > 0 && opTok.index > start && opTok.op != Dereference {
+		oneToLeftValid := opTok.index > 0 && opTok.index > start
+		oneToRightValid := opTok.index < len(tokens)-1 && opTok.index < end
+		if oneToLeftValid && opTok.op != Dereference {
 			parsed, good := parsed[opTok.index-1]
 			if good {
 				newNode.Left = parsed.node
@@ -287,7 +289,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 				newNode.Left = parseToken(tokens[opTok.index-1])
 			}
 		}
-		if opTok.index < len(tokens)-1 && opTok.index < end {
+		if oneToRightValid {
 			parsed, good := parsed[opTok.index+1]
 			if good {
 				newNode.Right = parsed.node
@@ -299,10 +301,10 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 
 		finalNode = newNode
 
-		if opTok.index > 0 {
+		if oneToLeftValid {
 			parsed[leftI] = parsedNode{newNode, rightI}
 		}
-		if opTok.index < len(tokens)-1 {
+		if oneToRightValid {
 			parsed[rightI] = parsedNode{newNode, leftI}
 		}
 	}
