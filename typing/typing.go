@@ -2,6 +2,7 @@ package typing
 
 import (
 	"errors"
+	"fmt"
 	"github.com/XrXr/alang/frontend"
 	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
@@ -174,6 +175,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		l, r := resolve(opt)
 		if _, lIsPointer := l.(Pointer); !(lIsPointer && r.IsNumber()) {
 			if !(l.IsNumber() && r.IsNumber()) {
+				fmt.Printf("%#v %#v\n", l, r)
 				return errors.New("add not available for these types")
 			}
 		}
@@ -208,6 +210,7 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 
 	for i, opt := range toCheck.Opts {
 		_ = i
+
 		err := t.checkAndInferOpt(env, opt, typeTable)
 		if err != nil {
 			return nil, err

@@ -207,22 +207,22 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			if paren.open == start {
 				return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `this bracket doesn't make sense here`}
 			}
-			left, alreadyParsed := parsed[paren.open-1]
-			if !alreadyParsed {
-				if !tokenIsId(tokens[paren.open-1]) {
-					// I can't think of a situation where the left of the square bracket wouldn't already be parsed
-					return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `this bracket doesn't make sense here`}
-				}
-				left.node = parseToken(tokens[paren.open-1])
-				left.otherEnd = paren.open - 1
-			}
+			// left, alreadyParsed := parsed[paren.open-1]
+			// if !alreadyParsed {
+			// 	if !tokenIsId(tokens[paren.open-1]) {
+			// 		// I can't think of a situation where the left of the square bracket wouldn't already be parsed
+			// 		return nil, &ParseError{0, 0 /* tokenToCol(i)*/, `this bracket doesn't make sense here`}
+			// 	}
+			// 	left.node = parseToken(tokens[paren.open-1])
+			// 	left.otherEnd = paren.open - 1
+			// }
 			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
 			if err != nil {
 				return nil, err
 			}
-			arrayAccessNode := ExprNode{ArrayAccess, left.node, node}
-			parsed[left.otherEnd] = parsedNode{arrayAccessNode, paren.end}
-			parsed[paren.end] = parsedNode{arrayAccessNode, left.otherEnd}
+			// arrayAccessNode := ExprNode{ArrayAccess, left.node, node}
+			parsed[paren.open] = parsedNode{node, paren.end}
+			parsed[paren.end] = parsedNode{node, paren.open}
 		} else if paren.kind == round && paren.open-1 >= start && tokenIsId(tokens[paren.open-1]) {
 			// it's a call or a proc expression
 			var node interface{}
@@ -275,7 +275,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 	i := start
 	for i < end {
 		parsed, found := parsed[i]
-		if found {
+		if found && tokens[i] != "[" {
 			i = parsed.otherEnd + 1
 			continue
 		}
@@ -293,12 +293,18 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 			Dump(tokens[start:end])
 			panic("parseExprUnit() shouldn't see any open parenthesis tokens")
 		}
+		if tok == "[" {
+			if !found {
+				panic("stuff inside [] should always be parsed already")
+			}
+			i = parsed.otherEnd + 1
+		}
 	}
 
 	if len(ops) == 0 {
 		parsed, found := parsed[start]
 		if !found || parsed.otherEnd != end-1 {
-			fmt.Printf("%v\n", tokens)
+			fmt.Printf("%v, %v\n", tokens, tokens[start:end])
 			return nil, &ParseError{start, end, "Expected an operator"}
 		}
 		return parsed.node, nil
@@ -330,7 +336,14 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 			}
 		}
 		if oneToRightValid {
-			parsed, good := parsed[opTok.index+1]
+			rightIndex := opTok.index + 1
+			if opTok.op == ArrayAccess {
+				rightIndex = opTok.index
+			}
+			parsed, good := parsed[rightIndex]
+			if opTok.op == ArrayAccess && !good {
+				panic("things inside [] should be parsed")
+			}
 			if good {
 				newNode.Right = parsed.node
 				rightI = parsed.otherEnd

@@ -3,6 +3,7 @@ package parsing
 var tokToOp = map[string]Operator{
 	"::": ConstDeclare,
 	"..": Range,
+	"[":  ArrayAccess,
 	":=": Declare,
 	"<":  Lesser,
 	"<=": LesserEqual,
@@ -21,9 +22,9 @@ var tokToOp = map[string]Operator{
 
 var precedence = map[Operator]int{
 	Dot:          0,
+	ArrayAccess:  0,
 	Dereference:  5,
 	AddressOf:    5,
-	ArrayAccess:  0,
 	Star:         10,
 	Divide:       10,
 	Plus:         20,
@@ -32,7 +33,7 @@ var precedence = map[Operator]int{
 	LesserEqual:  30,
 	Greater:      30,
 	GreaterEqual: 30,
-	DoubleEqual:  90,
+	DoubleEqual:  30,
 	Range:        90,
 	Assign:       100,
 	Declare:      100,

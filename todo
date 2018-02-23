@@ -10,7 +10,7 @@
 
  √ refactor ir for better pruning (no more type switching) @done (18-02-19 13:48)
  √ support types of different sizes. Right now pointers to u8 are broken for example @done (18-02-22 20:47)
- □ proper [] operatator
+ √ proper [] operatator @done (18-02-23 13:37)
  □ tokenizer should break up spaces better. Search for todo in parse_expression.go
  □ type casting
  □ return values

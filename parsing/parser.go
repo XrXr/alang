@@ -67,6 +67,7 @@ func (p *Parser) processLine(line string) error {
 	} else {
 		n, err = ParseExpr(tokens)
 	}
+	// Dump(n)
 	if err != nil {
 		return err
 	}
