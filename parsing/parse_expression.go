@@ -410,7 +410,6 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 		if tokIsComma || j == paren.end {
 			var decl Declaration
 			if j-leftBoundary == 1 {
-				//TODO this should be done in the tokenizer
 				last := tokens[j-1]
 				spaceIdx := strings.IndexRune(last, ' ')
 				if spaceIdx == -1 {

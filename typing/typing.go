@@ -113,7 +113,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			panic("type should be resolved at this point")
 		}
 		typeForData := typeTable[opt.Right()]
-		if varType == nil {
+		if typeForData == nil {
 			panic("type should be resolved at this point")
 		}
 		pointer, varIsPointer := varType.(Pointer)
@@ -210,6 +210,7 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 
 	for i, opt := range toCheck.Opts {
 		_ = i
+		println(i)
 
 		err := t.checkAndInferOpt(env, opt, typeTable)
 		if err != nil {

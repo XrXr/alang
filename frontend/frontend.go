@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
+	"sort"
 	"strconv"
 )
 
@@ -407,7 +408,14 @@ func Prune(block *OptBlock) {
 		if opt.Type > ir.BinaryInstructions {
 			recordUsage(opt.Oprand2, idx)
 		}
+		if opt.Type == ir.Call {
+			for _, vn := range opt.Extra.(ir.CallExtra).ArgVars {
+				recordUsage(vn, idx)
+			}
+		}
 	}
+	// keep track of all the uneeded assigns
+	hollow := make([]int, 0, len(block.Opts)/2)
 	for _, log := range usageLog {
 		if log.count != 2 {
 			continue
@@ -416,19 +424,87 @@ func Prune(block *OptBlock) {
 		genesis := block.Opts[log.fristUseIdx]
 		if genesis.Type == ir.Assign {
 			switch block.Opts[log.secondUseIdx].Type {
-			case ir.LoadStructMember:
+			case ir.LoadStructMember, ir.StructMemberPtr, ir.ArrayToPointer, ir.Assign:
 				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
-			case ir.StructMemberPtr:
-				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
-			case ir.ArrayToPointer:
-				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
+				if block.Opts[log.secondUseIdx].Type == ir.Assign {
+					hollow = append(hollow, log.secondUseIdx)
+				}
+			case ir.Call:
+				extra := block.Opts[log.secondUseIdx].Extra.(ir.CallExtra)
+				for i, vn := range extra.ArgVars {
+					if vn == genesis.Left() {
+						extra.ArgVars[i] = genesis.Right()
+					}
+				}
+				block.Opts[log.secondUseIdx].Extra = extra
 			}
 		}
 	}
+	pushDist := 0
+	for i, j := 0, 0; i < len(block.Opts); i++ {
+		if pushDist > 0 {
+			block.Opts[i-pushDist] = block.Opts[i]
+		}
+		if j < len(hollow) && hollow[j] == i {
+			pushDist++
+			j++
+		}
+	}
+	block.Opts = block.Opts[0 : len(block.Opts)-len(hollow)]
+
+	// renumber all the vars
+
+	allVarNums := make([]int, 0, block.NumberOfVars)
+	for _, opt := range block.Opts {
+		if opt.Oprand1 >= block.NumberOfArgs {
+			allVarNums = append(allVarNums, opt.Oprand1)
+		}
+		if opt.Oprand2 >= block.NumberOfArgs {
+			allVarNums = append(allVarNums, opt.Oprand2)
+		}
+	}
+	sort.Ints(allVarNums)
+	allVarNums = dedupSorted(allVarNums)
+	parsing.Dump(allVarNums)
+	vnMap := make([]int, block.NumberOfVars)
+	for idx, vn := range allVarNums {
+		vnMap[vn] = idx + block.NumberOfArgs
+	}
+	for i := 0; i < block.NumberOfArgs; i++ {
+		vnMap[i] = i
+	}
+	for i, opt := range block.Opts {
+		opt.Oprand1 = vnMap[opt.Oprand1]
+		opt.Oprand2 = vnMap[opt.Oprand2]
+		if opt.Type == ir.Call {
+			extra := opt.Extra.(ir.CallExtra)
+			for i, vn := range extra.ArgVars {
+				extra.ArgVars[i] = vnMap[vn]
+			}
+			opt.Extra = extra
+		}
+		block.Opts[i] = opt
+	}
+
+	block.NumberOfVars = len(allVarNums) + block.NumberOfArgs
 }
 
 func labelInst(name string) ir.Inst {
 	label := ir.Inst{Type: ir.Label}
 	label.Extra = name
 	return label
+}
+
+func dedupSorted(slice []int) []int {
+	pushDist := 0
+	for i := 1; i < len(slice); i++ {
+		if slice[i] == slice[i-1] {
+			pushDist++
+			continue
+		}
+		if pushDist > 0 {
+			slice[i-pushDist] = slice[i]
+		}
+	}
+	return slice[0 : len(slice)-pushDist]
 }
