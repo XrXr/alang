@@ -413,6 +413,9 @@ func Prune(block *OptBlock) {
 				recordUsage(vn, idx)
 			}
 		}
+		if opt.Type == ir.Compare {
+			recordUsage(opt.Extra.(ir.CompareExtra).Out, idx)
+		}
 	}
 	// keep track of all the uneeded assigns
 	hollow := make([]int, 0, len(block.Opts)/2)
@@ -422,9 +425,12 @@ func Prune(block *OptBlock) {
 		}
 
 		genesis := block.Opts[log.fristUseIdx]
+		if genesis.Type == ir.AssignImm && block.Opts[log.secondUseIdx].Type == ir.Assign {
+			hollow = append(hollow, log.secondUseIdx)
+		}
 		if genesis.Type == ir.Assign {
 			switch block.Opts[log.secondUseIdx].Type {
-			case ir.LoadStructMember, ir.StructMemberPtr, ir.ArrayToPointer, ir.Assign:
+			default:
 				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
 				if block.Opts[log.secondUseIdx].Type == ir.Assign {
 					hollow = append(hollow, log.secondUseIdx)
@@ -442,12 +448,13 @@ func Prune(block *OptBlock) {
 	}
 	pushDist := 0
 	for i, j := 0, 0; i < len(block.Opts); i++ {
-		if pushDist > 0 {
-			block.Opts[i-pushDist] = block.Opts[i]
-		}
 		if j < len(hollow) && hollow[j] == i {
 			pushDist++
 			j++
+			continue
+		}
+		if pushDist > 0 {
+			block.Opts[i-pushDist] = block.Opts[i]
 		}
 	}
 	block.Opts = block.Opts[0 : len(block.Opts)-len(hollow)]
@@ -481,6 +488,11 @@ func Prune(block *OptBlock) {
 			for i, vn := range extra.ArgVars {
 				extra.ArgVars[i] = vnMap[vn]
 			}
+			opt.Extra = extra
+		}
+		if opt.Type == ir.Compare {
+			extra := opt.Extra.(ir.CompareExtra)
+			extra.Out = vnMap[extra.Out]
 			opt.Extra = extra
 		}
 		block.Opts[i] = opt

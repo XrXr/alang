@@ -1,5 +1,5 @@
 main :: proc () {
-    a := 23
+    a := 0
     b := a
     c := b
     d := c

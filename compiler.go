@@ -571,6 +571,7 @@ func main() {
 
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
+		// frontend.DumpIr(ir)
 		frontend.Prune(&ir)
 		frontend.DumpIr(ir)
 		// parsing.Dump(env)
