@@ -31,7 +31,7 @@ func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []in
 	}
 }
 
-func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *frontend.LabelIdGen, block frontend.OptBlock, typeTable []typing.TypeRecord, env *typing.EnvRecord) {
+func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *frontend.LabelIdGen, block frontend.OptBlock, typeTable []typing.TypeRecord, env *typing.EnvRecord, typer *typing.Typer) {
 	addLine := func(line string) {
 		io.WriteString(out, line)
 	}
@@ -177,14 +177,14 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			if _, isStruct := env.Types[parsing.IdName(extra.Name)]; isStruct {
 				// TODO: code to zero the members
 			} else {
-				// TODO: this can done once
+				// TODO: this can be done once
 				totalArgSize := 0
 				for _, arg := range extra.ArgVars {
 					totalArgSize += typeTable[arg].Size()
 				}
 
-				procReocrd := env.Procs[parsing.IdName(extra.Name)]
-				switch procReocrd.CallingConvention {
+				procRecord := env.Procs[parsing.IdName(extra.Name)]
+				switch procRecord.CallingConvention {
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tsub rsp, %d\n", totalArgSize))
 					offset := 0
@@ -210,7 +210,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 					}
 				}
 				addLine(fmt.Sprintf("\tcall proc_%s\n", extra.Name))
-				switch procReocrd.CallingConvention {
+				switch procRecord.CallingConvention {
 				case typing.Register:
 					switch typeTable[opt.Oprand1].Size() {
 					case 1:
@@ -222,6 +222,14 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 					}
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tadd rsp, %d\n", totalArgSize))
+					// TODO: temporary
+					if typeTable[opt.Oprand1].Size() == 8 {
+						returnType := procRecord.Return
+						addLine(fmt.Sprintf("\tmov rbx, %d\n", returnType.Size()))
+						addLine("\tmov rcx, rbp\n")
+						addLine(fmt.Sprintf("\tsub rcx, %d\n", varOffset[opt.Oprand1]))
+						addLine("\tcall _intrinsic_memcpy\n")
+					}
 				}
 			}
 		case ir.Jump:
@@ -362,16 +370,23 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			default:
 				panic("Type checker didn't do its job")
 			}
+		case ir.Return:
+			returnExtra := opt.Extra.(ir.ReturnExtra)
+			addLine("\tmov rax, rbp\n")
+			addLine(fmt.Sprintf("\tsub rax, %d\n", varOffset[returnExtra.Values[0]]))
+			addLine("\tmov rsp, rbp\n")
+			addLine("\tpop rbp\n")
+			addLine("\tret\n")
 		default:
 			panic(opt)
 		}
 	}
 }
 
-func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord) {
+func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) {
 	var staticDataBuf bytes.Buffer
 	for _, block := range opts {
-		backendForOptBlock(out, &staticDataBuf, labelGen, block, typeTable, globalEnv)
+		backendForOptBlock(out, &staticDataBuf, labelGen, block, typeTable, globalEnv, typer)
 	}
 	io.WriteString(out, "; ---static data segment start---\n")
 	staticDataBuf.WriteTo(out)
@@ -585,7 +600,7 @@ func main() {
 				panic("Bug in typer -- not all vars have types!")
 			}
 		}
-		backend(out, &labelGen, []frontend.OptBlock{ir}, typeTable, env)
+		backend(out, &labelGen, []frontend.OptBlock{ir}, typeTable, env, typer)
 	}
 	writeDecimalTable(out)
 

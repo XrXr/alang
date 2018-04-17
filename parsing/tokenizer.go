@@ -36,6 +36,7 @@ var bounderies = [...]string{
 	"]",
 	"var",
 	"for",
+	"return",
 	"{",
 	"}",
 	"struct",

@@ -28,7 +28,6 @@ const (
 	Increment
 	Decrement
 	JumpIfFalse
-	Call // only one variable (out) is in the body
 
 	BinaryInstructions
 
@@ -44,6 +43,11 @@ const (
 	StructMemberPtr
 	LoadStructMember
 	Compare
+
+	VariadicInstructions // TODO: this should be below zero var instruction
+
+	Call
+	Return
 )
 
 func (i *Inst) Left() int {
@@ -89,8 +93,13 @@ func MakeBinaryInstWithAux(instType InstType, one int, two int, extra interface{
 }
 
 type CallExtra struct {
-	Name    string
-	ArgVars []int
+	Name     string
+	ArgVars  []int
+	ReturnTo []int
+}
+
+type ReturnExtra struct {
+	Values []int
 }
 
 const (

@@ -33,6 +33,21 @@ proc_puts:
 	mov rax, 1
 	mov rdi, 1
 	syscall
+	ret
+
+; rax is source, rbx is size, rcx is dest
+; only works if the size is a multiple of 8 for now
+_intrinsic_memcpy:
+	mov rdx, rax
+	add rdx, rbx
+_intrinsic_memcpy_loop:
+	cmp rax, rdx
+	ja _intrinsic_memcpy_end
+	mov r8, [rax]
+	mov [rcx], r8
+	add rcx, 8
+	add rax, 8
+_intrinsic_memcpy_end:
 	ret`)
 }
 

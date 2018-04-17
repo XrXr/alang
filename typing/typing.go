@@ -25,7 +25,7 @@ type EnvRecord struct {
 }
 
 type Typer struct {
-	builtins []TypeRecord
+	Builtins []TypeRecord
 }
 
 func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRecord) error {
@@ -106,7 +106,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				return errors.New("operands must be numbers")
 			}
 		}
-		typeTable[extra.Out] = t.builtins[boolIdx]
+		typeTable[extra.Out] = t.Builtins[BoolIdx]
 	case ir.IndirectWrite:
 		varType := typeTable[opt.Left()]
 		if varType == nil {
@@ -121,7 +121,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			panic("That's not a pointer what are you doing")
 		}
 		if pointer.ToWhat != typeForData {
-			if !(pointer.ToWhat == t.builtins[u8Idx] && typeForData == t.builtins[intIdx]) {
+			if !(pointer.ToWhat == t.Builtins[U8Idx] && typeForData == t.Builtins[IntIdx]) {
 				parsing.Dump(pointer.ToWhat)
 				parsing.Dump(typeForData)
 				panic("Type mismatch")
@@ -223,11 +223,11 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	switch val := val.(type) {
 	case int64, uint64, int:
-		return t.builtins[intIdx]
+		return t.Builtins[IntIdx]
 	case string:
-		return t.builtins[stringIdx]
+		return t.Builtins[StringIdx]
 	case bool:
-		return t.builtins[boolIdx]
+		return t.Builtins[BoolIdx]
 	case parsing.TypeDecl:
 		return t.ConstructTypeRecord(val)
 	}
@@ -238,15 +238,15 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 	switch name {
 	case "void":
-		return t.builtins[voidIdx]
+		return t.Builtins[VoidIdx]
 	case "string":
-		return t.builtins[stringIdx]
+		return t.Builtins[StringIdx]
 	case "int":
-		return t.builtins[intIdx]
+		return t.Builtins[IntIdx]
 	case "bool":
-		return t.builtins[boolIdx]
+		return t.Builtins[BoolIdx]
 	case "u8":
-		return t.builtins[u8Idx]
+		return t.Builtins[U8Idx]
 	}
 	return nil
 }
@@ -284,16 +284,16 @@ func (t *Typer) ConstructTypeRecord(decl parsing.TypeDecl) TypeRecord {
 }
 
 const (
-	voidIdx int = iota
-	stringIdx
-	intIdx
-	boolIdx
-	u8Idx
+	VoidIdx int = iota
+	StringIdx
+	IntIdx
+	BoolIdx
+	U8Idx
 )
 
 func NewTyper() *Typer {
 	var typer Typer
-	typer.builtins = []TypeRecord{
+	typer.Builtins = []TypeRecord{
 		Void{},
 		String{},
 		Int{},
@@ -304,7 +304,7 @@ func NewTyper() *Typer {
 }
 
 func NewEnvRecord(typer *Typer) *EnvRecord {
-	boolType := typer.builtins[boolIdx]
+	boolType := typer.Builtins[BoolIdx]
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
@@ -312,7 +312,7 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 			"puts":    {Return: boolType, CallingConvention: Register},
 			"testbit": {Return: boolType, CallingConvention: Register},
 			"binToDecTable": {
-				Return:            BuildPointer(typer.builtins[intIdx], 1),
+				Return:            BuildPointer(typer.Builtins[IntIdx], 1),
 				CallingConvention: Register,
 			},
 		},

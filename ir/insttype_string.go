@@ -4,9 +4,9 @@ package ir
 
 import "fmt"
 
-const _InstType_name = "ZeroVarInstructionsTranscludeJumpStartProcEndProcLabelUnaryInstructionsAssignImmIncrementDecrementJumpIfFalseCallBinaryInstructionsSubAssignAddMultDivTakeAddressArrayToPointerIndirectWriteIndirectLoadStructMemberPtrLoadStructMemberCompare"
+const _InstType_name = "ZeroVarInstructionsTranscludeJumpStartProcEndProcLabelUnaryInstructionsAssignImmIncrementDecrementJumpIfFalseBinaryInstructionsSubAssignAddMultDivTakeAddressArrayToPointerIndirectWriteIndirectLoadStructMemberPtrLoadStructMemberCompareVariadicInstructionsCallReturn"
 
-var _InstType_index = [...]uint8{0, 19, 29, 33, 42, 49, 54, 71, 80, 89, 98, 109, 113, 131, 134, 140, 143, 147, 150, 161, 175, 188, 200, 215, 231, 238}
+var _InstType_index = [...]uint16{0, 19, 29, 33, 42, 49, 54, 71, 80, 89, 98, 109, 127, 130, 136, 139, 143, 146, 157, 171, 184, 196, 211, 227, 234, 254, 258, 264}
 
 func (i InstType) String() string {
 	if i < 0 || i >= InstType(len(_InstType_index)-1) {

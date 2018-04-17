@@ -102,6 +102,10 @@ type Loop struct {
 	Expression interface{}
 }
 
+type ReturnNode struct {
+	Values []interface{}
+}
+
 type ElseNode struct{}
 
 type BlockEnd int

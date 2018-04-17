@@ -77,6 +77,14 @@ func ParseExpr(tokens []string) (interface{}, error) {
 		return IfNode{
 			Condition: parsed,
 		}, nil
+	} else if tokens[0] == "return" {
+		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens))
+		if err != nil {
+			return nil, err
+		}
+		return ReturnNode{
+			Values: []interface{}{parsed},
+		}, nil
 	} else if tokens[0] == "for" {
 		if tokens[len(tokens)-1] != "{" {
 			return nil, &ParseError{0, 0, "loop header must end in {"}

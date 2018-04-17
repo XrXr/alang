@@ -183,6 +183,19 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			gen.addOpt(labelInst(loopEnd))
 		case parsing.BlockEnd:
 			return i
+		case parsing.ReturnNode:
+			var returnValues []int
+			for i := 0; i < len(node.Values); i++ {
+				returnValues = append(returnValues, scope.newVar())
+			}
+			for i, valueExpr := range node.Values {
+				parsing.Dump(valueExpr)
+				err := genExpressionRhs(scope, returnValues[i], valueExpr)
+				if err != nil {
+					panic(err)
+				}
+			}
+			gen.addOpt(ir.Inst{Type: ir.Return, Extra: ir.ReturnExtra{returnValues}})
 		default:
 			err := genExpressionRhs(scope, scope.newVar(), node)
 			if err != nil {
@@ -413,6 +426,11 @@ func Prune(block *OptBlock) {
 				recordUsage(vn, idx)
 			}
 		}
+		if opt.Type == ir.Return {
+			for _, vn := range opt.Extra.(ir.ReturnExtra).Values {
+				recordUsage(vn, idx)
+			}
+		}
 		if opt.Type == ir.Compare {
 			recordUsage(opt.Extra.(ir.CompareExtra).Out, idx)
 		}
@@ -440,6 +458,14 @@ func Prune(block *OptBlock) {
 				for i, vn := range extra.ArgVars {
 					if vn == genesis.Left() {
 						extra.ArgVars[i] = genesis.Right()
+					}
+				}
+				block.Opts[log.secondUseIdx].Extra = extra
+			case ir.Return:
+				extra := block.Opts[log.secondUseIdx].Extra.(ir.ReturnExtra)
+				for i, vn := range extra.Values {
+					if vn == genesis.Left() {
+						extra.Values[i] = genesis.Right()
 					}
 				}
 				block.Opts[log.secondUseIdx].Extra = extra
