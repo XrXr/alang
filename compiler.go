@@ -56,7 +56,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 		return fmt.Sprintf("qword [rbp-%d]", varOffset[varNum])
 	}
 	wordVarToStack := func(varNum int) string {
-		return fmt.Sprintf("word [rbp-%d]", varOffset[varNum])
+		return fmt.Sprintf("dword [rbp-%d]", varOffset[varNum])
 	}
 	byteVarToStack := func(varNum int) string {
 		return fmt.Sprintf("byte [rbp-%d]", varOffset[varNum])
@@ -222,8 +222,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 					}
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tadd rsp, %d\n", totalArgSize))
-					// TODO: temporary
-					if typeTable[opt.Oprand1].Size() == 8 {
+					if typeTable[opt.Oprand1].Size() > 0 {
 						returnType := procRecord.Return
 						addLine(fmt.Sprintf("\tmov rbx, %d\n", returnType.Size()))
 						addLine("\tmov rcx, rbp\n")
@@ -586,7 +585,7 @@ func main() {
 
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
-		// frontend.DumpIr(ir)
+		frontend.DumpIr(ir)
 		frontend.Prune(&ir)
 		frontend.DumpIr(ir)
 		// parsing.Dump(env)

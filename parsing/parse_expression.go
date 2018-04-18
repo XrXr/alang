@@ -406,6 +406,16 @@ func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 }
 
 func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo) (*ProcNode, int, error) {
+	blockStart := -1
+	for i := paren.end + 1; i < len(tokens); i++ {
+		if tokens[i] == "{" {
+			blockStart = i
+			break
+		}
+	}
+	if blockStart == -1 {
+		return nil, 0, &ParseError{0, 0, "Proc expressions must have a block"}
+	}
 	i := paren.open + 1
 	var args []Declaration
 	leftBoundary := i
@@ -440,26 +450,20 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 			leftBoundary = j + 1
 		}
 	}
-	blockStart := paren.end + 1
-	returnType := IdName("void")
+	returnType := TypeDecl{Base: IdName("void")}
 	if paren.end+1 < len(tokens) && tokens[paren.end+1] == "->" {
 		if paren.end+2 >= len(tokens) {
 			return nil, 0, &ParseError{0, 0, "Expected a type"}
 		}
-		returnType = IdName(tokens[paren.end+2])
-		blockStart = paren.end + 3
+		var err error
+		returnType, err = parseTypeDecl(tokens[paren.end+2 : blockStart])
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
-	if blockStart < len(tokens) && tokens[blockStart] != "{" {
-		col := blockStart
-		if blockStart >= len(tokens) {
-			col = len(tokens) - 1
-		}
-		// TODO translate token idx to col
-		return nil, 0, &ParseError{0, col, "Expected a block"}
-	}
 	return &ProcNode{
-		ProcDecl: ProcDecl{Return: TypeDecl{Base: returnType}, Args: args}, Body: Block{}}, blockStart, nil
+		ProcDecl: ProcDecl{Return: returnType, Args: args}, Body: Block{}}, blockStart, nil
 }
 
 func parseToken(s string) interface{} {

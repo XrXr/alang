@@ -402,12 +402,12 @@ func boolStrToBool(s string) bool {
 func Prune(block *OptBlock) {
 	usageLog := make([]struct {
 		count        int
-		fristUseIdx  int
+		firstUseIdx  int
 		secondUseIdx int
 	}, block.NumberOfVars)
 	recordUsage := func(varNum int, optIdx int) {
 		if usageLog[varNum].count == 0 {
-			usageLog[varNum].fristUseIdx = optIdx
+			usageLog[varNum].firstUseIdx = optIdx
 		}
 		if usageLog[varNum].count == 1 {
 			usageLog[varNum].secondUseIdx = optIdx
@@ -437,21 +437,32 @@ func Prune(block *OptBlock) {
 	}
 	// keep track of all the uneeded assigns
 	hollow := make([]int, 0, len(block.Opts)/2)
+	sort.Slice(usageLog, func(i int, j int) bool {
+		return usageLog[i].secondUseIdx < usageLog[j].secondUseIdx
+	})
 	for _, log := range usageLog {
 		if log.count != 2 {
 			continue
 		}
+		parsing.Dump(log)
 
-		genesis := block.Opts[log.fristUseIdx]
+		genesis := block.Opts[log.firstUseIdx]
 		if genesis.Type == ir.AssignImm && block.Opts[log.secondUseIdx].Type == ir.Assign {
 			hollow = append(hollow, log.secondUseIdx)
 		}
 		if genesis.Type == ir.Assign {
-			switch block.Opts[log.secondUseIdx].Type {
+			hollow = append(hollow, log.firstUseIdx)
+
+			second := block.Opts[log.secondUseIdx]
+			switch second.Type {
 			default:
 				block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
-				if block.Opts[log.secondUseIdx].Type == ir.Assign {
-					hollow = append(hollow, log.secondUseIdx)
+				if second.Type == ir.Compare {
+					extra := second.Extra.(ir.CompareExtra)
+					if extra.Out == genesis.Left() {
+						extra.Out = genesis.Right()
+						block.Opts[log.secondUseIdx].Extra = extra
+					}
 				}
 			case ir.Call:
 				extra := block.Opts[log.secondUseIdx].Extra.(ir.CallExtra)
@@ -472,6 +483,8 @@ func Prune(block *OptBlock) {
 			}
 		}
 	}
+	sort.Ints(hollow)
+	hollow = dedupSorted(hollow)
 	pushDist := 0
 	for i, j := 0, 0; i < len(block.Opts); i++ {
 		if j < len(hollow) && hollow[j] == i {
@@ -495,10 +508,31 @@ func Prune(block *OptBlock) {
 		if opt.Oprand2 >= block.NumberOfArgs {
 			allVarNums = append(allVarNums, opt.Oprand2)
 		}
+		if opt.Type == ir.Call {
+			allVarNums = append(allVarNums, opt.Extra.(ir.CallExtra).ArgVars...)
+		}
+		if opt.Type == ir.Return {
+			allVarNums = append(allVarNums, opt.Extra.(ir.ReturnExtra).Values...)
+		}
+		if opt.Type == ir.Compare {
+			allVarNums = append(allVarNums, opt.Extra.(ir.CompareExtra).Out)
+		}
 	}
 	sort.Ints(allVarNums)
 	allVarNums = dedupSorted(allVarNums)
-	parsing.Dump(allVarNums)
+	start := len(allVarNums)
+	for i, vn := range allVarNums {
+		if vn >= block.NumberOfArgs {
+			start = i
+			break
+		}
+	}
+	if start < len(allVarNums) {
+		allVarNums = allVarNums[start:]
+	} else {
+		allVarNums = []int{}
+	}
+
 	vnMap := make([]int, block.NumberOfVars)
 	for idx, vn := range allVarNums {
 		vnMap[vn] = idx + block.NumberOfArgs
@@ -519,6 +553,13 @@ func Prune(block *OptBlock) {
 		if opt.Type == ir.Compare {
 			extra := opt.Extra.(ir.CompareExtra)
 			extra.Out = vnMap[extra.Out]
+			opt.Extra = extra
+		}
+		if opt.Type == ir.Return {
+			extra := opt.Extra.(ir.ReturnExtra)
+			for i, vn := range extra.Values {
+				extra.Values[i] = vnMap[vn]
+			}
 			opt.Extra = extra
 		}
 		block.Opts[i] = opt

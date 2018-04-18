@@ -38,16 +38,49 @@ proc_puts:
 ; rax is source, rbx is size, rcx is dest
 ; only works if the size is a multiple of 8 for now
 _intrinsic_memcpy:
-	mov rdx, rax
-	add rdx, rbx
-_intrinsic_memcpy_loop:
-	cmp rax, rdx
-	ja _intrinsic_memcpy_end
-	mov r8, [rax]
-	mov [rcx], r8
-	add rcx, 8
-	add rax, 8
-_intrinsic_memcpy_end:
+	mov r8, rax
+	mov r9, rbx
+	mov r10, rcx
+
+	mov rax, rbx
+	xor rdx, rdx
+	mov rcx, 8
+	div rcx
+.8loop:
+	cmp rax, 0
+	jz .8loopend
+	mov r11, qword [r8]
+	mov qword [r10], r11
+	add r8, 8
+	add r10, 8
+	dec rax
+	jmp .8loop
+.8loopend:
+	mov rax, rdx
+	xor rdx, rdx
+	mov rcx, 4
+	div rcx
+.4loop:
+	cmp rax, 0
+	jz .4loopend
+	mov ebx, dword [r8]
+	mov dword [r10], ebx
+	add r8, 4
+	add r10, 4
+	dec rax
+	jmp .4loop
+.4loopend:
+	mov rax, rdx
+.byteloop:
+	cmp rax, 0
+	jz .byteloopend
+	mov bl, byte [r8]
+	mov byte [r10], bl
+	inc r8
+	inc r10
+	dec rax
+	jmp .byteloop
+.byteloopend:
 	ret`)
 }
 
