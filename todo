@@ -12,14 +12,15 @@
  √ support types of different sizes. Right now pointers to u8 are broken for example @done (18-02-22 20:47)
  √ proper [] operatator @done (18-02-23 13:37)
  x tokenizer should break up spaces better. Search for todo in parse_expression.go @cancelled (18-02-23 13:44)
+ √ can't loop and use var to access array @done (18-04-18 20:44)
  □ return values
- □ can't loop and use var to access array
+ □ continues/breaks
+ □ increment/decrement
  □ complex expressions like if (rettrue() && retfalse() == false)
  □ better typing for numbers. There is a hack in place for assigning an int to u8 atm
  □ the whole Unresolved type situation
    □ procs that take parameters which reference structs -- they are left as unresolved type for now
    □ can't have array of structs/array of pointer to structs in your struct
- □ continues/breaks
  □ better pruning
  □ error reporting
    □ parse errors: binary operators missing operands ("i++" parses atm)

@@ -6,6 +6,29 @@ main :: proc () {
     assertBool(arr[20])
     assertBool(arr[25])
     assertBool(arr[30])
+    // Sorry. We don't have logical operators yet.
+    for i := 0..30 {
+        if i != 2 {
+
+        }
+    }
+
+    // Sorry. We don't have logical operators yet.
+    for i := 0..30 {
+        if i != 2 {
+            if i != 10 {
+                if i != 20 {
+                    if i != 25 {
+                        if i != 30 {
+                            if arr[i] {
+                                puts("bad! Everything else should be false\n")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     a := foo(3) + bar()
     if a == 27 {

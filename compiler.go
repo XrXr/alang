@@ -52,6 +52,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			varOffset[i] = varOffset[i-1] + typeTable[i].Size()
 		}
 	}
+	// Take note that not everything uses these. Namely indirect read/write
 	qwordVarToStack := func(varNum int) string {
 		return fmt.Sprintf("qword [rbp-%d]", varOffset[varNum])
 	}
@@ -322,7 +323,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				prefix = "byte"
 				register = "bl"
 			case 4:
-				prefix = "word"
+				prefix = "dword"
 				register = "ebx"
 			case 8:
 				prefix = "qword"
@@ -331,8 +332,21 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine(fmt.Sprintf("\tmov %s [rax], %s\n", prefix, register))
 		case ir.IndirectLoad:
 			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-			addLine("\tmov rax, [rax]\n")
-			addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
+			var prefix string
+			var register string
+			switch typeTable[opt.In()].(typing.Pointer).ToWhat.Size() {
+			case 1:
+				prefix = "byte"
+				register = "al"
+			case 4:
+				prefix = "dword"
+				register = "eax"
+			case 8:
+				prefix = "qword"
+				register = "rax"
+			}
+			addLine(fmt.Sprintf("\tmov %s, %s [rax]\n", register, prefix))
+			addLine(fmt.Sprintf("\tmov %s [rbp-%d], %s\n", prefix, varOffset[opt.Out()], register))
 		case ir.StructMemberPtr:
 			baseType := typeTable[opt.In()]
 			switch baseType := baseType.(type) {
@@ -585,7 +599,7 @@ func main() {
 
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
-		frontend.DumpIr(ir)
+		// frontend.DumpIr(ir)
 		frontend.Prune(&ir)
 		frontend.DumpIr(ir)
 		// parsing.Dump(env)
