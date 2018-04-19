@@ -263,7 +263,7 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			return nil
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
 			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
-			parsing.LesserEqual, parsing.DoubleEqual, parsing.ArrayAccess:
+			parsing.LesserEqual, parsing.DoubleEqual, parsing.BangEqual, parsing.ArrayAccess:
 
 			leftDest := scope.newVar()
 			err := genExpressionRhs(scope, leftDest, n.Left)
@@ -298,6 +298,8 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.LesserOrEqual, Out: dest}))
 			case parsing.DoubleEqual:
 				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.AreEqual, Out: dest}))
+			case parsing.BangEqual:
+				gen.addOpt(ir.MakeBinaryInstWithAux(ir.Compare, leftDest, rightDest, ir.CompareExtra{How: ir.NotEqual, Out: dest}))
 			case parsing.ArrayAccess:
 				dataPointer := scope.newVar()
 				gen.addOpt(ir.MakeBinaryInstWithAux(ir.ArrayToPointer, leftDest, dataPointer, nil))

@@ -57,6 +57,7 @@ const (
 	Greater
 	GreaterEqual
 	DoubleEqual
+	BangEqual
 	ConstDeclare
 	Dereference
 	AddressOf

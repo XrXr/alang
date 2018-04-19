@@ -102,8 +102,11 @@ type ReturnExtra struct {
 	Values []int
 }
 
+//go:generate $GOPATH/bin/stringer -type=ComparisonMethod
+type ComparisonMethod int
+
 const (
-	Lesser int = iota
+	Lesser ComparisonMethod = iota
 	Greater
 	GreaterOrEqual
 	LesserOrEqual
@@ -112,6 +115,6 @@ const (
 )
 
 type CompareExtra struct {
-	How int
+	How ComparisonMethod
 	Out int
 }
