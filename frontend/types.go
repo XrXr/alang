@@ -47,13 +47,16 @@ type scope struct {
 	gen         *procGen
 	parentScope *scope
 	varTable    map[parsing.IdName]int
+	loopLabel   string
 }
 
 func (s *scope) inherit() *scope {
 	sub := scope{
 		gen:         s.gen,
 		parentScope: s,
-		varTable:    make(map[parsing.IdName]int)}
+		varTable:    make(map[parsing.IdName]int),
+		loopLabel:   s.loopLabel,
+	}
 	// #speed
 	return &sub
 }

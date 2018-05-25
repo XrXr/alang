@@ -109,6 +109,10 @@ type ReturnNode struct {
 
 type ElseNode struct{}
 
+type ContinueNode struct{}
+
+type BreakNode struct{}
+
 type BlockEnd int
 
 func (e *ParseError) Error() string {

@@ -107,8 +107,9 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			gen.addOpt(labelInst(elseLabel))
 		case parsing.Loop:
 			loopStart := labelGen.GenLabel("loop_%d")
-			loopEnd := labelGen.GenLabel("loopend_%d")
+			loopEnd := loopStart + "_loopEnd"
 			loopScope := scope.inherit()
+			loopScope.loopLabel = loopStart
 
 			var iterationVar int
 			var varUsed bool
@@ -166,23 +167,29 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				gen.addOpt(ir.MakeUnaryInstWithAux(ir.JumpIfFalse, condVar, loopEnd))
 			}
 
-			var genContinueCode func(gen *procGen)
-			if usingRangeExpr {
-				genContinueCode = func(gen *procGen) {
-					gen.addOpt(ir.MakeUnaryInstWithAux(ir.Increment, iterationVar, nil))
-					gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, loopStart))
-				}
-			} else {
-				genContinueCode = func(gen *procGen) {
-					gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, loopStart))
-				}
-			}
-
+			// loop body
 			i = genForProcSubSection(labelGen, order, loopScope, i)
-			genContinueCode(gen)
+			// continue code
+			gen.addOpt(labelInst(loopStart + "_loopContinue"))
+			if usingRangeExpr {
+				gen.addOpt(ir.MakeUnaryInstWithAux(ir.Increment, iterationVar, nil))
+				gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, loopStart))
+			} else {
+				gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, loopStart))
+			}
 			gen.addOpt(labelInst(loopEnd))
 		case parsing.BlockEnd:
 			return i
+		case parsing.ContinueNode:
+			if scope.loopLabel == "" {
+				panic("continue outside of a loop")
+			}
+			gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, scope.loopLabel+"_loopContinue"))
+		case parsing.BreakNode:
+			if scope.loopLabel == "" {
+				panic("break outside of a loop")
+			}
+			gen.addOpt(ir.MakeUnaryInstWithAux(ir.Jump, 0, scope.loopLabel+"_loopEnd"))
 		case parsing.ReturnNode:
 			var returnValues []int
 			for i := 0; i < len(node.Values); i++ {

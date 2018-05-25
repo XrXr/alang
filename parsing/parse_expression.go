@@ -107,6 +107,10 @@ func ParseExpr(tokens []string) (interface{}, error) {
 		return StructDeclare{Name: IdName(tokens[1])}, nil
 	} else if tokens[0] == "var" {
 		return parseDecl(tokens[1:])
+	} else if tokens[0] == "break" && len(tokens) == 1 {
+		return BreakNode{}, nil
+	} else if tokens[0] == "continue" && len(tokens) == 1 {
+		return ContinueNode{}, nil
 	}
 	for index, tok := range tokens {
 		op := tokToOp[tok]
