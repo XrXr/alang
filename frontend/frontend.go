@@ -16,6 +16,7 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 		varTable:    make(map[parsing.IdName]int),
 		parentScope: nil,
 	}
+	gen.labelGen = labelGen
 
 	// fmt.Printf("frontend: generating for %s\n", order.Name)
 	for i, arg := range order.ProcDecl.Args {
@@ -215,6 +216,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 
 func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 	gen := scope.gen
+	labelGen := gen.labelGen
 	switch n := node.(type) {
 	case parsing.Literal:
 		var value interface{}
@@ -268,6 +270,20 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectLoad, rightDest, dest, nil))
 			return nil
+		case parsing.LogicalAnd:
+			err := genExpressionRhs(scope, dest, n.Left)
+			if err != nil {
+				return err
+			}
+			end := labelGen.GenLabel("andEnd_%d")
+			gen.addOpt(ir.MakeUnaryInstWithAux(ir.JumpIfFalse, dest, end))
+			rightDest := scope.newVar()
+			err = genExpressionRhs(scope, rightDest, n.Right)
+			if err != nil {
+				return err
+			}
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.BoolAnd, dest, rightDest, nil))
+			gen.addOpt(labelInst(end))
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
 			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
 			parsing.LesserEqual, parsing.DoubleEqual, parsing.BangEqual, parsing.ArrayAccess:

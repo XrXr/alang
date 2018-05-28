@@ -43,6 +43,7 @@ const (
 	StructMemberPtr
 	LoadStructMember
 	Compare
+	BoolAnd
 
 	VariadicInstructions // TODO: this should be below zero var instruction
 

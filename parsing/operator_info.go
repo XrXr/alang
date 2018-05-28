@@ -19,6 +19,8 @@ var tokToOp = map[string]Operator{
 	"-":  Minus,
 	".":  Dot,
 	"&":  AddressOf,
+	"&&":  LogicalAnd,
+	"||":  LogicalOr,
 }
 
 var precedence = map[Operator]int{
@@ -36,6 +38,8 @@ var precedence = map[Operator]int{
 	GreaterEqual: 30,
 	DoubleEqual:  30,
 	BangEqual:    30,
+	LogicalAnd:   40,
+	LogicalOr:    40,
 	Range:        90,
 	Assign:       100,
 	Declare:      100,

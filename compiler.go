@@ -383,6 +383,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			default:
 				panic("Type checker didn't do its job")
 			}
+		case ir.BoolAnd:
+			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
+			addLine(fmt.Sprintf("\tand %s, al\n", byteVarToStack(opt.Left())))
 		case ir.Return:
 			returnExtra := opt.Extra.(ir.ReturnExtra)
 			addLine("\tmov rax, rbp\n")
@@ -573,12 +576,12 @@ func main() {
 				parentStruct.Members[string(typeDeclare.Name)] = newField
 			}
 		}
-		// fmt.Println("Line ", line)
 		if currentProc != nil {
 			for i := numNewEntries; i > 0; i-- {
 				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
+		// fmt.Println("Line ", line)
 		// fmt.Println("Gave: ")
 		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
 	}

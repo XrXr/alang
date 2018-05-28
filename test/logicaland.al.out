@@ -1,0 +1,7 @@
+basic 1
+basic 2
+shortcircuit 3
+tick 1
+tick 2
+tick 3, return false
+shortcircuit 4

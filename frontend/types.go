@@ -24,6 +24,7 @@ type procGen struct {
 	opts       []ir.Inst
 	nextVarNum int
 	rootScope  *scope
+	labelGen *LabelIdGen
 }
 
 func (p *procGen) addOpt(opts ...ir.Inst) {

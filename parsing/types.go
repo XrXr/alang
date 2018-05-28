@@ -58,6 +58,8 @@ const (
 	GreaterEqual
 	DoubleEqual
 	BangEqual
+	LogicalAnd
+	LogicalOr
 	ConstDeclare
 	Dereference
 	AddressOf
