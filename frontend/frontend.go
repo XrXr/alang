@@ -284,6 +284,20 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			gen.addOpt(ir.MakeBinaryInstWithAux(ir.BoolAnd, dest, rightDest, nil))
 			gen.addOpt(labelInst(end))
+		case parsing.LogicalOr:
+			err := genExpressionRhs(scope, dest, n.Left)
+			if err != nil {
+				return err
+			}
+			end := labelGen.GenLabel("orEnd_%d")
+			gen.addOpt(ir.MakeUnaryInstWithAux(ir.JumpIfTrue, dest, end))
+			rightDest := scope.newVar()
+			err = genExpressionRhs(scope, rightDest, n.Right)
+			if err != nil {
+				return err
+			}
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.BoolOr, dest, rightDest, nil))
+			gen.addOpt(labelInst(end))
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
 			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
 			parsing.LesserEqual, parsing.DoubleEqual, parsing.BangEqual, parsing.ArrayAccess:

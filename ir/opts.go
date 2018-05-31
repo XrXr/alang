@@ -28,6 +28,7 @@ const (
 	Increment
 	Decrement
 	JumpIfFalse
+	JumpIfTrue
 
 	BinaryInstructions
 
@@ -44,6 +45,7 @@ const (
 	LoadStructMember
 	Compare
 	BoolAnd
+	BoolOr
 
 	VariadicInstructions // TODO: this should be below zero var instruction
 

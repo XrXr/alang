@@ -173,6 +173,10 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
 			addLine("\tcmp al, 0\n")
 			addLine(fmt.Sprintf("\tjz %s\n", opt.Extra.(string)))
+		case ir.JumpIfTrue:
+			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
+			addLine("\tcmp al, 0\n")
+			addLine(fmt.Sprintf("\tjnz %s\n", opt.Extra.(string)))
 		case ir.Call:
 			extra := opt.Extra.(ir.CallExtra)
 			if _, isStruct := env.Types[parsing.IdName(extra.Name)]; isStruct {
@@ -386,6 +390,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 		case ir.BoolAnd:
 			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
 			addLine(fmt.Sprintf("\tand %s, al\n", byteVarToStack(opt.Left())))
+		case ir.BoolOr:
+			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
+			addLine(fmt.Sprintf("\tor %s, al\n", byteVarToStack(opt.Left())))
 		case ir.Return:
 			returnExtra := opt.Extra.(ir.ReturnExtra)
 			addLine("\tmov rax, rbp\n")

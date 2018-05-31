@@ -189,6 +189,13 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if !(l.IsNumber() && r.IsNumber()) {
 			return errors.New("operands must be numbers")
 		}
+	case ir.BoolAnd, ir.BoolOr:
+		l, r := resolve(opt)
+		_, lIsBool := l.(Boolean)
+		_, rIsBool := r.(Boolean)
+		if !lIsBool || !rIsBool {
+			return errors.New("operands must be booleans")
+		}
 	case ir.Div:
 		l, r := resolve(opt)
 		if !(l.IsNumber() && r.IsNumber()) {
