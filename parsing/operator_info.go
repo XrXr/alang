@@ -13,6 +13,7 @@ var tokToOp = map[string]Operator{
 	"!=": BangEqual,
 	"=":  Assign,
 	"+":  Plus,
+	"/":  Divide,
 	"+=": PlusEqual,
 	"-=": MinusEqual,
 	"@":  Dereference,
