@@ -4,9 +4,9 @@ package parsing
 
 import "strconv"
 
-const _LiteralType_name = "NumberStringArrayBoolean"
+const _LiteralType_name = "NumberStringArrayBooleanNilPtr"
 
-var _LiteralType_index = [...]uint8{0, 6, 12, 17, 24}
+var _LiteralType_index = [...]uint8{0, 6, 12, 17, 24, 30}
 
 func (i LiteralType) String() string {
 	i -= 1

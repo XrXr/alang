@@ -59,16 +59,28 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				if err != nil {
 					panic(err)
 				}
-			case parsing.Assign:
+			case parsing.Assign, parsing.PlusEqual, parsing.MinusEqual:
 				leftAsIdent, leftIsIdent := node.Left.(parsing.IdName)
 				if leftIsIdent {
 					leftVarNum, varFound := scope.resolve(leftAsIdent)
 					if !varFound {
 						panic(fmt.Sprintf("bug in user program! assign to undefined variable \"%s\"", leftAsIdent))
 					}
-					err := genExpressionRhs(scope, leftVarNum, node.Right)
+					rightResult := leftVarNum
+					if node.Op == parsing.PlusEqual || node.Op == parsing.MinusEqual {
+						rightResult = scope.newVar()
+					}
+					err := genExpressionRhs(scope, rightResult, node.Right)
 					if err != nil {
 						panic(err)
+					}
+					switch node.Op {
+					case parsing.PlusEqual:
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.Add, leftVarNum, rightResult, nil))
+					case parsing.MinusEqual:
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.Sub, leftVarNum, rightResult, nil))
+					default:
+						// put there already in the genExpressionRhs above
 					}
 				} else {
 					leftResult, err := genAssignmentTarget(scope, node.Left)
@@ -80,7 +92,21 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 					if err != nil {
 						panic(err)
 					}
-					gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectWrite, leftResult, rightResult, nil))
+					var leftTmp int
+					if node.Op == parsing.PlusEqual || node.Op == parsing.MinusEqual {
+						leftTmp = scope.newVar()
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectLoad, leftResult, leftTmp, nil))
+					}
+					switch node.Op {
+					case parsing.PlusEqual:
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.Add, leftTmp, rightResult, nil))
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectWrite, leftResult, leftTmp, nil))
+					case parsing.MinusEqual:
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.Sub, leftTmp, rightResult, nil))
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectWrite, leftResult, leftTmp, nil))
+					default:
+						gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectWrite, leftResult, rightResult, nil))
+					}
 				}
 			default:
 				//TODO issue warning here

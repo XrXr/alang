@@ -118,7 +118,7 @@ func ParseExpr(tokens []string) (interface{}, error) {
 	}
 	for index, tok := range tokens {
 		op := tokToOp[tok]
-		if op == Declare || op == ConstDeclare || op == Assign {
+		if op == Declare || op == ConstDeclare || op == Assign || op == PlusEqual || op == MinusEqual {
 			left, err := parseExprWithParen(parsed, tokens, 0, index)
 			if err != nil {
 				return nil, err

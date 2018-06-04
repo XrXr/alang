@@ -52,6 +52,8 @@ const (
 	Call
 	Assign
 	Declare
+	PlusEqual
+	MinusEqual
 	Lesser
 	LesserEqual
 	Greater
