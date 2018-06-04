@@ -60,6 +60,7 @@ const (
 	BangEqual
 	LogicalAnd
 	LogicalOr
+	LogicalNot
 	ConstDeclare
 	Dereference
 	AddressOf
@@ -74,6 +75,7 @@ const (
 	String
 	Array
 	Boolean
+	NilPtr
 )
 
 type Literal struct {

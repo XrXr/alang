@@ -196,6 +196,20 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if !lIsBool || !rIsBool {
 			return errors.New("operands must be booleans")
 		}
+	case ir.Not:
+		l, r := resolve(opt)
+		_, lIsBool := l.(Boolean)
+		_, lIsPtr := l.(Pointer)
+		_, rIsBool := r.(Boolean)
+		if !lIsBool && !lIsPtr {
+			return errors.New("The not operator works booleans and pointers")
+		}
+		if r == nil {
+			typeTable[opt.Out()] = t.Builtins[BoolIdx]
+		}
+		if r != nil && !rIsBool {
+			panic("out var of ir.Not has a type and it's not boolean")
+		}
 	case ir.Div:
 		l, r := resolve(opt)
 		if !(l.IsNumber() && r.IsNumber()) {

@@ -42,7 +42,11 @@ func (o OpHeap) Less(i, j int) bool {
 	preceI := precedence[o[i].op]
 	preceJ := precedence[o[j].op]
 	if preceI == preceJ {
-		return o[i].index < o[j].index
+		if isUnary[o[i].op] {
+			return o[i].index > o[j].index
+		} else {
+			return o[i].index < o[j].index
+		}
 	} else {
 		return preceI < preceJ
 	}
@@ -325,6 +329,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 	var finalNode ExprNode
 	for len(ops) > 0 {
 		opTok := heap.Pop(&ops).(opToken)
+		fmt.Printf("Op: %s index %d\n", opTok.op.String(), opTok.index)
 		leftI := opTok.index - 1
 		rightI := opTok.index + 1
 
@@ -344,7 +349,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 				newNode.Left = parsed.node
 				leftI = parsed.otherEnd
 			} else {
-				newNode.Left = parseToken(tokens[opTok.index-1])
+				newNode.Left = parseToken(tokens[leftI])
 			}
 		}
 		if oneToRightValid {
@@ -372,6 +377,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		if oneToRightValid {
 			parsed[rightI] = parsedNode{newNode, leftI}
 		}
+		Dump(parsed)
 	}
 	return finalNode, nil
 }

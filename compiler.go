@@ -134,7 +134,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 					buf.WriteRune('"')
 				}
 
-				labelName := labelGen.GenLabel("label%d")
+				labelName := labelGen.GenLabel("staticstring%d")
 				staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
 				staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
 				staticDataBuf.ReadFrom(&buf)
@@ -387,6 +387,20 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			default:
 				panic("Type checker didn't do its job")
 			}
+		case ir.Not:
+			setLabel := labelGen.GenLabel("not%d")
+			addLine(fmt.Sprintf("\tmov %s, 0\n", byteVarToStack(opt.Out())))
+			switch typeTable[opt.In()].(type) {
+			case typing.Pointer:
+				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
+				addLine(fmt.Sprintf("\tcmp rax, 0\n"))
+			case typing.Boolean:
+				addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
+				addLine(fmt.Sprintf("\tcmp al, 0\n"))
+			}
+			addLine(fmt.Sprintf("\tjnz %s\n", setLabel))
+			addLine(fmt.Sprintf("\tmov %s, 1\n", byteVarToStack(opt.Out())))
+			addLine(fmt.Sprintf("%s:\n", setLabel))
 		case ir.BoolAnd:
 			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
 			addLine(fmt.Sprintf("\tand %s, al\n", byteVarToStack(opt.Left())))
@@ -588,9 +602,9 @@ func main() {
 				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
-		// fmt.Println("Line ", line)
-		// fmt.Println("Gave: ")
-		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
+		fmt.Println("Line ", line)
+		fmt.Println("Gave: ")
+		parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
 	}
 	out, err := os.Create("a.asm")
 	if err != nil {

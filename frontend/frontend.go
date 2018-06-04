@@ -197,7 +197,6 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				returnValues = append(returnValues, scope.newVar())
 			}
 			for i, valueExpr := range node.Values {
-				parsing.Dump(valueExpr)
 				err := genExpressionRhs(scope, returnValues[i], valueExpr)
 				if err != nil {
 					panic(err)
@@ -270,6 +269,16 @@ func genExpressionRhs(scope *scope, dest int, node interface{}) error {
 			}
 			gen.addOpt(ir.MakeBinaryInstWithAux(ir.IndirectLoad, rightDest, dest, nil))
 			return nil
+		case parsing.LogicalNot:
+			if n.Left != nil {
+				panic("parser bug")
+			}
+			rightDest := scope.newVar()
+			err := genExpressionRhs(scope, rightDest, n.Right)
+			if err != nil {
+				return err
+			}
+			gen.addOpt(ir.MakeBinaryInstWithAux(ir.Not, rightDest, dest, nil))
 		case parsing.LogicalAnd:
 			err := genExpressionRhs(scope, dest, n.Left)
 			if err != nil {
@@ -439,6 +448,9 @@ func boolStrToBool(s string) bool {
 }
 
 func Prune(block *OptBlock) {
+	if block.NumberOfVars == 0 {
+		return
+	}
 	usageLog := make([]struct {
 		count        int
 		firstUseIdx  int
@@ -483,7 +495,6 @@ func Prune(block *OptBlock) {
 		if log.count != 2 {
 			continue
 		}
-		parsing.Dump(log)
 
 		genesis := block.Opts[log.firstUseIdx]
 		if genesis.Type == ir.AssignImm && block.Opts[log.secondUseIdx].Type == ir.Assign {

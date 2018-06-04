@@ -44,6 +44,7 @@ const (
 	StructMemberPtr
 	LoadStructMember
 	Compare
+	Not
 	BoolAnd
 	BoolOr
 

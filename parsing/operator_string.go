@@ -4,9 +4,9 @@ package parsing
 
 import "strconv"
 
-const _Operator_name = "DotStarMinusPlusRangeDivideCallAssignDeclareLesserLesserEqualGreaterGreaterEqualDoubleEqualBangEqualLogicalAndLogicalOrConstDeclareDereferenceAddressOfArrayAccess"
+const _Operator_name = "DotStarMinusPlusRangeDivideCallAssignDeclareLesserLesserEqualGreaterGreaterEqualDoubleEqualBangEqualLogicalAndLogicalOrLogicalNotConstDeclareDereferenceAddressOfArrayAccess"
 
-var _Operator_index = [...]uint8{0, 3, 7, 12, 16, 21, 27, 31, 37, 44, 50, 61, 68, 80, 91, 100, 110, 119, 131, 142, 151, 162}
+var _Operator_index = [...]uint8{0, 3, 7, 12, 16, 21, 27, 31, 37, 44, 50, 61, 68, 80, 91, 100, 110, 119, 129, 141, 152, 161, 172}
 
 func (i Operator) String() string {
 	i -= 1
