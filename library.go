@@ -35,6 +35,54 @@ proc_puts:
 	syscall
 	ret
 
+proc_print_int:
+	push rbp
+	mov rbp, rsp
+	sub rsp, 29
+
+	xor r9, r9
+	xor r10, r10
+	mov rcx, 10000000000000000000
+	mov rbx, rbp
+	sub rbx, 21
+.divide:
+; divide and store current digit
+	xor rdx, rdx
+	div rcx
+	mov r8, rdx
+	cmp r10, 0
+	jnz .write_ascii 
+	cmp rax, 0
+	jz .write_ascii
+	inc r10
+	mov r9, rbx
+.write_ascii:
+	add al, 48
+	mov [rbx], al
+; divide the dividen by 10
+	mov rax, rcx
+	mov rcx, 10
+	xor rdx, rdx
+	div rcx
+	mov rcx, rax
+	mov rax, r8
+	inc rbx
+	cmp rcx, 0
+	jnz .divide
+
+	mov byte [rbx], 10
+	mov rax, rbx
+	sub rax, r9
+	inc rax
+	sub r9, 8
+	mov [r9], rax
+	mov rax, r9
+	call proc_puts
+
+	mov rsp, rbp
+	pop rbp
+	ret
+
 ; rax is source, rbx is size, rcx is dest
 ; only works if the size is a multiple of 8 for now
 _intrinsic_memcpy:

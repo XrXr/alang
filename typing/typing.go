@@ -329,9 +329,10 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
-			"exit":    {Return: boolType, CallingConvention: Register},
-			"puts":    {Return: boolType, CallingConvention: Register},
-			"testbit": {Return: boolType, CallingConvention: Register},
+			"exit":      {Return: boolType, CallingConvention: Register},
+			"puts":      {Return: boolType, CallingConvention: Register},
+			"print_int": {Return: boolType, CallingConvention: Register},
+			"testbit":   {Return: boolType, CallingConvention: Register},
 			"binToDecTable": {
 				Return:            BuildPointer(typer.Builtins[IntIdx], 1),
 				CallingConvention: Register,
