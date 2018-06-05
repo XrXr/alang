@@ -9,6 +9,6 @@ main :: proc() {
     @c = 123
     a = a - 3
     a = a - byte
-    puts("exit code should be 34\n")
-    exit(a)
+    puts("should be 34\n")
+    print_int(a)
 }

@@ -70,6 +70,14 @@ proc_print_int:
 	cmp rcx, 0
 	jnz .divide
 
+	cmp r10, 0
+	jnz .shorten
+	mov byte[rbp-1],10
+	mov qword[rbp-10],2
+	mov rax, rbp
+	sub rax, 10
+	jmp .end
+.shorten
 	mov byte [rbx], 10
 	mov rax, rbx
 	sub rax, r9
@@ -77,6 +85,7 @@ proc_print_int:
 	sub r9, 8
 	mov [r9], rax
 	mov rax, r9
+.end
 	call proc_puts
 
 	mov rsp, rbp

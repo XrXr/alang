@@ -602,9 +602,9 @@ func main() {
 				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
-		fmt.Println("Line ", line)
-		fmt.Println("Gave: ")
-		parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
+		// fmt.Println("Line ", line)
+		// fmt.Println("Gave: ")
+		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
 	}
 	out, err := os.Create("a.asm")
 	if err != nil {

@@ -19,6 +19,6 @@ main :: proc() {
     a.kai = &b
     a.kai.jolly = a.josh - a.wendy
     b.cooperation = 2
-    puts("exit code should be 202\n")
-    exit(ap.josh + a.wendy + a.kai.jolly + a.kai.cooperation)
+    puts("should be 202\n")
+    print_int(ap.josh + a.wendy + a.kai.jolly + a.kai.cooperation)
 }

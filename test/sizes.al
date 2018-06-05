@@ -24,6 +24,6 @@ main :: proc () {
         puts("bad\n")
     }
 
-    puts("exit code should be 50\n")
-    exit(a)
+    puts("should be 50\n")
+    print_int(a)
 }

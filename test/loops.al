@@ -17,6 +17,6 @@ main :: proc() {
         fib2 = next
     }
 
-    puts("exit code should be zero\n")
-    exit(fib-fib2)
+    puts("should be 0\n")
+    print_int(fib-fib2)
 }

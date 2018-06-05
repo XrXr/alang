@@ -11,6 +11,6 @@ main :: proc() {
     ret = ret / array[2]
     ret = ret * array[3]
     ret = ret - array[4]
-    puts("exit code should be 5\n")
-    exit(ret)
+    puts("should be 5\n")
+    print_int(ret)
 }

@@ -329,7 +329,6 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 	var finalNode ExprNode
 	for len(ops) > 0 {
 		opTok := heap.Pop(&ops).(opToken)
-		fmt.Printf("Op: %s index %d\n", opTok.op.String(), opTok.index)
 		leftI := opTok.index - 1
 		rightI := opTok.index + 1
 
@@ -377,7 +376,6 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		if oneToRightValid {
 			parsed[rightI] = parsedNode{newNode, leftI}
 		}
-		Dump(parsed)
 	}
 	return finalNode, nil
 }
@@ -503,7 +501,7 @@ func tokenIsId(token string) bool {
 		return false
 	}
 	for _, c := range token {
-		if !(unicode.IsLetter(c) || unicode.IsDigit(c)) {
+		if !(unicode.IsLetter(c) || unicode.IsDigit(c) || c == '_') {
 			return false
 		}
 	}
