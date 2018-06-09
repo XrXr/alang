@@ -208,15 +208,30 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 						simpleCopy(arg, dest)
 						offset += thisArgSize
 					}
-				case typing.Register:
-					regOrder := [...]string{"rax", "rbx", "rcx"}
+				case typing.SystemV:
+					regOrder := [...]string{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
+					regOrderSmaller := [...]string{"edi", "esi", "edx", "ecx", "r8d", "r9d"}
 					for i, arg := range extra.ArgVars {
-						addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
+						switch typeTable[arg].Size() {
+						case 8:
+							addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
+						case 4:
+							addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrder[i], wordVarToStack(arg)))
+						case 1:
+							addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrderSmaller[i], byteVarToStack(arg)))
+						default:
+							panic("Unsupported parameter size")
+						}
+						// TODO stack passing for i >= len(regOrder)
 					}
 				}
-				addLine(fmt.Sprintf("\tcall proc_%s\n", extra.Name))
+				if procRecord.IsForeign {
+					addLine(fmt.Sprintf("\tcall %s\n", extra.Name))
+				} else {
+					addLine(fmt.Sprintf("\tcall proc_%s\n", extra.Name))
+				}
 				switch procRecord.CallingConvention {
-				case typing.Register:
+				case typing.SystemV:
 					switch typeTable[opt.Oprand1].Size() {
 					case 1:
 						addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Oprand1)))
@@ -228,11 +243,15 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tadd rsp, %d\n", totalArgSize))
 					if typeTable[opt.Oprand1].Size() > 0 {
-						returnType := procRecord.Return
-						addLine(fmt.Sprintf("\tmov rbx, %d\n", returnType.Size()))
-						addLine("\tmov rcx, rbp\n")
-						addLine(fmt.Sprintf("\tsub rcx, %d\n", varOffset[opt.Oprand1]))
-						addLine("\tcall _intrinsic_memcpy\n")
+						if procRecord.IsForeign {
+							addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Oprand1)))
+						} else {
+							returnType := procRecord.Return
+							addLine(fmt.Sprintf("\tmov rdx, %d\n", returnType.Size()))
+							addLine(fmt.Sprintf("\tlea rdi, [rbp-%d]\n", varOffset[opt.Oprand1]))
+							addLine("\tmov rsi, rax\n")
+							addLine("\tcall _intrinsic_memcpy\n")
+						}
 					}
 				}
 			}
@@ -461,10 +480,15 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			}
 			argRecords[i] = record
 		}
+		callingConvention := typing.Cdecl
+		if order.ProcDecl.IsForeign {
+			callingConvention = typing.SystemV
+		}
 		env.Procs[order.Name] = typing.ProcRecord{
 			typer.ConstructTypeRecord(order.ProcDecl.Return),
 			argRecords,
-			typing.Cdecl,
+			callingConvention,
+			order.ProcDecl.IsForeign,
 		}
 	}
 
@@ -552,17 +576,24 @@ func main() {
 		isComplete := parser.OutBuffer[last].IsComplete
 		node := parser.OutBuffer[last].Node
 		parent := parser.OutBuffer[last].Parent
+		var isForeignProc bool
 
 		exprNode, isExpr := (*node).(parsing.ExprNode)
 		if !isComplete && isExpr && exprNode.Op == parsing.ConstDeclare {
-			_, isProc := exprNode.Right.(parsing.ProcNode)
+			procNode, isProc := exprNode.Right.(parsing.ProcNode)
 			if isProc {
 				currentProc = node
+				if procNode.ProcDecl.IsForeign {
+					isForeignProc = true
+				} else {
+					continue
+				}
+			} else {
+				continue
 			}
-			continue
 		}
 
-		if _, isEnd := (*node).(parsing.BlockEnd); isEnd && parent == currentProc {
+		if _, isEnd := (*node).(parsing.BlockEnd); isForeignProc || (isEnd && parent == currentProc) {
 			procDeclare := (*currentProc).(parsing.ExprNode)
 			procNode := procDeclare.Right.(parsing.ProcNode)
 			procName := procDeclare.Left.(parsing.IdName)
@@ -637,8 +668,13 @@ func main() {
 				panic("Bug in typer -- not all vars have types!")
 			}
 		}
+		if workOrder.ProcDecl.IsForeign {
+			fmt.Fprintf(out, "extern %s\n", workOrder.Name)
+			continue
+		}
 		backend(out, &labelGen, []frontend.OptBlock{ir}, typeTable, env, typer)
 	}
+	writeBuiltins(out)
 	writeDecimalTable(out)
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")

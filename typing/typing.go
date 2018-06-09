@@ -10,13 +10,14 @@ import (
 
 const (
 	Cdecl int = iota + 1
-	Register
+	SystemV
 )
 
 type ProcRecord struct {
 	Return            TypeRecord
 	Args              []TypeRecord
 	CallingConvention int
+	IsForeign         bool
 }
 
 type EnvRecord struct {
@@ -310,6 +311,8 @@ const (
 	IntIdx
 	BoolIdx
 	U8Idx
+	U32Idx
+	S32Idx
 )
 
 func NewTyper() *Typer {
@@ -320,6 +323,8 @@ func NewTyper() *Typer {
 		Int{},
 		Boolean{},
 		U8{},
+		U32{},
+		S32{},
 	}
 	return &typer
 }
@@ -329,13 +334,13 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
-			"exit":      {Return: boolType, CallingConvention: Register},
-			"puts":      {Return: boolType, CallingConvention: Register},
-			"print_int": {Return: boolType, CallingConvention: Register},
-			"testbit":   {Return: boolType, CallingConvention: Register},
+			"exit":      {Return: boolType, CallingConvention: SystemV},
+			"puts":      {Return: boolType, CallingConvention: SystemV},
+			"print_int": {Return: boolType, CallingConvention: SystemV},
+			"testbit":   {Return: boolType, CallingConvention: SystemV},
 			"binToDecTable": {
 				Return:            BuildPointer(typer.Builtins[IntIdx], 1),
-				CallingConvention: Register,
+				CallingConvention: SystemV,
 			},
 		},
 	}

@@ -41,7 +41,11 @@ func (_ U8) Size() int {
 
 // type S64 struct{ integerType }
 
-// type S32 struct{ integerType }
+type S32 struct{ integerType }
+
+func (_ S32) Size() int {
+	return 4
+}
 
 // type S16 struct{ integerType }
 
@@ -49,7 +53,11 @@ func (_ U8) Size() int {
 
 // type U64 struct{ integerType }
 
-// type U32 struct{ integerType }
+type U32 struct{ integerType }
+
+func (_ U32) Size() int {
+	return 4
+}
 
 // type U16 struct{ integerType }
 

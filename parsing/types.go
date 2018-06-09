@@ -21,15 +21,15 @@ type Declaration struct {
 }
 
 type ProcDecl struct {
-	Args   []Declaration
-	Return TypeDecl
+	Args      []Declaration
+	Return    TypeDecl
+	IsForeign bool
 }
 
 type Block []interface{}
 
 type ProcNode struct {
 	ProcDecl
-	Body Block
 }
 
 type ProcCall struct {

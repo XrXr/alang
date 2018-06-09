@@ -41,6 +41,8 @@ var bounderies = [...]string{
 	"[",
 	"]",
 	"var",
+	"foreign",
+	"proc",
 	"for",
 	"return",
 	"break",

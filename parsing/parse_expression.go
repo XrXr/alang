@@ -186,7 +186,7 @@ func parseTypeDecl(tokens []string) (TypeDecl, error) {
 	return TypeDecl{LevelOfIndirection: indirect, Base: IdName(base)}, nil
 }
 
-func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
+func genParenInfo(tokens []string, start int, end int) ([]bracketInfo, error) {
 	parenInfo := make([]bracketInfo, 0)
 	openStack := make([]int, 0)
 	i := start
@@ -217,6 +217,14 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	if len(openStack) != 0 {
 		return nil, &ParseError{0, 0 /* tokenToCol(openStack[len(openStack)-1])*/, `unclosed "("`}
 	}
+	return parenInfo, nil
+}
+
+func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
+	parenInfo, err := genParenInfo(tokens, start, end)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, paren := range parenInfo {
 		if paren.kind == square {
@@ -242,9 +250,12 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 		} else if paren.kind == round && paren.open-1 >= start && tokenIsId(tokens[paren.open-1]) {
 			// it's a call or a proc expression
 			var node interface{}
+			var isForeignProc bool
 			end := paren.end
 			if tokens[paren.open-1] == "proc" {
-				proc, blockStart, err := parseProcExpr(tokens, parsed, paren)
+				isForeignProc = paren.open-2 >= start && tokens[paren.open-2] == "foreign"
+				proc, blockStart, err := parseProcExpr(tokens, parsed, paren, !isForeignProc)
+				proc.IsForeign = isForeignProc
 				if err != nil {
 					return nil, err
 				}
@@ -257,7 +268,12 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 				}
 				node = *call
 			}
-			parsed[paren.open-1] = parsedNode{node, end}
+			start := paren.open - 1
+			if isForeignProc {
+				start--
+				Dump(start)
+			}
+			parsed[start] = parsedNode{node, end}
 			parsed[end] = parsedNode{node, paren.open - 1}
 		} else {
 			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
@@ -306,7 +322,6 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		}
 		i++
 		if tok == "(" {
-			Dump(tokens[start:end])
 			panic("parseExprUnit() shouldn't see any open parenthesis tokens")
 		}
 		if tok == "[" {
@@ -319,7 +334,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 
 	if len(ops) == 0 {
 		parsed, found := parsed[start]
-		if !found || parsed.otherEnd != end-1 {
+		if !found || parsed.otherEnd < end-1 {
 			fmt.Printf("%v, %v\n", tokens, tokens[start:end])
 			return nil, &ParseError{start, end, "Expected an operator"}
 		}
@@ -413,18 +428,23 @@ func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 	return &ProcCall{Callee: idNode, Args: args}, nil
 }
 
-func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo) (*ProcNode, int, error) {
+func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo, requireBlock bool) (*ProcNode, int, error) {
 	blockStart := -1
-	for i := paren.end + 1; i < len(tokens); i++ {
-		if tokens[i] == "{" {
-			blockStart = i
-			break
+	if requireBlock {
+		for i := paren.end + 1; i < len(tokens); i++ {
+			if tokens[i] == "{" {
+				blockStart = i
+				break
+			}
 		}
-	}
-	if blockStart == -1 {
-		return nil, 0, &ParseError{0, 0, "Proc expressions must have a block"}
+		if blockStart == -1 {
+			return nil, 0, &ParseError{0, 0, "Proc expressions must have a block"}
+		}
+	} else {
+		blockStart = len(tokens)
 	}
 	i := paren.open + 1
+
 	var args []Declaration
 	leftBoundary := i
 	for j := i; j <= paren.end; j++ {
@@ -471,7 +491,7 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 	}
 
 	return &ProcNode{
-		ProcDecl: ProcDecl{Return: returnType, Args: args}, Body: Block{}}, blockStart, nil
+		ProcDecl: ProcDecl{Return: returnType, Args: args}}, blockStart, nil
 }
 
 func parseToken(s string) interface{} {

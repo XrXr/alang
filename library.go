@@ -10,26 +10,27 @@ func writeAssemblyPrologue(out io.Writer) {
 	section .text
 _start:
 	call proc_main
-	xor rax, rax
+	xor rdi, rdi
 	jmp proc_exit
+	`)
+}
 
-proc_exit:
-	mov rdi, rax
+func writeBuiltins(out io.Writer) {
+	fmt.Fprintln(out, `proc_exit:
 	mov eax, 60
 	syscall
 
 proc_testbit:
     xor rcx, rcx
     clc
-    bt rax, rbx
+    bt rdi, rsi
     adc rcx, 0
     mov rax, rcx
     ret
 
 proc_puts:
-	mov rdx, [rax]
-	mov rsi, rax
-	add rsi, 8
+	mov rdx, [rdi]
+	lea rsi, [rdi+8]
 	mov rax, 1
 	mov rdi, 1
 	syscall
@@ -43,8 +44,8 @@ proc_print_int:
 	xor r9, r9
 	xor r10, r10
 	mov rcx, 10000000000000000000
-	mov rbx, rbp
-	sub rbx, 21
+	lea rbx, [rbp-21]
+	mov rax, rdi
 .divide:
 ; divide and store current digit
 	xor rdx, rdx
@@ -74,70 +75,28 @@ proc_print_int:
 	jnz .shorten
 	mov byte[rbp-1],10
 	mov qword[rbp-10],2
-	mov rax, rbp
-	sub rax, 10
+	lea rdi, [rbp-10]
 	jmp .end
-.shorten
+.shorten:
 	mov byte [rbx], 10
 	mov rax, rbx
 	sub rax, r9
 	inc rax
 	sub r9, 8
 	mov [r9], rax
-	mov rax, r9
-.end
+	mov rdi, r9
+.end:
 	call proc_puts
 
 	mov rsp, rbp
 	pop rbp
 	ret
 
-; rax is source, rbx is size, rcx is dest
-; only works if the size is a multiple of 8 for now
+; rdi is dest, rsi is source, rdx is size
 _intrinsic_memcpy:
-	mov r8, rax
-	mov r9, rbx
-	mov r10, rcx
-
-	mov rax, rbx
-	xor rdx, rdx
-	mov rcx, 8
-	div rcx
-.8loop:
-	cmp rax, 0
-	jz .8loopend
-	mov r11, qword [r8]
-	mov qword [r10], r11
-	add r8, 8
-	add r10, 8
-	dec rax
-	jmp .8loop
-.8loopend:
-	mov rax, rdx
-	xor rdx, rdx
-	mov rcx, 4
-	div rcx
-.4loop:
-	cmp rax, 0
-	jz .4loopend
-	mov ebx, dword [r8]
-	mov dword [r10], ebx
-	add r8, 4
-	add r10, 4
-	dec rax
-	jmp .4loop
-.4loopend:
-	mov rax, rdx
-.byteloop:
-	cmp rax, 0
-	jz .byteloopend
-	mov bl, byte [r8]
-	mov byte [r10], bl
-	inc r8
-	inc r10
-	dec rax
-	jmp .byteloop
-.byteloopend:
+	mov rcx, rdx
+	cld
+	rep movsb
 	ret`)
 }
 
@@ -209,6 +168,6 @@ _binToDecTable:
 	dq 4,0,9,7,8,3,7,2,4,8,1,0,6,8,6,1,1,6,4
 	dq 8,0,8,5,7,7,4,5,8,6,3,0,2,7,3,3,2,2,9
 proc_binToDecTable:
-	mov rax, _binToDecTable
+	mov rdi, _binToDecTable
 	ret`)
 }
