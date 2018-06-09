@@ -37,7 +37,17 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	}
 	switch opt.Type {
 	case ir.AssignImm:
-		typeTable[opt.Oprand1] = t.typeImmediate(opt.Extra)
+		if typeTable[opt.Oprand1] == nil {
+			typeTable[opt.Oprand1] = t.typeImmediate(opt.Extra)
+		} else {
+			existing := typeTable[opt.Oprand1]
+			challenge := t.typeImmediate(opt.Extra)
+			if existing != challenge {
+				if existing.IsNumber() && !challenge.IsNumber() {
+					panic("type a is incompatible with type b")
+				}
+			}
+		}
 	case ir.TakeAddress:
 		varType := typeTable[opt.In()]
 		if varType == nil {
@@ -269,6 +279,10 @@ func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 		return t.Builtins[BoolIdx]
 	case "u8":
 		return t.Builtins[U8Idx]
+	case "s32":
+		return t.Builtins[S32Idx]
+	case "u32":
+		return t.Builtins[U32Idx]
 	}
 	return nil
 }

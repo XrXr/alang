@@ -80,29 +80,33 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 		}
 	}
 
+	oprandString := func(vn int) string {
+		dest := "bad addressing mode"
+		switch typeTable[vn].Size() {
+		case 1:
+			dest = byteVarToStack(vn)
+		case 4:
+			dest = wordVarToStack(vn)
+		case 8:
+			dest = qwordVarToStack(vn)
+		}
+		return dest
+	}
+
 	framesize := 0
 	for _, typeRecord := range typeTable {
 		framesize += typeRecord.Size()
 	}
-	// backendDebug(framesize, typeTable, varOffset)
+	backendDebug(framesize, typeTable, varOffset)
 	for i, opt := range block.Opts {
 		fmt.Fprintf(out, ";ir line %d\n", i)
 		switch opt.Type {
 		case ir.Assign:
-			var dest string
-			switch typeTable[opt.Left()].Size() {
-			case 1:
-				dest = byteVarToStack(opt.Left())
-			case 4:
-				dest = wordVarToStack(opt.Left())
-			case 8:
-				dest = qwordVarToStack(opt.Left())
-			}
-			simpleCopy(opt.Right(), dest)
+			simpleCopy(opt.Right(), oprandString(opt.Left()))
 		case ir.AssignImm:
 			switch value := opt.Extra.(type) {
 			case int64, uint64, int:
-				addLine(fmt.Sprintf("\tmov %s, %d\n", qwordVarToStack(opt.Oprand1), opt.Extra))
+				addLine(fmt.Sprintf("\tmov %s, %d\n", oprandString(opt.Oprand1), opt.Extra))
 			case bool:
 				val := 0
 				if value == true {
