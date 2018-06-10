@@ -538,6 +538,7 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 
 func main() {
 	outputPath := flag.String("o", "a.out", "path to the binary")
+	stopAfterAssembly := flag.Bool("c", false, "generate object file only")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) < 1 {
@@ -691,6 +692,9 @@ func main() {
 	if err != nil {
 		fmt.Printf("nasm call failed %v\n", err)
 		os.Exit(1)
+	}
+	if *stopAfterAssembly {
+		return
 	}
 	cmd = exec.Command("ld", "-o", *outputPath, "a.o")
 	err = cmd.Start()
