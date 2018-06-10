@@ -1,6 +1,7 @@
 package typing
 
 import (
+	"fmt"
 	"github.com/XrXr/alang/parsing"
 )
 
@@ -79,14 +80,39 @@ func (s StructRecord) Size() int {
 }
 
 func (s *StructRecord) ResolveSizeAndOffset() {
-	s.size = 0
-	for _, field := range s.MemberOrder {
-		s.size += field.Type.Size()
-	}
 	s.MemberOrder[0].Offset = 0
-	for i := 1; i < len(s.MemberOrder); i++ {
-		last := s.MemberOrder[i-1]
-		s.MemberOrder[i].Offset = last.Offset + last.Type.Size()
+	s.size = 0
+	var biggestSize int
+	for i, field := range s.MemberOrder {
+		fieldSize := field.Type.Size()
+		if i > 0 {
+			if (s.size % fieldSize) == 0 {
+				s.MemberOrder[i].Offset = s.size
+			} else {
+				// cloest alignment
+				s.MemberOrder[i].Offset = s.size - (s.size % fieldSize) + fieldSize
+			}
+		}
+		s.size = s.MemberOrder[i].Offset + fieldSize
+		if fieldSize > biggestSize {
+			biggestSize = fieldSize
+		}
+	}
+	s.size = s.size - (s.size % biggestSize) + biggestSize
+
+	s.PrintLayout()
+}
+
+func (s *StructRecord) PrintLayout() {
+	fmt.Printf("struct \"%s\", size: %d\n", s.Name, s.size)
+	for _, field := range s.MemberOrder {
+		var name string
+		for _name, _field := range s.Members {
+			if field == _field {
+				name = _name
+			}
+		}
+		fmt.Printf("\tMember %s offset: %d\n", name, field.Offset)
 	}
 }
 

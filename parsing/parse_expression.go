@@ -271,7 +271,6 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			start := paren.open - 1
 			if isForeignProc {
 				start--
-				Dump(start)
 			}
 			parsed[start] = parsedNode{node, end}
 			parsed[end] = parsedNode{node, paren.open - 1}

@@ -455,7 +455,6 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 			if err != nil {
 				return 0, err
 			}
-			parsing.Dump(n)
 			member := string(n.Right.(parsing.IdName))
 			out := scope.newVar()
 			gen.addOpt(ir.MakeBinaryInstWithAux(ir.StructMemberPtr, structBase, out, member))
