@@ -40,16 +40,8 @@ var bounderies = [...]string{
 	"::",
 	"[",
 	"]",
-	"var",
-	"foreign",
-	"proc",
-	"for",
-	"return",
-	"break",
-	"continue",
 	"{",
 	"}",
-	"struct",
 }
 
 func Tokenize(in string) []string {
@@ -98,7 +90,9 @@ func Tokenize(in string) []string {
 					if i == j {
 						result = append(result, bound)
 					} else {
-						result = append(result, strings.TrimSpace(in[i:j]), bound)
+						tokensBeforeBound := strings.Split(strings.TrimSpace(in[i:j]), " ")
+						result = append(result, tokensBeforeBound...)
+						result = append(result, bound)
 					}
 					i = iAfterWs(in, j+len(bound))
 					found = true
@@ -143,7 +137,7 @@ func Tokenize(in string) []string {
 	endTok := strings.TrimSpace(in[lastFoundIdx:])
 	if len(endTok) > 0 {
 		spacedOut := strings.Split(endTok, " ")
-		if len(spacedOut) == 2 && spacedOut[0][0] != '"' {
+		if spacedOut[0][0] != '"' {
 			result = append(result, spacedOut...)
 		} else {
 			result = append(result, endTok)
