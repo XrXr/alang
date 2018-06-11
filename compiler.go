@@ -140,7 +140,10 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				}
 				// end the string
 				if !needToStartQuote {
-					buf.WriteRune('"')
+					buf.WriteString(`",0`)
+				} else {
+					// it's a string that ends with \n
+					buf.WriteRune('0')
 				}
 
 				labelName := labelGen.GenLabel("staticstring%d")
@@ -509,13 +512,12 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 	}
 }
 
-func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) {
+func backend(out io.Writer, labelGen *frontend.LabelIdGen, opts []frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) *bytes.Buffer {
 	var staticDataBuf bytes.Buffer
 	for _, block := range opts {
 		backendForOptBlock(out, &staticDataBuf, labelGen, block, typeTable, globalEnv, typer)
 	}
-	io.WriteString(out, "; ---static data segment start---\n")
-	staticDataBuf.WriteTo(out)
+	return &staticDataBuf
 }
 
 // resolve all the type of members in structs and build the global environment
@@ -730,6 +732,7 @@ func main() {
 	}
 	// fmt.Printf("%#v\n", env.Types)
 
+	var staticData []*bytes.Buffer
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
 		// frontend.DumpIr(ir)
@@ -750,10 +753,18 @@ func main() {
 			fmt.Fprintf(out, "extern %s\n", workOrder.Name)
 			continue
 		}
-		backend(out, &labelGen, []frontend.OptBlock{ir}, typeTable, env, typer)
+		staticData = append(staticData, backend(out, &labelGen, []frontend.OptBlock{ir}, typeTable, env, typer))
 	}
+
+	io.WriteString(out, "; ---user code end---\n")
 	writeBuiltins(out)
 	writeDecimalTable(out)
+
+	io.WriteString(out, "; ---static data segment begin---\n")
+	io.WriteString(out, "section .data\n")
+	for _, static := range staticData {
+		static.WriteTo(out)
+	}
 
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()
