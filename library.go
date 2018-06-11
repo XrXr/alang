@@ -64,7 +64,7 @@ proc_print_int:
 	div rcx
 	mov r8, rdx
 	cmp r10, 0
-	jnz .write_ascii 
+	jnz .write_ascii
 	cmp rax, 0
 	jz .write_ascii
 	inc r10
@@ -180,6 +180,6 @@ _binToDecTable:
 	dq 4,0,9,7,8,3,7,2,4,8,1,0,6,8,6,1,1,6,4
 	dq 8,0,8,5,7,7,4,5,8,6,3,0,2,7,3,3,2,2,9
 proc_binToDecTable:
-	mov rdi, _binToDecTable
+	mov rax, _binToDecTable
 	ret`)
 }
