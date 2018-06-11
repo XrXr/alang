@@ -97,6 +97,11 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 	for _, typeRecord := range typeTable {
 		framesize += typeRecord.Size()
 	}
+	if framesize%16 != 0 {
+		// align the stack for SystemV abi. Upon being called, we are 8 bytes misaligned.
+		// Since we push rbp in our prologue we align to 16 here
+		framesize += 16 - framesize%16
+	}
 	backendDebug(framesize, typeTable, varOffset)
 	for i, opt := range block.Opts {
 		fmt.Fprintf(out, ";ir line %d\n", i)
@@ -150,11 +155,42 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				panic("unknown immediate value type")
 			}
 		case ir.Add:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Right())))
-			if pointer, leftIsPointer := typeTable[opt.Left()].(typing.Pointer); leftIsPointer {
+			pointer, leftIsPointer := typeTable[opt.Left()].(typing.Pointer)
+			rightSize := typeTable[opt.Right()].Size()
+			if leftIsPointer {
+				switch rightSize {
+				case 8:
+					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Right())))
+				case 4:
+					addLine(fmt.Sprintf("\tmovsx rax, %s\n", wordVarToStack(opt.Right())))
+				case 1:
+					addLine(fmt.Sprintf("\tmovsx eax, %s\n", byteVarToStack(opt.Right())))
+					addLine("\tmovsx rax, eax\n")
+				}
 				addLine(fmt.Sprintf("\timul rax, %d\n", pointer.ToWhat.Size()))
+				addLine(fmt.Sprintf("\tadd %s, rax\n", qwordVarToStack(opt.Left())))
+			} else {
+				switch rightSize {
+				case 8:
+					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Right())))
+				case 4:
+					addLine(fmt.Sprintf("\tmov eax, %s\n", wordVarToStack(opt.Right())))
+				case 1:
+					addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
+				}
+				leftSize := typeTable[opt.Left()].Size()
+				if rightSize == 1 && leftSize > 1 {
+					addLine("\tmovsx eax, al\n")
+				}
+				switch leftSize {
+				case 8:
+					addLine(fmt.Sprintf("\tadd %s, rax\n", qwordVarToStack(opt.Left())))
+				case 4:
+					addLine(fmt.Sprintf("\tadd %s, eax\n", wordVarToStack(opt.Left())))
+				case 1:
+					addLine(fmt.Sprintf("\tadd %s, al\n", byteVarToStack(opt.Left())))
+				}
 			}
-			addLine(fmt.Sprintf("\tadd %s, rax\n", qwordVarToStack(opt.Left())))
 		case ir.Increment:
 			addLine(fmt.Sprintf("\tinc %s\n", qwordVarToStack(opt.In())))
 		case ir.Decrement:
@@ -191,6 +227,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				for _, arg := range extra.ArgVars {
 					totalArgSize += typeTable[arg].Size()
 				}
+				var numExtraArgs int
 
 				procRecord := env.Procs[parsing.IdName(extra.Name)]
 				switch procRecord.CallingConvention {
@@ -215,7 +252,11 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				case typing.SystemV:
 					regOrder := [...]string{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
 					regOrderSmaller := [...]string{"edi", "esi", "edx", "ecx", "r8d", "r9d"}
+
 					for i, arg := range extra.ArgVars {
+						if i >= len(regOrder) {
+							break
+						}
 						switch typeTable[arg].Size() {
 						case 8:
 							addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
@@ -226,7 +267,28 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 						default:
 							panic("Unsupported parameter size")
 						}
-						// TODO stack passing for i >= len(regOrder)
+					}
+					if len(extra.ArgVars) > len(regOrder) {
+						numExtraArgs = len(extra.ArgVars) - len(regOrder)
+						if numExtraArgs%2 == 1 {
+							// Make sure we are aligned to 16
+							addLine("\tsub rsp, 8\n")
+						}
+						for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numExtraArgs; i-- {
+							arg := extra.ArgVars[i]
+							switch typeTable[arg].Size() {
+							case 8:
+								addLine(fmt.Sprintf("\tpush %s\n", qwordVarToStack(arg)))
+							case 4:
+								addLine(fmt.Sprintf("\tmov eax, %s\n", wordVarToStack(arg)))
+								addLine("\tpush rax\n")
+							case 1:
+								addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(arg)))
+								addLine("\tpush rax\n")
+							default:
+								panic("Unsupported parameter size")
+							}
+						}
 					}
 				}
 				if procRecord.IsForeign {
@@ -236,6 +298,10 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				}
 				switch procRecord.CallingConvention {
 				case typing.SystemV:
+					// TODO this needs to change when we support things bigger than 8 bytes
+					if len(extra.ArgVars) > 6 {
+						addLine(fmt.Sprintf("\tadd rsp, %d\n", numExtraArgs*8+numExtraArgs%2*8))
+					}
 					switch typeTable[opt.Oprand1].Size() {
 					case 1:
 						addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Oprand1)))
@@ -515,6 +581,8 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			unresolved := mutRecord.argTypes[mutRecord.idx].(typing.Unresolved)
 			mutRecord.argTypes[mutRecord.idx] = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
 		}
+		delete(notDone, name)
+		delete(argsNotDone, name)
 		numResolved += increment
 		numArgResolved += argIncrement
 		env.Types[structNode.Name] = structRecord
@@ -522,12 +590,12 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 	for _, structRecord := range nodeToStruct {
 		structRecord.ResolveSizeAndOffset()
 	}
-	if len(notDone) != numResolved {
+	if len(notDone) > 0 {
 		for typeName := range notDone {
 			return fmt.Errorf("%s does not name a type", typeName)
 		}
 	}
-	if len(argsNotDone) != numArgResolved {
+	if len(argsNotDone) > 0 {
 		for typeName := range argsNotDone {
 			return fmt.Errorf("%s does not name a type", typeName)
 		}
@@ -539,6 +607,7 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 func main() {
 	outputPath := flag.String("o", "a.out", "path to the binary")
 	stopAfterAssembly := flag.Bool("c", false, "generate object file only")
+	libc := flag.Bool("libc", false, "generate main instead of _start for ues with libc")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) < 1 {
@@ -649,7 +718,11 @@ func main() {
 	}
 	defer out.Close()
 
-	writeAssemblyPrologue(out)
+	if *libc {
+		writeLibcPrologue(out)
+	} else {
+		writeAssemblyPrologue(out)
+	}
 
 	err = buildGlobalEnv(typer, env, structs, workOrders)
 	if err != nil {

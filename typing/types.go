@@ -34,13 +34,17 @@ func (_ Boolean) Size() int {
 	return 1
 }
 
+type S8 struct{ integerType }
+
+func (_ S8) Size() int {
+	return 1
+}
+
 type U8 struct{ integerType }
 
 func (_ U8) Size() int {
 	return 1
 }
-
-// type S64 struct{ integerType }
 
 type S32 struct{ integerType }
 
@@ -48,11 +52,29 @@ func (_ S32) Size() int {
 	return 4
 }
 
-// type S16 struct{ integerType }
+type S16 struct{ integerType }
 
-// type S8 struct{ integerType }
+func (_ S16) Size() int {
+	return 2
+}
 
-// type U64 struct{ integerType }
+type U16 struct{ integerType }
+
+func (_ U16) Size() int {
+	return 2
+}
+
+type S64 struct{ integerType }
+
+func (_ S64) Size() int {
+	return 8
+}
+
+type U64 struct{ integerType }
+
+func (_ U64) Size() int {
+	return 8
+}
 
 type U32 struct{ integerType }
 
@@ -82,23 +104,29 @@ func (s StructRecord) Size() int {
 func (s *StructRecord) ResolveSizeAndOffset() {
 	s.MemberOrder[0].Offset = 0
 	s.size = 0
-	var biggestSize int
+	var biggestAlignment int
 	for i, field := range s.MemberOrder {
 		fieldSize := field.Type.Size()
+		alignment := fieldSize
+		if arrType, isArray := field.Type.(Array); isArray {
+			alignment = arrType.OfWhat.Size()
+		}
 		if i > 0 {
-			if (s.size % fieldSize) == 0 {
+			if (s.size % alignment) == 0 {
 				s.MemberOrder[i].Offset = s.size
 			} else {
 				// cloest alignment
-				s.MemberOrder[i].Offset = s.size - (s.size % fieldSize) + fieldSize
+				s.MemberOrder[i].Offset = s.size - (s.size % alignment) + alignment
 			}
 		}
 		s.size = s.MemberOrder[i].Offset + fieldSize
-		if fieldSize > biggestSize {
-			biggestSize = fieldSize
+		if alignment > biggestAlignment {
+			biggestAlignment = alignment
 		}
 	}
-	s.size = s.size - (s.size % biggestSize) + biggestSize
+	if (s.size % biggestAlignment) != 0 {
+		s.size = s.size - (s.size % biggestAlignment) + biggestAlignment
+	}
 
 	s.PrintLayout()
 }

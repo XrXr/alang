@@ -15,6 +15,18 @@ _start:
 	`)
 }
 
+func writeLibcPrologue(out io.Writer) {
+	// sub rsp, 8 to align rsp
+	fmt.Fprintln(out, `global main
+	section .text
+main:
+	sub rsp, 8
+	call proc_main
+	xor rax, rax
+	add rsp, 8
+	ret`)
+}
+
 func writeBuiltins(out io.Writer) {
 	fmt.Fprintln(out, `proc_exit:
 	mov eax, 60

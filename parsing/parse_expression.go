@@ -255,10 +255,10 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			if tokens[paren.open-1] == "proc" {
 				isForeignProc = paren.open-2 >= start && tokens[paren.open-2] == "foreign"
 				proc, blockStart, err := parseProcExpr(tokens, parsed, paren, !isForeignProc)
-				proc.IsForeign = isForeignProc
 				if err != nil {
 					return nil, err
 				}
+				proc.IsForeign = isForeignProc
 				node = *proc
 				end = blockStart
 			} else {

@@ -94,7 +94,10 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				panic("Call to undefined procedure")
 			}
 			//TODO check arg types
-			typeTable[opt.Oprand1] = procRecord.Return
+			if typeTable[opt.Oprand1] == nil {
+				typeTable[opt.Oprand1] = procRecord.Return
+				// TODO checking oppotunity
+			}
 			return nil
 		}
 		// TODO Temporary hack for making a struct
@@ -279,10 +282,16 @@ func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 		return t.Builtins[BoolIdx]
 	case "u8":
 		return t.Builtins[U8Idx]
+	case "s8":
+		return t.Builtins[S8Idx]
 	case "s32":
 		return t.Builtins[S32Idx]
 	case "u32":
 		return t.Builtins[U32Idx]
+	case "s64":
+		return t.Builtins[S64Idx]
+	case "u64":
+		return t.Builtins[U64Idx]
 	}
 	return nil
 }
@@ -324,9 +333,12 @@ const (
 	StringIdx
 	IntIdx
 	BoolIdx
+	S8Idx
 	U8Idx
-	U32Idx
 	S32Idx
+	U32Idx
+	S64Idx
+	U64Idx
 )
 
 func NewTyper() *Typer {
@@ -336,9 +348,12 @@ func NewTyper() *Typer {
 		String{},
 		Int{},
 		Boolean{},
+		S8{},
 		U8{},
-		U32{},
 		S32{},
+		U32{},
+		S64{},
+		U64{},
 	}
 	return &typer
 }
