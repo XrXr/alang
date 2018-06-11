@@ -13,14 +13,15 @@
  √ proper [] operatator @done (18-02-23 13:37)
  x tokenizer should break up spaces better. Search for todo in parse_expression.go @cancelled (18-02-23 13:44)
  √ can't loop and use var to access array @done (18-04-18 20:44)
- □ return values
- □ continues/breaks
+ ✔ return values @done (18-06-11 20:23)
+ ✔ continues/breaks @done (18-06-11 20:23)
  □ increment/decrement
- □ complex expressions like if (rettrue() && retfalse() == false)
+ ✔ complex expressions like if (rettrue() && retfalse() == false) @done (18-06-11 20:24)
  □ better typing for numbers. There is a hack in place for assigning an int to u8 atm
  □ the whole Unresolved type situation
-   □ procs that take parameters which reference structs -- they are left as unresolved type for now
+   ✔ procs that take parameters which reference structs -- they are left as unresolved type for now @done (18-06-11 20:25)
    □ can't have array of structs/array of pointer to structs in your struct
+   ☐ can't do var foo *somestruct
  □ better pruning
  □ error reporting
    □ parse errors: binary operators missing operands ("i++" parses atm)

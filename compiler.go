@@ -76,6 +76,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine(fmt.Sprintf("\tmov %s, rax\n", dest))
 		default:
 			// TODO not panicing right now because we assign structs to unused vars in ir
+			// search for :morecopies
 			// panic("need a complex copy")
 		}
 	}
@@ -445,39 +446,63 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			addLine(fmt.Sprintf("\tmov %s [rbp-%d], %s\n", prefix, varOffset[opt.Out()], register))
 		case ir.StructMemberPtr:
 			baseType := typeTable[opt.In()]
+			fieldName := opt.Extra.(string)
 			switch baseType := baseType.(type) {
 			case typing.Pointer:
 				record := baseType.ToWhat.(*typing.StructRecord)
 				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-				addLine(fmt.Sprintf("\tadd rax, %d\n", record.Members[opt.Extra.(string)].Offset))
+				addLine(fmt.Sprintf("\tadd rax, %d\n", record.Members[fieldName].Offset))
 			case *typing.StructRecord:
-				addLine("\tmov rax, rbp\n")
-				addLine(fmt.Sprintf("\tsub rax, %d\n", varOffset[opt.In()]))
-				addLine(fmt.Sprintf("\tadd rax, %d\n", baseType.Members[opt.Extra.(string)].Offset))
+				addLine(fmt.Sprintf("\tlea rax, [rbp-%d+%d]\n", varOffset[opt.In()], baseType.Members[fieldName].Offset))
+			case typing.String:
+				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
+				switch fieldName {
+				case "data":
+					addLine("\tadd rax, 8\n")
+				case "length":
+					// it's pointing to it already
+				}
 			default:
 				panic("Type checker didn't do its job")
 			}
 			addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
 		case ir.LoadStructMember:
-			// TODO does not account for size of that member atm
 			baseType := typeTable[opt.In()]
+			fieldName := opt.Extra.(string)
+
 			switch baseType := baseType.(type) {
 			case typing.Pointer:
 				record := baseType.ToWhat.(*typing.StructRecord)
 				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-				addLine(fmt.Sprintf("\tmov rax, [rax+%d]\n", record.Members[opt.Extra.(string)].Offset))
-				addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
+				addLine(fmt.Sprintf("\tmov rax, [rax+%d]\n", record.Members[fieldName].Offset))
 			case *typing.StructRecord:
-				offset := varOffset[opt.In()] - baseType.Members[opt.Extra.(string)].Offset
+				offset := varOffset[opt.In()] - baseType.Members[fieldName].Offset
 				if offset < 0 {
 					println(opt.In())
-					println(baseType.Members[opt.Extra.(string)].Offset)
+					println(baseType.Members[fieldName].Offset)
 					panic("bad struct member offset")
 				}
 				addLine(fmt.Sprintf("\tmov rax, [rbp-%d]\n", offset))
-				addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
+			case typing.String:
+				switch fieldName {
+				case "data":
+					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
+					addLine("\tadd rax, 8\n")
+				case "length":
+					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
+					addLine("\tmov rax, [rax]\n")
+				}
 			default:
 				panic("Type checker didn't do its job")
+			}
+			// TODO does not account for size of that member atm :morecopies
+			switch typeTable[opt.Out()].Size() {
+			case 8:
+				addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
+			case 4:
+				addLine(fmt.Sprintf("\tmov %s, eax\n", wordVarToStack(opt.Out())))
+			case 1:
+				addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Out())))
 			}
 		case ir.Not:
 			setLabel := labelGen.GenLabel("not%d")

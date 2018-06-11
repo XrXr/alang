@@ -99,6 +99,7 @@ main :: proc () {
 	var w u64
 	e := XEvent()
 	msg := "he's done it"
+
 	var s s32
 
   	d = XOpenDisplay(0)
@@ -119,15 +120,11 @@ main :: proc () {
 
   	Expose := 12
   	KeyPress := 2
-  	var message [3]u8
-  	message[0] = 89
-  	message[1] = 69
-  	message[2] = 83
   	for true {
 		XNextEvent(d, &e)
 		if e.type == Expose {
         	XFillRectangle(d, w, gc, 20, 20, 10, 10)
-        	XDrawString(d, w, gc, 10, 50, &message, 3)
+        	XDrawString(d, w, gc, 10, 50, msg.data, msg.length)
 		}
 		if e.type == KeyPress {
 			break

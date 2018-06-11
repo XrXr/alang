@@ -35,19 +35,56 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		r := typeTable[opt.Oprand2]
 		return l, r
 	}
-	switch opt.Type {
-	case ir.AssignImm:
-		if typeTable[opt.Oprand1] == nil {
-			typeTable[opt.Oprand1] = t.typeImmediate(opt.Extra)
-		} else {
-			existing := typeTable[opt.Oprand1]
-			challenge := t.typeImmediate(opt.Extra)
-			if existing != challenge {
-				if existing.IsNumber() && !challenge.IsNumber() {
-					panic("type a is incompatible with type b")
-				}
+	checkAndFindStructMemberType := func(baseVn int, fieldName string) TypeRecord {
+		baseType := typeTable[baseVn]
+		basePointer, baseIsPointer := baseType.(Pointer)
+		if baseIsPointer {
+			baseType = basePointer.ToWhat
+		}
+		baseStruct, baseIsStruct := baseType.(*StructRecord)
+		baseIsString := baseType == t.Builtins[StringIdx]
+
+		if !baseIsStruct && !baseIsString {
+			panic("oprand is not a struct or pointer to a struct")
+		}
+		var field *StructField
+		if baseIsStruct {
+			var ok bool
+			field, ok = baseStruct.Members[fieldName]
+			if !ok {
+				panic("--- is not a member of the struct")
+			}
+		} else if baseIsString {
+			if fieldName != "data" && fieldName != "length" {
+				panic("--- is not a member of the struct")
 			}
 		}
+		if baseIsStruct {
+			return field.Type
+		} else if baseIsString {
+			switch fieldName {
+			case "length":
+				return t.Builtins[IntIdx]
+			case "data":
+				return Pointer{ToWhat: t.Builtins[U8Idx]}
+			}
+		}
+		panic("should be exhaustive")
+		return nil
+	}
+	giveTypeOrVerify := func(target int, typeRecord TypeRecord) {
+		currentType := typeTable[target]
+		if currentType == nil {
+			typeTable[target] = typeRecord
+		} else {
+			if !t.TypesCompatible(currentType, typeRecord) {
+				panic("type a is incompatible with type b")
+			}
+		}
+	}
+	switch opt.Type {
+	case ir.AssignImm:
+		giveTypeOrVerify(opt.Oprand1, t.typeImmediate(opt.Extra))
 	case ir.TakeAddress:
 		varType := typeTable[opt.In()]
 		if varType == nil {
@@ -55,35 +92,12 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		}
 		typeTable[opt.Out()] = Pointer{ToWhat: varType}
 	case ir.StructMemberPtr:
-		baseType := typeTable[opt.In()]
-		basePointer, baseIsPointer := baseType.(Pointer)
-		if baseIsPointer {
-			baseType = basePointer.ToWhat
-		}
-		baseStruct, baseIsStruct := baseType.(*StructRecord)
-		if !baseIsStruct {
-			panic("oprand is not a struct or pointer to a struct")
-		}
-		field, ok := baseStruct.Members[opt.Extra.(string)]
-		if !ok {
-			panic("--- is not a member of the struct")
-		}
-		typeTable[opt.Out()] = Pointer{ToWhat: field.Type}
+		outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
+		outType = Pointer{ToWhat: outType}
+		giveTypeOrVerify(opt.Out(), outType)
 	case ir.LoadStructMember:
-		baseType := typeTable[opt.In()]
-		basePointer, baseIsPointer := baseType.(Pointer)
-		if baseIsPointer {
-			baseType = basePointer.ToWhat
-		}
-		baseStruct, baseIsStruct := baseType.(*StructRecord)
-		if !baseIsStruct {
-			panic("oprand is not a struct or pointer to a struct")
-		}
-		field, ok := baseStruct.Members[opt.Extra.(string)]
-		if !ok {
-			panic("--- is not a member of the struct")
-		}
-		typeTable[opt.Out()] = field.Type
+		outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
+		giveTypeOrVerify(opt.Out(), outType)
 	case ir.Call:
 		extra := opt.Extra.(ir.CallExtra)
 		typeRecord, ok := env.Types[parsing.IdName(extra.Name)]
@@ -294,6 +308,10 @@ func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 		return t.Builtins[U64Idx]
 	}
 	return nil
+}
+
+func (t *Typer) TypesCompatible(a TypeRecord, b TypeRecord) bool {
+	return (a == b) || (a.IsNumber() && b.IsNumber())
 }
 
 func BuildArray(contained TypeRecord, nesting []int) TypeRecord {
