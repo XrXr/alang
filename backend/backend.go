@@ -10,11 +10,14 @@ import (
 	"io"
 )
 
-const (
-	Proc = iota + 1
-	If
-	Else
-)
+type procGen struct {
+	out           io.Writer
+	staticDataBuf *bytes.Buffer
+	block         frontend.OptBlock
+	typeTable     []typing.TypeRecord
+	env           *typing.EnvRecord
+	typer         *typing.Typer
+}
 
 func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
 	fmt.Println("framesize", framesize)
@@ -26,31 +29,31 @@ func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []in
 	}
 }
 
-func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block frontend.OptBlock, typeTable []typing.TypeRecord, env *typing.EnvRecord, typer *typing.Typer) {
+func (p *procGen) backendForOptBlock() {
 	nextId := 1
 	addLine := func(line string) {
-		io.WriteString(out, line)
+		io.WriteString(p.out, line)
 	}
-	varOffset := make([]int, block.NumberOfVars)
+	varOffset := make([]int, p.block.NumberOfVars)
 	genLabel := func(prefix string) string {
 		label := fmt.Sprintf("%s_%d", prefix, nextId)
 		nextId++
 		return label
 	}
 
-	if block.NumberOfArgs > 0 {
+	if p.block.NumberOfArgs > 0 {
 		// we push rbp in the prologue and call pushes the return address
 		varOffset[0] = -16
-		for i := 1; i < block.NumberOfArgs; i++ {
-			varOffset[i] = varOffset[i-1] - typeTable[i-1].Size()
+		for i := 1; i < p.block.NumberOfArgs; i++ {
+			varOffset[i] = varOffset[i-1] - p.typeTable[i-1].Size()
 		}
 	}
 
-	firstLocal := block.NumberOfArgs
-	if firstLocal < block.NumberOfVars {
-		varOffset[firstLocal] = typeTable[firstLocal].Size()
-		for i := firstLocal + 1; i < block.NumberOfVars; i++ {
-			varOffset[i] = varOffset[i-1] + typeTable[i].Size()
+	firstLocal := p.block.NumberOfArgs
+	if firstLocal < p.block.NumberOfVars {
+		varOffset[firstLocal] = p.typeTable[firstLocal].Size()
+		for i := firstLocal + 1; i < p.block.NumberOfVars; i++ {
+			varOffset[i] = varOffset[i-1] + p.typeTable[i].Size()
 		}
 	}
 	// Take note that not everything uses these. Namely indirect read/write
@@ -64,7 +67,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 		return fmt.Sprintf("byte [rbp-%d]", varOffset[varNum])
 	}
 	simpleCopy := func(sourceVarNum int, dest string) {
-		soruceType := typeTable[sourceVarNum]
+		soruceType := p.typeTable[sourceVarNum]
 		switch soruceType.Size() {
 		case 1:
 			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(sourceVarNum)))
@@ -84,7 +87,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 
 	oprandString := func(vn int) string {
 		dest := "bad addressing mode"
-		switch typeTable[vn].Size() {
+		switch p.typeTable[vn].Size() {
 		case 1:
 			dest = byteVarToStack(vn)
 		case 4:
@@ -96,7 +99,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 	}
 
 	framesize := 0
-	for _, typeRecord := range typeTable {
+	for _, typeRecord := range p.typeTable {
 		framesize += typeRecord.Size()
 	}
 	if framesize%16 != 0 {
@@ -104,9 +107,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 		// Since we push rbp in our prologue we align to 16 here
 		framesize += 16 - framesize%16
 	}
-	backendDebug(framesize, typeTable, varOffset)
-	for i, opt := range block.Opts {
-		fmt.Fprintf(out, ";ir line %d\n", i)
+	backendDebug(framesize, p.typeTable, varOffset)
+	for i, opt := range p.block.Opts {
+		fmt.Fprintf(p.out, ";ir line %d\n", i)
 		switch opt.Type {
 		case ir.Assign:
 			simpleCopy(opt.Right(), oprandString(opt.Left()))
@@ -148,11 +151,11 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 					buf.WriteRune('0')
 				}
 
-				labelName := genLabel(fmt.Sprintf("static_string_%p", staticDataBuf))
-				staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
-				staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
-				staticDataBuf.ReadFrom(&buf)
-				staticDataBuf.WriteRune('\n')
+				labelName := genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
+				p.staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
+				p.staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
+				p.staticDataBuf.ReadFrom(&buf)
+				p.staticDataBuf.WriteRune('\n')
 				addLine(fmt.Sprintf("\tmov %s, %s\n", qwordVarToStack(opt.Oprand1), labelName))
 			case parsing.TypeDecl:
 				// TODO zero out decl
@@ -160,8 +163,8 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 				panic("unknown immediate value type")
 			}
 		case ir.Add:
-			pointer, leftIsPointer := typeTable[opt.Left()].(typing.Pointer)
-			rightSize := typeTable[opt.Right()].Size()
+			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
+			rightSize := p.typeTable[opt.Right()].Size()
 			if leftIsPointer {
 				switch rightSize {
 				case 8:
@@ -183,7 +186,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 				case 1:
 					addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
 				}
-				leftSize := typeTable[opt.Left()].Size()
+				leftSize := p.typeTable[opt.Left()].Size()
 				if rightSize == 1 && leftSize > 1 {
 					addLine("\tmovsx eax, al\n")
 				}
@@ -224,24 +227,24 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 			addLine(fmt.Sprintf("\tjnz .%s\n", opt.Extra.(string)))
 		case ir.Call:
 			extra := opt.Extra.(ir.CallExtra)
-			if _, isStruct := env.Types[parsing.IdName(extra.Name)]; isStruct {
+			if _, isStruct := p.env.Types[parsing.IdName(extra.Name)]; isStruct {
 				// TODO: code to zero the members
 			} else {
 				// TODO: this can be done once
 				totalArgSize := 0
 				for _, arg := range extra.ArgVars {
-					totalArgSize += typeTable[arg].Size()
+					totalArgSize += p.typeTable[arg].Size()
 				}
 				var numExtraArgs int
 
-				procRecord := env.Procs[parsing.IdName(extra.Name)]
+				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
 				switch procRecord.CallingConvention {
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tsub rsp, %d\n", totalArgSize))
 					offset := 0
 
 					for _, arg := range extra.ArgVars {
-						thisArgSize := typeTable[arg].Size()
+						thisArgSize := p.typeTable[arg].Size()
 						var dest string
 						switch thisArgSize {
 						case 1:
@@ -262,7 +265,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 						if i >= len(regOrder) {
 							break
 						}
-						switch typeTable[arg].Size() {
+						switch p.typeTable[arg].Size() {
 						case 8:
 							addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
 						case 4:
@@ -281,7 +284,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 						}
 						for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numExtraArgs; i-- {
 							arg := extra.ArgVars[i]
-							switch typeTable[arg].Size() {
+							switch p.typeTable[arg].Size() {
 							case 8:
 								addLine(fmt.Sprintf("\tpush %s\n", qwordVarToStack(arg)))
 							case 4:
@@ -307,7 +310,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 					if len(extra.ArgVars) > 6 {
 						addLine(fmt.Sprintf("\tadd rsp, %d\n", numExtraArgs*8+numExtraArgs%2*8))
 					}
-					switch typeTable[opt.Oprand1].Size() {
+					switch p.typeTable[opt.Oprand1].Size() {
 					case 1:
 						addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Oprand1)))
 					case 4:
@@ -317,7 +320,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 					}
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tadd rsp, %d\n", totalArgSize))
-					if typeTable[opt.Oprand1].Size() > 0 {
+					if p.typeTable[opt.Oprand1].Size() > 0 {
 						if procRecord.IsForeign {
 							addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Oprand1)))
 						} else {
@@ -345,8 +348,8 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 			addLine("\tret\n")
 		case ir.Compare:
 			extra := opt.Extra.(ir.CompareExtra)
-			lt := typeTable[opt.Left()]
-			rt := typeTable[opt.Right()]
+			lt := p.typeTable[opt.Left()]
+			rt := p.typeTable[opt.Right()]
 			smaller := lt
 			if rt.Size() < lt.Size() {
 				smaller = rt
@@ -402,7 +405,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.In()]))
 		case ir.ArrayToPointer:
 			dest := qwordVarToStack(opt.Out())
-			switch typeTable[opt.In()].(type) {
+			switch p.typeTable[opt.In()].(type) {
 			case typing.Array:
 				addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
 				addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.In()]))
@@ -416,7 +419,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 			addLine(fmt.Sprintf("\tmov rbx, %s\n", qwordVarToStack(opt.Right())))
 			var prefix string
 			var register string
-			switch typeTable[opt.Left()].(typing.Pointer).ToWhat.Size() {
+			switch p.typeTable[opt.Left()].(typing.Pointer).ToWhat.Size() {
 			case 1:
 				prefix = "byte"
 				register = "bl"
@@ -432,7 +435,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
 			var prefix string
 			var register string
-			switch typeTable[opt.In()].(typing.Pointer).ToWhat.Size() {
+			switch p.typeTable[opt.In()].(typing.Pointer).ToWhat.Size() {
 			case 1:
 				prefix = "byte"
 				register = "al"
@@ -446,7 +449,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 			addLine(fmt.Sprintf("\tmov %s, %s [rax]\n", register, prefix))
 			addLine(fmt.Sprintf("\tmov %s [rbp-%d], %s\n", prefix, varOffset[opt.Out()], register))
 		case ir.StructMemberPtr:
-			baseType := typeTable[opt.In()]
+			baseType := p.typeTable[opt.In()]
 			fieldName := opt.Extra.(string)
 			switch baseType := baseType.(type) {
 			case typing.Pointer:
@@ -468,7 +471,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 			}
 			addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
 		case ir.LoadStructMember:
-			baseType := typeTable[opt.In()]
+			baseType := p.typeTable[opt.In()]
 			fieldName := opt.Extra.(string)
 
 			switch baseType := baseType.(type) {
@@ -497,7 +500,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 				panic("Type checker didn't do its job")
 			}
 			// TODO does not account for size of that member atm :morecopies
-			switch typeTable[opt.Out()].Size() {
+			switch p.typeTable[opt.Out()].Size() {
 			case 8:
 				addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
 			case 4:
@@ -508,7 +511,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 		case ir.Not:
 			setLabel := genLabel(".not")
 			addLine(fmt.Sprintf("\tmov %s, 0\n", byteVarToStack(opt.Out())))
-			switch typeTable[opt.In()].(type) {
+			switch p.typeTable[opt.In()].(type) {
 			case typing.Pointer:
 				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
 				addLine(fmt.Sprintf("\tcmp rax, 0\n"))
@@ -540,6 +543,13 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block fronte
 
 func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) *bytes.Buffer {
 	var staticDataBuf bytes.Buffer
-	backendForOptBlock(out, &staticDataBuf, block, typeTable, globalEnv, typer)
+	gen := procGen{
+		out:           out,
+		block:         block,
+		typeTable:     typeTable,
+		env:           globalEnv,
+		typer:         typer,
+		staticDataBuf: &staticDataBuf}
+	gen.backendForOptBlock()
 	return &staticDataBuf
 }
