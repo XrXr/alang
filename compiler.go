@@ -248,7 +248,7 @@ func main() {
 			fmt.Fprintf(out, "extern %s\n", workOrder.Name)
 			continue
 		}
-		staticData = append(staticData, backend.X86ForBlock(out, &labelGen, ir, typeTable, env, typer))
+		staticData = append(staticData, backend.X86ForBlock(out, ir, typeTable, env, typer))
 	}
 
 	io.WriteString(out, "; ---user code end---\n")

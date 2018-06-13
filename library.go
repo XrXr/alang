@@ -11,8 +11,7 @@ func writeAssemblyPrologue(out io.Writer) {
 _start:
 	call proc_main
 	xor rdi, rdi
-	jmp proc_exit
-	`)
+	jmp proc_exit`)
 }
 
 func writeLibcPrologue(out io.Writer) {

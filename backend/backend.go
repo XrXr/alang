@@ -1,9 +1,7 @@
 package backend
 
 import (
-	_ "bufio"
 	"bytes"
-	_ "flag"
 	"fmt"
 	"github.com/XrXr/alang/frontend"
 	"github.com/XrXr/alang/ir"
@@ -28,11 +26,17 @@ func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []in
 	}
 }
 
-func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *frontend.LabelIdGen, block frontend.OptBlock, typeTable []typing.TypeRecord, env *typing.EnvRecord, typer *typing.Typer) {
+func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, block frontend.OptBlock, typeTable []typing.TypeRecord, env *typing.EnvRecord, typer *typing.Typer) {
+	nextId := 1
 	addLine := func(line string) {
 		io.WriteString(out, line)
 	}
 	varOffset := make([]int, block.NumberOfVars)
+	genLabel := func(prefix string) string {
+		label := fmt.Sprintf("%s_%d", prefix, nextId)
+		nextId++
+		return label
+	}
 
 	if block.NumberOfArgs > 0 {
 		// we push rbp in the prologue and call pushes the return address
@@ -144,7 +148,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 					buf.WriteRune('0')
 				}
 
-				labelName := labelGen.GenLabel("staticstring%d")
+				labelName := genLabel(fmt.Sprintf("static_string_%p", staticDataBuf))
 				staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
 				staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
 				staticDataBuf.ReadFrom(&buf)
@@ -213,11 +217,11 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 		case ir.JumpIfFalse:
 			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
 			addLine("\tcmp al, 0\n")
-			addLine(fmt.Sprintf("\tjz %s\n", opt.Extra.(string)))
+			addLine(fmt.Sprintf("\tjz .%s\n", opt.Extra.(string)))
 		case ir.JumpIfTrue:
 			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
 			addLine("\tcmp al, 0\n")
-			addLine(fmt.Sprintf("\tjnz %s\n", opt.Extra.(string)))
+			addLine(fmt.Sprintf("\tjnz .%s\n", opt.Extra.(string)))
 		case ir.Call:
 			extra := opt.Extra.(ir.CallExtra)
 			if _, isStruct := env.Types[parsing.IdName(extra.Name)]; isStruct {
@@ -327,9 +331,9 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				}
 			}
 		case ir.Jump:
-			addLine(fmt.Sprintf("\tjmp %s\n", opt.Extra.(string)))
+			addLine(fmt.Sprintf("\tjmp .%s\n", opt.Extra.(string)))
 		case ir.Label:
-			addLine(fmt.Sprintf("%s:\n", opt.Extra.(string)))
+			addLine(fmt.Sprintf(".%s:\n", opt.Extra.(string)))
 		case ir.StartProc:
 			addLine(fmt.Sprintf("proc_%s:\n", opt.Extra.(string)))
 			addLine("\tpush rbp\n")
@@ -373,7 +377,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 			}
 			addLine(fmt.Sprintf("\tmov %s, 1\n", byteVarToStack(extra.Out)))
 			addLine(fmt.Sprintf("\tcmp %s, %s\n", lReg, rReg))
-			labelName := labelGen.GenLabel("cmp%d")
+			labelName := genLabel(".cmp")
 			switch extra.How {
 			case ir.Greater:
 				addLine(fmt.Sprintf("\tjg %s\n", labelName))
@@ -502,7 +506,7 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 				addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Out())))
 			}
 		case ir.Not:
-			setLabel := labelGen.GenLabel("not%d")
+			setLabel := genLabel(".not")
 			addLine(fmt.Sprintf("\tmov %s, 0\n", byteVarToStack(opt.Out())))
 			switch typeTable[opt.In()].(type) {
 			case typing.Pointer:
@@ -534,8 +538,8 @@ func backendForOptBlock(out io.Writer, staticDataBuf *bytes.Buffer, labelGen *fr
 	}
 }
 
-func X86ForBlock(out io.Writer, labelGen *frontend.LabelIdGen, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) *bytes.Buffer {
+func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) *bytes.Buffer {
 	var staticDataBuf bytes.Buffer
-	backendForOptBlock(out, &staticDataBuf, labelGen, block, typeTable, globalEnv, typer)
+	backendForOptBlock(out, &staticDataBuf, block, typeTable, globalEnv, typer)
 	return &staticDataBuf
 }
