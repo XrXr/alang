@@ -10,13 +10,25 @@ import (
 	"io"
 )
 
+type outputBlock struct {
+	buffer *bytes.Buffer
+	next   *outputBlock
+}
+
+func newOutputBlock() *outputBlock {
+	var block outputBlock
+	block.buffer = new(bytes.Buffer)
+	return &block
+}
+
 type procGen struct {
-	out           io.Writer
-	staticDataBuf *bytes.Buffer
-	block         frontend.OptBlock
-	typeTable     []typing.TypeRecord
-	env           *typing.EnvRecord
-	typer         *typing.Typer
+	out              *outputBlock
+	firstOutputBlock *outputBlock
+	staticDataBuf    *bytes.Buffer
+	block            frontend.OptBlock
+	typeTable        []typing.TypeRecord
+	env              *typing.EnvRecord
+	typer            *typing.Typer
 }
 
 func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
@@ -29,10 +41,16 @@ func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []in
 	}
 }
 
+func (p *procGen) switchToNewOutBlock() {
+	current := p.out
+	p.out = newOutputBlock()
+	current.next = p.out
+}
+
 func (p *procGen) backendForOptBlock() {
 	nextId := 1
 	addLine := func(line string) {
-		io.WriteString(p.out, line)
+		io.WriteString(p.out.buffer, line)
 	}
 	varOffset := make([]int, p.block.NumberOfVars)
 	genLabel := func(prefix string) string {
@@ -109,7 +127,7 @@ func (p *procGen) backendForOptBlock() {
 	}
 	backendDebug(framesize, p.typeTable, varOffset)
 	for i, opt := range p.block.Opts {
-		fmt.Fprintf(p.out, ";ir line %d\n", i)
+		addLine(fmt.Sprintf(";ir line %d\n", i))
 		switch opt.Type {
 		case ir.Assign:
 			simpleCopy(opt.Right(), oprandString(opt.Left()))
@@ -163,6 +181,7 @@ func (p *procGen) backendForOptBlock() {
 				panic("unknown immediate value type")
 			}
 		case ir.Add:
+			p.switchToNewOutBlock()
 			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
 			rightSize := p.typeTable[opt.Right()].Size()
 			if leftIsPointer {
@@ -542,14 +561,24 @@ func (p *procGen) backendForOptBlock() {
 }
 
 func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) *bytes.Buffer {
+	firstOut := newOutputBlock()
 	var staticDataBuf bytes.Buffer
 	gen := procGen{
-		out:           out,
-		block:         block,
-		typeTable:     typeTable,
-		env:           globalEnv,
-		typer:         typer,
-		staticDataBuf: &staticDataBuf}
+		out:              firstOut,
+		firstOutputBlock: firstOut,
+		block:            block,
+		typeTable:        typeTable,
+		env:              globalEnv,
+		typer:            typer,
+		staticDataBuf:    &staticDataBuf}
 	gen.backendForOptBlock()
+	outBlock := gen.firstOutputBlock
+	for outBlock != nil {
+		_, err := outBlock.buffer.WriteTo(out)
+		if err != nil {
+			panic(err)
+		}
+		outBlock = outBlock.next
+	}
 	return &staticDataBuf
 }
