@@ -16,6 +16,7 @@ type InstType int
 const (
 	ZeroVarInstructions InstType = iota
 
+	Return
 	Transclude
 	Jump
 	StartProc
@@ -24,6 +25,7 @@ const (
 
 	UnaryInstructions
 
+	Call
 	AssignImm
 	Increment
 	Decrement
@@ -47,11 +49,6 @@ const (
 	Not
 	BoolAnd
 	BoolOr
-
-	VariadicInstructions // TODO: this should be below zero var instruction
-
-	Call
-	Return
 )
 
 func (i *Inst) Left() int {

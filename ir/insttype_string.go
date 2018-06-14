@@ -4,9 +4,9 @@ package ir
 
 import "strconv"
 
-const _InstType_name = "ZeroVarInstructionsTranscludeJumpStartProcEndProcLabelUnaryInstructionsAssignImmIncrementDecrementJumpIfFalseJumpIfTrueBinaryInstructionsSubAssignAddMultDivTakeAddressArrayToPointerIndirectWriteIndirectLoadStructMemberPtrLoadStructMemberCompareNotBoolAndBoolOrVariadicInstructionsCallReturn"
+const _InstType_name = "ZeroVarInstructionsReturnTranscludeJumpStartProcEndProcLabelUnaryInstructionsCallAssignImmIncrementDecrementJumpIfFalseJumpIfTrueBinaryInstructionsSubAssignAddMultDivTakeAddressArrayToPointerIndirectWriteIndirectLoadStructMemberPtrLoadStructMemberCompareNotBoolAndBoolOr"
 
-var _InstType_index = [...]uint16{0, 19, 29, 33, 42, 49, 54, 71, 80, 89, 98, 109, 119, 137, 140, 146, 149, 153, 156, 167, 181, 194, 206, 221, 237, 244, 247, 254, 260, 280, 284, 290}
+var _InstType_index = [...]uint16{0, 19, 25, 35, 39, 48, 55, 60, 77, 81, 90, 99, 108, 119, 129, 147, 150, 156, 159, 163, 166, 177, 191, 204, 216, 231, 247, 254, 257, 264, 270}
 
 func (i InstType) String() string {
 	if i < 0 || i >= InstType(len(_InstType_index)-1) {

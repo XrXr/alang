@@ -21,6 +21,76 @@ func newOutputBlock() *outputBlock {
 	return &block
 }
 
+type register struct {
+	qwordName string // 64 bit
+	dwordName string // 32 bit
+	// wordName  string // 16 bit
+	byteName   string // 8 bit
+	occupiedBy int
+}
+
+const (
+	raxIdx int = iota
+	rbx
+	rcx
+	rdx
+	rsi
+	rdi
+	r8
+	r9
+	r10
+	r11
+	r12
+	r13
+	r14
+	r15
+	numRegisters
+)
+
+type registerBucket struct {
+	all       [numRegisters]register
+	available []int
+}
+
+func initRegisterBucket(bucket *registerBucket) {
+	baseNames := [...]string{"ax", "bx", "cx", "dx", "si", "di"}
+	for i, base := range baseNames {
+		bucket.all[i].qwordName = "r" + base
+		bucket.all[i].qwordName = "e" + base
+		bucket.all[i].byteName = base[0:1] + "l" // not correct for rsi and rdi. We adjust for those below
+	}
+	bucket.all[rsi].byteName = "sil"
+	bucket.all[rdi].byteName = "dil"
+	for i := len(baseNames); i < len(bucket.all); i++ {
+		qwordName := fmt.Sprintf("r%d", i-len(baseNames)+8)
+		bucket.all[i].qwordName = qwordName
+		bucket.all[i].dwordName = qwordName + "d"
+		bucket.all[i].byteName = qwordName + "b"
+	}
+
+	for _, reg := range bucket.all {
+		reg.occupiedBy = -1
+	}
+
+	bucket.available = make([]int, numRegisters)
+	for i := range bucket.available {
+		bucket.available[i] = i
+	}
+}
+
+func (r *registerBucket) copy() *registerBucket {
+	var newBucket registerBucket
+	newBucket = *r
+	newBucket.available = make([]int, len(r.available))
+	copy(newBucket.available, r.available)
+	return &newBucket
+}
+
+type varStorageInfo struct {
+	rbpOffset       int // 0 if not on stack / unknown at this time
+	currentRegister int // -1 if not in register
+}
+
 type procGen struct {
 	out              *outputBlock
 	firstOutputBlock *outputBlock
@@ -29,16 +99,9 @@ type procGen struct {
 	typeTable        []typing.TypeRecord
 	env              *typing.EnvRecord
 	typer            *typing.Typer
-}
-
-func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
-	fmt.Println("framesize", framesize)
-	if len(typeTable) != len(offsetTable) {
-		panic("what?")
-	}
-	for i, typeRecord := range typeTable {
-		fmt.Printf("var %d type: %#v offset %d\n", i, typeRecord, offsetTable[i])
-	}
+	registers        registerBucket
+	varStorage       []varStorageInfo
+	lastUsage        []int
 }
 
 func (p *procGen) switchToNewOutBlock() {
@@ -48,6 +111,7 @@ func (p *procGen) switchToNewOutBlock() {
 }
 
 func (p *procGen) backendForOptBlock() {
+	parsing.Dump(p.lastUsage)
 	nextId := 1
 	addLine := func(line string) {
 		io.WriteString(p.out.buffer, line)
@@ -125,7 +189,7 @@ func (p *procGen) backendForOptBlock() {
 		// Since we push rbp in our prologue we align to 16 here
 		framesize += 16 - framesize%16
 	}
-	backendDebug(framesize, p.typeTable, varOffset)
+	// backendDebug(framesize, p.typeTable, varOffset)
 	for i, opt := range p.block.Opts {
 		addLine(fmt.Sprintf(";ir line %d\n", i))
 		switch opt.Type {
@@ -560,6 +624,49 @@ func (p *procGen) backendForOptBlock() {
 	}
 }
 
+func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
+	fmt.Println("framesize", framesize)
+	if len(typeTable) != len(offsetTable) {
+		panic("what?")
+	}
+	for i, typeRecord := range typeTable {
+		fmt.Printf("var %d type: %#v offset %d\n", i, typeRecord, offsetTable[i])
+	}
+}
+
+// return an array where the ith element has the index of the inst in which vn=i is last used
+func findLastusage(block frontend.OptBlock) []int {
+	lastUse := make([]int, block.NumberOfVars)
+	recordUsage := func(vn int, instIdx int) {
+		if lastUse[vn] == 0 { // the 0th instruction is always startproc, which doesn't use any var
+			lastUse[vn] = instIdx
+		}
+	}
+	for i := len(block.Opts) - 1; i >= 0; i-- {
+		opt := block.Opts[i]
+		if opt.Type > ir.UnaryInstructions {
+			recordUsage(opt.Oprand1, i)
+		}
+		if opt.Type > ir.BinaryInstructions {
+			recordUsage(opt.Oprand2, i)
+		}
+		if opt.Type == ir.Call {
+			for _, vn := range opt.Extra.(ir.CallExtra).ArgVars {
+				recordUsage(vn, i)
+			}
+		}
+		if opt.Type == ir.Return {
+			for _, vn := range opt.Extra.(ir.ReturnExtra).Values {
+				recordUsage(vn, i)
+			}
+		}
+		if opt.Type == ir.Compare {
+			recordUsage(opt.Extra.(ir.CompareExtra).Out, i)
+		}
+	}
+	return lastUse
+}
+
 func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) *bytes.Buffer {
 	firstOut := newOutputBlock()
 	var staticDataBuf bytes.Buffer
@@ -570,7 +677,14 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		typeTable:        typeTable,
 		env:              globalEnv,
 		typer:            typer,
-		staticDataBuf:    &staticDataBuf}
+		staticDataBuf:    &staticDataBuf,
+		lastUsage:        findLastusage(block)}
+	initRegisterBucket(&gen.registers)
+	gen.varStorage = make([]varStorageInfo, block.NumberOfVars)
+	for i := 0; i < block.NumberOfVars; i++ {
+		gen.varStorage[i].currentRegister = -1
+	}
+
 	gen.backendForOptBlock()
 	outBlock := gen.firstOutputBlock
 	for outBlock != nil {
