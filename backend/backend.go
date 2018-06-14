@@ -188,6 +188,10 @@ func (p *procGen) regRegCommand(command string, a int, b int) {
 	p.issueCommand(fmt.Sprintf("%s %s, %s", command, p.registerOf(a).qwordName, p.registerOf(b).qwordName))
 }
 
+func (p *procGen) movRegReg(a int, b int) {
+	p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[a].qwordName, p.registers.all[b].qwordName))
+}
+
 func (p *procGen) releaseRegister(register int) {
 	currentOwner := p.registers.all[register].occupiedBy
 	if currentOwner != invalidVn {
@@ -233,7 +237,7 @@ func (p *procGen) giveRegisterToVar(register int, vn int) {
 	// take care of the var that's currently there and all the book keeping
 	if currentTenant == invalidVn {
 		if vnAlreadyInRegister {
-			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[register].qwordName, p.registers.all[vnRegister].qwordName))
+			p.movRegReg(register, vnRegister)
 			p.releaseRegister(vnRegister)
 		}
 		takeRegister(register)
@@ -253,7 +257,7 @@ func (p *procGen) giveRegisterToVar(register int, vn int) {
 		}
 		if len(p.registers.available) > 0 {
 			// swap currentTenant to a new register
-			newReg := p.registers.available[0]
+			newReg := p.registers.available[len(p.registers.available)-1]
 			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[register].qwordName, p.registers.all[newReg].qwordName))
 			takeRegister(newReg)
 			changeCurrentRegister(currentTenant, newReg)
@@ -361,6 +365,7 @@ func (p *procGen) backendForOptBlock() {
 	// backendDebug(framesize, p.typeTable, varOffset)
 	for i, opt := range p.block.Opts {
 		addLine(fmt.Sprintf(";ir line %d\n", i))
+
 		switch opt.Type {
 		case ir.Assign:
 			dst := opt.Left()
@@ -531,12 +536,13 @@ func (p *procGen) backendForOptBlock() {
 						}
 						switch p.typeTable[arg].Size() {
 						case 8, 4, 1:
-							p.giveRegisterToVar(regOrder[i], arg)
-						// 	addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
-						// case 4:
-						// 	addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrder[i], wordVarToStack(arg)))
-						// case 1:
-						// 	addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrderSmaller[i], byteVarToStack(arg)))
+							switch p.varStorage[arg].currentRegister {
+							case rbx, r12, r13, r14, r15:
+								// these registers are preserved across calls
+								p.movRegReg(regOrder[i], p.varStorage[arg].currentRegister)
+							default:
+								p.giveRegisterToVar(regOrder[i], arg)
+							}
 						default:
 							panic("Unsupported parameter size")
 						}
@@ -544,7 +550,7 @@ func (p *procGen) backendForOptBlock() {
 					regsThatGetDestroyed := [...]int{rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11}
 					for _, reg := range regsThatGetDestroyed {
 						owner := p.registers.all[reg].occupiedBy
-						if owner != invalidRegister {
+						if owner != invalidVn && p.lastUsage[owner] != i {
 							p.ensureStackOffsetValid(owner)
 							p.memRegCommand("mov", owner, owner)
 							p.releaseRegister(reg)
