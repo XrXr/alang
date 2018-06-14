@@ -21,16 +21,8 @@ func newOutputBlock() *outputBlock {
 	return &block
 }
 
-type register struct {
-	qwordName string // 64 bit
-	dwordName string // 32 bit
-	// wordName  string // 16 bit
-	byteName   string // 8 bit
-	occupiedBy int
-}
-
 const (
-	raxIdx int = iota
+	rax int = iota
 	rbx
 	rcx
 	rdx
@@ -47,8 +39,19 @@ const (
 	numRegisters
 )
 
+const invalidVn int = -1
+const invalidRegister int = -1
+
+type registerInfo struct {
+	qwordName string // 64 bit
+	dwordName string // 32 bit
+	// wordName  string // 16 bit
+	byteName   string // 8 bit
+	occupiedBy int    // invalidVn if available
+}
+
 type registerBucket struct {
-	all       [numRegisters]register
+	all       [numRegisters]registerInfo
 	available []int
 }
 
@@ -56,7 +59,7 @@ func initRegisterBucket(bucket *registerBucket) {
 	baseNames := [...]string{"ax", "bx", "cx", "dx", "si", "di"}
 	for i, base := range baseNames {
 		bucket.all[i].qwordName = "r" + base
-		bucket.all[i].qwordName = "e" + base
+		bucket.all[i].dwordName = "e" + base
 		bucket.all[i].byteName = base[0:1] + "l" // not correct for rsi and rdi. We adjust for those below
 	}
 	bucket.all[rsi].byteName = "sil"
@@ -68,13 +71,25 @@ func initRegisterBucket(bucket *registerBucket) {
 		bucket.all[i].byteName = qwordName + "b"
 	}
 
-	for _, reg := range bucket.all {
-		reg.occupiedBy = -1
+	for i := range bucket.all {
+		bucket.all[i].occupiedBy = invalidVn
 	}
 
-	bucket.available = make([]int, numRegisters)
-	for i := range bucket.available {
-		bucket.available[i] = i
+	bucket.available = []int{
+		r12,
+		r13,
+		r14,
+		r15,
+		rbx,
+		rax,
+		rcx,
+		rdx,
+		rsi,
+		rdi,
+		r8,
+		r9,
+		r10,
+		r11,
 	}
 }
 
@@ -88,26 +103,193 @@ func (r *registerBucket) copy() *registerBucket {
 
 type varStorageInfo struct {
 	rbpOffset       int // 0 if not on stack / unknown at this time
-	currentRegister int // -1 if not in register
+	currentRegister int // invalidRegister if not in register
 }
 
 type procGen struct {
-	out              *outputBlock
-	firstOutputBlock *outputBlock
-	staticDataBuf    *bytes.Buffer
-	block            frontend.OptBlock
-	typeTable        []typing.TypeRecord
-	env              *typing.EnvRecord
-	typer            *typing.Typer
-	registers        registerBucket
-	varStorage       []varStorageInfo
-	lastUsage        []int
+	out                *outputBlock
+	firstOutputBlock   *outputBlock
+	prologueBlock      *outputBlock
+	staticDataBuf      *bytes.Buffer
+	block              frontend.OptBlock
+	env                *typing.EnvRecord
+	typer              *typing.Typer
+	registers          registerBucket
+	currentFrameSize   int
+	nextRegToBeSwapped int
+	// all three below are vn-indexed
+	typeTable  []typing.TypeRecord
+	varStorage []varStorageInfo
+	lastUsage  []int
 }
 
 func (p *procGen) switchToNewOutBlock() {
 	current := p.out
 	p.out = newOutputBlock()
 	current.next = p.out
+}
+
+func (p *procGen) registerOf(vn int) *registerInfo {
+	return &(p.registers.all[p.varStorage[vn].currentRegister])
+}
+
+func (p *procGen) inRegister(vn int) bool {
+	return p.varStorage[vn].currentRegister > -1
+}
+
+func (p *procGen) hasStackStroage(vn int) bool {
+	// note that rbpOffset might be negative in case of arguments
+	return p.varStorage[vn].rbpOffset != 0
+}
+
+func (p *procGen) issueCommand(command string) {
+	fmt.Fprintf(p.out.buffer, "\t%s\n", command)
+}
+
+func (p *procGen) regImmCommand(command string, vn int, immediate int64) {
+	p.issueCommand(fmt.Sprintf("%s %s, %d", command, p.registerOf(vn).qwordName, immediate))
+}
+
+func (p *procGen) prefixRegisterAndOffset(memVar int, regVar int) (string, string, int) {
+	reg := p.registerOf(regVar)
+	var prefix string
+	var register string
+	switch p.typeTable[memVar].Size() {
+	case 1:
+		prefix = "byte"
+		register = reg.byteName
+	case 4:
+		prefix = "dword"
+		register = reg.dwordName
+	case 8:
+		prefix = "qword"
+		register = reg.qwordName
+	default:
+		panic("should've checked the size")
+	}
+	offset := p.varStorage[memVar].rbpOffset
+	if offset == 0 {
+		panic("tried to use the stack address of a var when it doesn't have one")
+	}
+	return prefix, register, offset
+}
+
+func (p *procGen) memRegCommand(command string, memVar int, regVar int) {
+	prefix, register, offset := p.prefixRegisterAndOffset(memVar, regVar)
+	p.issueCommand(fmt.Sprintf("%s %s[rbp-%d], %s", command, prefix, offset, register))
+}
+
+func (p *procGen) regMemCommand(command string, regVar int, memVar int) {
+	prefix, register, offset := p.prefixRegisterAndOffset(memVar, regVar)
+	p.issueCommand(fmt.Sprintf("%s %s, %s[rbp-%d]", command, register, prefix, offset))
+}
+
+func (p *procGen) regRegCommand(command string, a int, b int) {
+	p.issueCommand(fmt.Sprintf("%s %s, %s", command, p.registerOf(a).qwordName, p.registerOf(b).qwordName))
+}
+
+func (p *procGen) releaseRegister(register int) {
+	currentOwner := p.registers.all[register].occupiedBy
+	if currentOwner != invalidVn {
+		p.varStorage[currentOwner].currentRegister = invalidRegister
+	}
+	p.registers.all[register].occupiedBy = invalidVn
+	p.registers.available = append(p.registers.available, register)
+}
+
+func (p *procGen) giveRegisterToVar(register int, vn int) {
+	takeRegister := func(register int) {
+		found := false
+		var idxInAvailable int
+		for i, reg := range p.registers.available {
+			if reg == register {
+				found = true
+				idxInAvailable = i
+				break
+			}
+		}
+		if !found {
+			panic("register available list inconsistent")
+		}
+		for i := idxInAvailable + 1; i < len(p.registers.available); i++ {
+			p.registers.available[i-1] = p.registers.available[i]
+		}
+		p.registers.available = p.registers.available[:len(p.registers.available)-1]
+	}
+	changeCurrentRegister := func(vn int, register int) {
+		p.registers.all[register].occupiedBy = vn
+		p.varStorage[vn].currentRegister = register
+	}
+
+	vnAlreadyInRegister := p.inRegister(vn)
+	vnRegister := p.varStorage[vn].currentRegister
+	defer func() {
+		// move the var from stack to reg, if it's on stack
+		if !vnAlreadyInRegister && p.varStorage[vn].rbpOffset != 0 {
+			p.regMemCommand("mov", vn, vn)
+		}
+	}()
+	currentTenant := p.registers.all[register].occupiedBy
+	// take care of the var that's currently there and all the book keeping
+	if currentTenant == invalidVn {
+		if vnAlreadyInRegister {
+			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[register].qwordName, p.registers.all[vnRegister].qwordName))
+			p.releaseRegister(vnRegister)
+		}
+		takeRegister(register)
+		changeCurrentRegister(vn, register)
+	} else {
+		if currentTenant == vn {
+			return
+		}
+		if vnAlreadyInRegister {
+			// both are in regiser. do a swap
+			p.regRegCommand("xor", vn, currentTenant)
+			p.regRegCommand("xor", currentTenant, vn)
+			p.regRegCommand("xor", vn, currentTenant)
+			changeCurrentRegister(currentTenant, vnRegister)
+			changeCurrentRegister(vn, register)
+			return
+		}
+		if len(p.registers.available) > 0 {
+			// swap currentTenant to a new register
+			newReg := p.registers.available[0]
+			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[register].qwordName, p.registers.all[newReg].qwordName))
+			takeRegister(newReg)
+			changeCurrentRegister(currentTenant, newReg)
+			changeCurrentRegister(vn, register)
+		} else {
+			// swap currentTenant to stack
+			p.ensureStackOffsetValid(currentTenant)
+			p.memRegCommand("mov", currentTenant, currentTenant)
+			changeCurrentRegister(vn, register)
+			p.varStorage[currentTenant].currentRegister = invalidRegister
+		}
+	}
+}
+
+func (p *procGen) ensureInRegister(vn int) int {
+	if currentReg := p.varStorage[vn].currentRegister; currentReg != invalidRegister {
+		return currentReg
+	}
+	if len(p.registers.available) > 0 {
+		target := p.registers.available[0]
+		p.giveRegisterToVar(p.registers.available[0], vn)
+		return target
+	} else {
+		target := p.nextRegToBeSwapped
+		p.giveRegisterToVar(p.nextRegToBeSwapped, vn)
+		p.nextRegToBeSwapped = (p.nextRegToBeSwapped + 1) % numRegisters
+		return target
+	}
+}
+
+func (p *procGen) ensureStackOffsetValid(vn int) {
+	if p.varStorage[vn].rbpOffset != 0 {
+		return
+	}
+	p.currentFrameSize += p.typeTable[vn].Size()
+	p.varStorage[vn].rbpOffset = p.currentFrameSize
 }
 
 func (p *procGen) backendForOptBlock() {
@@ -167,19 +349,6 @@ func (p *procGen) backendForOptBlock() {
 		}
 	}
 
-	oprandString := func(vn int) string {
-		dest := "bad addressing mode"
-		switch p.typeTable[vn].Size() {
-		case 1:
-			dest = byteVarToStack(vn)
-		case 4:
-			dest = wordVarToStack(vn)
-		case 8:
-			dest = qwordVarToStack(vn)
-		}
-		return dest
-	}
-
 	framesize := 0
 	for _, typeRecord := range p.typeTable {
 		framesize += typeRecord.Size()
@@ -194,18 +363,34 @@ func (p *procGen) backendForOptBlock() {
 		addLine(fmt.Sprintf(";ir line %d\n", i))
 		switch opt.Type {
 		case ir.Assign:
-			simpleCopy(opt.Right(), oprandString(opt.Left()))
+			dst := opt.Left()
+			src := opt.Right()
+			p.ensureInRegister(src)
+			switch {
+			case p.inRegister(dst):
+				p.regRegCommand("mov", dst, src)
+			case !p.inRegister(dst) && p.hasStackStroage(dst):
+				p.memRegCommand("mov", dst, src)
+			case !p.inRegister(dst) && !p.hasStackStroage(dst):
+				p.ensureInRegister(dst)
+				p.regRegCommand("mov", dst, src)
+			}
 		case ir.AssignImm:
+			dst := opt.Oprand1
+			destReg := p.ensureInRegister(dst)
 			switch value := opt.Extra.(type) {
-			case int64, uint64, int:
-				addLine(fmt.Sprintf("\tmov %s, %d\n", oprandString(opt.Oprand1), opt.Extra))
+			case int64:
+				p.regImmCommand("mov", dst, value)
 			case bool:
-				val := 0
+				var val int64 = 0
 				if value == true {
 					val = 1
 				}
-				addLine(fmt.Sprintf("\tmov %s, %d\n", byteVarToStack(opt.Oprand1), val))
+				p.regImmCommand("mov", dst, val)
 			case string:
+				labelName := genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
+				p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
+
 				var buf bytes.Buffer
 				buf.WriteString("\tdb\t")
 				byteCount := 0
@@ -233,19 +418,16 @@ func (p *procGen) backendForOptBlock() {
 					buf.WriteRune('0')
 				}
 
-				labelName := genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
 				p.staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
 				p.staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
 				p.staticDataBuf.ReadFrom(&buf)
 				p.staticDataBuf.WriteRune('\n')
-				addLine(fmt.Sprintf("\tmov %s, %s\n", qwordVarToStack(opt.Oprand1), labelName))
 			case parsing.TypeDecl:
 				// TODO zero out decl
 			default:
 				panic("unknown immediate value type")
 			}
 		case ir.Add:
-			p.switchToNewOutBlock()
 			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
 			rightSize := p.typeTable[opt.Right()].Size()
 			if leftIsPointer {
@@ -341,25 +523,35 @@ func (p *procGen) backendForOptBlock() {
 						offset += thisArgSize
 					}
 				case typing.SystemV:
-					regOrder := [...]string{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
-					regOrderSmaller := [...]string{"edi", "esi", "edx", "ecx", "r8d", "r9d"}
+					regOrder := [...]int{rdi, rsi, rdx, rcx, r8, r9}
 
 					for i, arg := range extra.ArgVars {
 						if i >= len(regOrder) {
 							break
 						}
 						switch p.typeTable[arg].Size() {
-						case 8:
-							addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
-						case 4:
-							addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrder[i], wordVarToStack(arg)))
-						case 1:
-							addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrderSmaller[i], byteVarToStack(arg)))
+						case 8, 4, 1:
+							p.giveRegisterToVar(regOrder[i], arg)
+						// 	addLine(fmt.Sprintf("\tmov %s, %s\n", regOrder[i], qwordVarToStack(arg)))
+						// case 4:
+						// 	addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrder[i], wordVarToStack(arg)))
+						// case 1:
+						// 	addLine(fmt.Sprintf("\tmovsx %s, %s\n", regOrderSmaller[i], byteVarToStack(arg)))
 						default:
 							panic("Unsupported parameter size")
 						}
 					}
+					regsThatGetDestroyed := [...]int{rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11}
+					for _, reg := range regsThatGetDestroyed {
+						owner := p.registers.all[reg].occupiedBy
+						if owner != invalidRegister {
+							p.ensureStackOffsetValid(owner)
+							p.memRegCommand("mov", owner, owner)
+							p.releaseRegister(reg)
+						}
+					}
 					if len(extra.ArgVars) > len(regOrder) {
+						// TODO :newbackend
 						numExtraArgs = len(extra.ArgVars) - len(regOrder)
 						if numExtraArgs%2 == 1 {
 							// Make sure we are aligned to 16
@@ -390,6 +582,7 @@ func (p *procGen) backendForOptBlock() {
 				switch procRecord.CallingConvention {
 				case typing.SystemV:
 					// TODO this needs to change when we support things bigger than 8 bytes
+					// TODO :newbackend
 					if len(extra.ArgVars) > 6 {
 						addLine(fmt.Sprintf("\tadd rsp, %d\n", numExtraArgs*8+numExtraArgs%2*8))
 					}
@@ -424,11 +617,13 @@ func (p *procGen) backendForOptBlock() {
 			addLine(fmt.Sprintf("proc_%s:\n", opt.Extra.(string)))
 			addLine("\tpush rbp\n")
 			addLine("\tmov rbp, rsp\n")
-			addLine(fmt.Sprintf("\tsub rsp, %d\n", framesize))
+			p.prologueBlock = p.out
+			p.switchToNewOutBlock()
 		case ir.EndProc:
 			addLine("\tmov rsp, rbp\n")
 			addLine("\tpop rbp\n")
 			addLine("\tret\n")
+			fmt.Fprintf(p.prologueBlock.buffer, "\tsub rsp, %d\n", p.currentFrameSize)
 		case ir.Compare:
 			extra := opt.Extra.(ir.CompareExtra)
 			lt := p.typeTable[opt.Left()]
@@ -620,6 +815,32 @@ func (p *procGen) backendForOptBlock() {
 			addLine("\tret\n")
 		default:
 			panic(opt)
+		}
+
+		decommissionIfLastUse := func(vn int) {
+			reg := p.varStorage[vn].currentRegister
+			if reg != invalidRegister && p.lastUsage[vn] == i {
+				p.releaseRegister(reg)
+			}
+		}
+		if opt.Type > ir.UnaryInstructions {
+			decommissionIfLastUse(opt.Oprand1)
+		}
+		if opt.Type > ir.BinaryInstructions {
+			decommissionIfLastUse(opt.Oprand2)
+		}
+		if opt.Type == ir.Call {
+			for _, vn := range opt.Extra.(ir.CallExtra).ArgVars {
+				decommissionIfLastUse(vn)
+			}
+		}
+		if opt.Type == ir.Return {
+			for _, vn := range opt.Extra.(ir.ReturnExtra).Values {
+				decommissionIfLastUse(vn)
+			}
+		}
+		if opt.Type == ir.Compare {
+			decommissionIfLastUse(opt.Extra.(ir.CompareExtra).Out)
 		}
 	}
 }

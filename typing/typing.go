@@ -378,12 +378,13 @@ func NewTyper() *Typer {
 
 func NewEnvRecord(typer *Typer) *EnvRecord {
 	boolType := typer.Builtins[BoolIdx]
+	voidType := typer.Builtins[VoidIdx]
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
-			"exit":      {Return: boolType, CallingConvention: SystemV},
-			"puts":      {Return: boolType, CallingConvention: SystemV},
-			"print_int": {Return: boolType, CallingConvention: SystemV},
+			"exit":      {Return: voidType, CallingConvention: SystemV},
+			"puts":      {Return: voidType, CallingConvention: SystemV},
+			"print_int": {Return: voidType, CallingConvention: SystemV},
 			"testbit":   {Return: boolType, CallingConvention: SystemV},
 			"binToDecTable": {
 				Return:            BuildPointer(typer.Builtins[IntIdx], 1),

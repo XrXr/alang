@@ -49,6 +49,7 @@ proc_puts:
 
 proc_print_int:
 	push rbp
+	push rbx
 	mov rbp, rsp
 	sub rsp, 29
 
@@ -100,6 +101,7 @@ proc_print_int:
 	call proc_puts
 
 	mov rsp, rbp
+	pop rbx
 	pop rbp
 	ret
 
