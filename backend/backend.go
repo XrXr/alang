@@ -50,6 +50,19 @@ type registerInfo struct {
 	occupiedBy int    // invalidVn if available
 }
 
+func (r *registerInfo) nameForSize(size int) string {
+	switch size {
+	case 8:
+		return r.qwordName
+	case 4:
+		return r.dwordName
+	case 1:
+		return r.byteName
+	default:
+		panic("no register exactly fits that size")
+	}
+}
+
 type registerBucket struct {
 	all       [numRegisters]registerInfo
 	available []int
@@ -296,6 +309,25 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 	p.varStorage[vn].rbpOffset = p.currentFrameSize
 }
 
+func (p *procGen) sizeof(vn int) int {
+	return p.typeTable[vn].Size()
+}
+
+func (p *procGen) fittingRegisterName(vn int) string {
+	reg := p.registerOf(vn)
+	size := p.sizeof(vn)
+	switch {
+	case size <= 1:
+		return reg.byteName
+	case size <= 4:
+		return reg.dwordName
+	case size <= 8:
+		return reg.qwordName
+	default:
+		panic("does not fit in a register")
+	}
+}
+
 func (p *procGen) backendForOptBlock() {
 	parsing.Dump(p.lastUsage)
 	nextId := 1
@@ -432,50 +464,43 @@ func (p *procGen) backendForOptBlock() {
 			default:
 				panic("unknown immediate value type")
 			}
-		case ir.Add:
-			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
-			rightSize := p.typeTable[opt.Right()].Size()
-			if leftIsPointer {
-				switch rightSize {
-				case 8:
-					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Right())))
-				case 4:
-					addLine(fmt.Sprintf("\tmovsx rax, %s\n", wordVarToStack(opt.Right())))
-				case 1:
-					addLine(fmt.Sprintf("\tmovsx eax, %s\n", byteVarToStack(opt.Right())))
-					addLine("\tmovsx rax, eax\n")
-				}
-				addLine(fmt.Sprintf("\timul rax, %d\n", pointer.ToWhat.Size()))
-				addLine(fmt.Sprintf("\tadd %s, rax\n", qwordVarToStack(opt.Left())))
+		case ir.Add, ir.Sub:
+			var leaFormatString string
+			var mnemonic string
+			if opt.Type == ir.Add {
+				leaFormatString = "lea %[1]s, [%[1]s+%[2]s*%[3]d]"
+				mnemonic = "add"
 			} else {
-				switch rightSize {
-				case 8:
-					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Right())))
-				case 4:
-					addLine(fmt.Sprintf("\tmov eax, %s\n", wordVarToStack(opt.Right())))
-				case 1:
-					addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
+				leaFormatString = "lea %[1]s, [%[1]s-%[2]s*%[3]d]"
+				mnemonic = "sub"
+			}
+			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
+			p.ensureInRegister(opt.Right())
+			rReg := p.registerOf(opt.Right())
+
+			if leftIsPointer {
+				lReg := p.ensureInRegister(opt.Left())
+				p.issueCommand(
+					fmt.Sprintf(leaFormatString, p.registers.all[lReg].qwordName, rReg.qwordName, pointer.ToWhat.Size()))
+			} else {
+				rRegLeftSize := rReg.nameForSize(p.sizeof(opt.Left()))
+				if p.sizeof(opt.Left()) > p.sizeof(opt.Right()) {
+					tightFit := p.fittingRegisterName(opt.Right())
+					p.issueCommand(fmt.Sprintf("movsx %s, %s", rRegLeftSize, tightFit))
 				}
-				leftSize := p.typeTable[opt.Left()].Size()
-				if rightSize == 1 && leftSize > 1 {
-					addLine("\tmovsx eax, al\n")
-				}
-				switch leftSize {
-				case 8:
-					addLine(fmt.Sprintf("\tadd %s, rax\n", qwordVarToStack(opt.Left())))
-				case 4:
-					addLine(fmt.Sprintf("\tadd %s, eax\n", wordVarToStack(opt.Left())))
-				case 1:
-					addLine(fmt.Sprintf("\tadd %s, al\n", byteVarToStack(opt.Left())))
+				if p.inRegister(opt.Left()) {
+					// we sign extend right above in case sizeof(left) > sizeof(right)
+					// in case that sizeof(left) <= sizeof(right) we don't need to do anything extra
+					// since the truncation/modding happens naturally
+					p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.fittingRegisterName(opt.Left()), rRegLeftSize))
+				} else {
+					p.memRegCommand(mnemonic, opt.Left(), opt.Right())
 				}
 			}
 		case ir.Increment:
 			addLine(fmt.Sprintf("\tinc %s\n", qwordVarToStack(opt.In())))
 		case ir.Decrement:
 			addLine(fmt.Sprintf("\tdec %s\n", qwordVarToStack(opt.In())))
-		case ir.Sub:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Right())))
-			addLine(fmt.Sprintf("\tsub %s, rax\n", qwordVarToStack(opt.Left())))
 		case ir.Mult:
 			addLine(fmt.Sprintf("\tmov r8, %s\n", qwordVarToStack(opt.Left())))
 			addLine(fmt.Sprintf("\tmov r9, %s\n", qwordVarToStack(opt.Right())))
