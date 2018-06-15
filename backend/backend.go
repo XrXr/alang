@@ -163,6 +163,25 @@ func (p *procGen) regImmCommand(command string, vn int, immediate int64) {
 	p.issueCommand(fmt.Sprintf("%s %s, %d", command, p.registerOf(vn).qwordName, immediate))
 }
 
+func (p *procGen) sizeof(vn int) int {
+	return p.typeTable[vn].Size()
+}
+
+func (p *procGen) fittingRegisterName(vn int) string {
+	reg := p.registerOf(vn)
+	size := p.sizeof(vn)
+	switch {
+	case size <= 1:
+		return reg.byteName
+	case size <= 4:
+		return reg.dwordName
+	case size <= 8:
+		return reg.qwordName
+	default:
+		panic("does not fit in a register")
+	}
+}
+
 func (p *procGen) prefixRegisterAndOffset(memVar int, regVar int) (string, string, int) {
 	reg := p.registerOf(regVar)
 	var prefix string
@@ -201,8 +220,14 @@ func (p *procGen) regRegCommand(command string, a int, b int) {
 	p.issueCommand(fmt.Sprintf("%s %s, %s", command, p.registerOf(a).qwordName, p.registerOf(b).qwordName))
 }
 
-func (p *procGen) movRegReg(a int, b int) {
-	p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[a].qwordName, p.registers.all[b].qwordName))
+func (p *procGen) regRegCommandSizedToFirst(command string, varA int, varB int) {
+	varARegName := p.registerOf(varA).nameForSize(p.sizeof(varA))
+	varBSizedToA := p.registerOf(varB).nameForSize(p.sizeof(varA))
+	p.issueCommand(fmt.Sprintf("%s %s, %s", command, varARegName, varBSizedToA))
+}
+
+func (p *procGen) movRegReg(regA int, regB int) {
+	p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[regA].qwordName, p.registers.all[regB].qwordName))
 }
 
 func (p *procGen) releaseRegister(register int) {
@@ -307,25 +332,6 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 	}
 	p.currentFrameSize += p.typeTable[vn].Size()
 	p.varStorage[vn].rbpOffset = p.currentFrameSize
-}
-
-func (p *procGen) sizeof(vn int) int {
-	return p.typeTable[vn].Size()
-}
-
-func (p *procGen) fittingRegisterName(vn int) string {
-	reg := p.registerOf(vn)
-	size := p.sizeof(vn)
-	switch {
-	case size <= 1:
-		return reg.byteName
-	case size <= 4:
-		return reg.dwordName
-	case size <= 8:
-		return reg.qwordName
-	default:
-		panic("does not fit in a register")
-	}
 }
 
 func (p *procGen) backendForOptBlock() {
@@ -502,10 +508,24 @@ func (p *procGen) backendForOptBlock() {
 		case ir.Decrement:
 			addLine(fmt.Sprintf("\tdec %s\n", qwordVarToStack(opt.In())))
 		case ir.Mult:
-			addLine(fmt.Sprintf("\tmov r8, %s\n", qwordVarToStack(opt.Left())))
-			addLine(fmt.Sprintf("\tmov r9, %s\n", qwordVarToStack(opt.Right())))
-			addLine("\timul r8, r9\n")
-			addLine(fmt.Sprintf("\tmov %s, r8\n", qwordVarToStack(opt.Left())))
+			l := opt.Left()
+			r := opt.Right()
+			p.giveRegisterToVar(rax, l)
+			if p.sizeof(l) > p.sizeof(r) {
+				p.ensureInRegister(r)
+				rRegLeftSize := p.registerOf(r).nameForSize(p.sizeof(l))
+				tightFit := p.fittingRegisterName(r)
+				p.issueCommand(fmt.Sprintf("movsx %s, %s", rRegLeftSize, tightFit))
+			}
+			if p.sizeof(l) == 1 {
+				// we have to bring r to a register to do a 8 bit multiply
+				p.ensureInRegister(r)
+				p.issueCommand(fmt.Sprintf("imul %s", p.registerOf(r).byteName))
+			} else if p.inRegister(r) {
+				p.regRegCommandSizedToFirst("imul", l, r)
+			} else {
+				p.regMemCommand("imul", l, r)
+			}
 		case ir.Div:
 			addLine("\txor rdx, rdx\n")
 			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Left())))

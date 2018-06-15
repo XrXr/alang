@@ -22,7 +22,8 @@
    ✔ procs that take parameters which reference structs -- they are left as unresolved type for now @done (18-06-11 20:25)
    □ can't have array of structs/array of pointer to structs in your struct
    ☐ can't do var foo *somestruct
- □ better pruning
+ ✔ better pruning @done (18-06-15 19:55)
+ ☐ unsigned numbers
  □ error reporting
    □ parse errors: binary operators missing operands ("i++" parses atm)
  □ type casting
