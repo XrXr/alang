@@ -38,12 +38,12 @@ main :: proc () {
 	b = b - a
 	print_int(b)
 
-	puts("\nmultiplication:\n")
-
 	small = -122
 	b = big
 	b -= small
 	print_int(b)
+
+	puts("\nmultiplication:\n")
 
 	var foo s64
 	foo = 251
@@ -61,4 +61,19 @@ main :: proc () {
 	// the result is funny because after the multiply there is
 	// junk in the upper half of the register. It will be fixed when we type check function call arguments
 	print_int(small)
+
+	puts("\ndivision:\n")
+
+	small = 29
+	b = 3
+	small = small / b
+	print_int(small)
+
+	a = 281924
+    // 96 * 4 = 384 which is -128 in s8 with one extra bit. Testing sign extenion.
+	small = 96
+	small = small * 4
+	print_int(small)
+	a = a / small
+	print_int(a)
 }

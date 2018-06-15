@@ -89,11 +89,6 @@ func initRegisterBucket(bucket *registerBucket) {
 	}
 
 	bucket.available = []int{
-		r12,
-		r13,
-		r14,
-		r15,
-		rbx,
 		rax,
 		rcx,
 		rdx,
@@ -103,6 +98,12 @@ func initRegisterBucket(bucket *registerBucket) {
 		r9,
 		r10,
 		r11,
+		// below are registers that are preserved across calls (in SystemV ABI)
+		rbx,
+		r15,
+		r14,
+		r13,
+		r12,
 	}
 }
 
@@ -112,6 +113,17 @@ func (r *registerBucket) copy() *registerBucket {
 	newBucket.available = make([]int, len(r.available))
 	copy(newBucket.available, r.available)
 	return &newBucket
+}
+
+func (r *registerBucket) nextAvailable() (int, bool) {
+	if len(r.available) == 0 {
+		return 0, false
+	}
+	return r.available[len(r.available)-1], true
+}
+
+func (r *registerBucket) allInUse() bool {
+	return len(r.available) == 0
 }
 
 type varStorageInfo struct {
@@ -293,9 +305,10 @@ func (p *procGen) giveRegisterToVar(register int, vn int) {
 			changeCurrentRegister(vn, register)
 			return
 		}
-		if len(p.registers.available) > 0 {
+
+		newReg, freeRegExists := p.registers.nextAvailable()
+		if freeRegExists {
 			// swap currentTenant to a new register
-			newReg := p.registers.available[len(p.registers.available)-1]
 			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[register].qwordName, p.registers.all[newReg].qwordName))
 			takeRegister(newReg)
 			changeCurrentRegister(currentTenant, newReg)
@@ -314,10 +327,10 @@ func (p *procGen) ensureInRegister(vn int) int {
 	if currentReg := p.varStorage[vn].currentRegister; currentReg != invalidRegister {
 		return currentReg
 	}
-	if len(p.registers.available) > 0 {
-		target := p.registers.available[0]
-		p.giveRegisterToVar(p.registers.available[0], vn)
-		return target
+
+	if reg, freeRegExists := p.registers.nextAvailable(); freeRegExists {
+		p.giveRegisterToVar(reg, vn)
+		return reg
 	} else {
 		target := p.nextRegToBeSwapped
 		p.giveRegisterToVar(p.nextRegToBeSwapped, vn)
@@ -335,7 +348,6 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 }
 
 func (p *procGen) backendForOptBlock() {
-	parsing.Dump(p.lastUsage)
 	nextId := 1
 	addLine := func(line string) {
 		io.WriteString(p.out.buffer, line)
@@ -400,7 +412,7 @@ func (p *procGen) backendForOptBlock() {
 		// Since we push rbp in our prologue we align to 16 here
 		framesize += 16 - framesize%16
 	}
-	// backendDebug(framesize, p.typeTable, varOffset)
+	backendDebug(framesize, p.typeTable, varOffset)
 	for i, opt := range p.block.Opts {
 		addLine(fmt.Sprintf(";ir line %d\n", i))
 
@@ -527,11 +539,46 @@ func (p *procGen) backendForOptBlock() {
 				p.regMemCommand("imul", l, r)
 			}
 		case ir.Div:
-			addLine("\txor rdx, rdx\n")
-			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Left())))
-			addLine(fmt.Sprintf("\tmov r8, %s\n", qwordVarToStack(opt.Right())))
-			addLine("\tidiv r8\n")
-			addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Left())))
+			l := opt.Left()
+			r := opt.Right()
+
+			rdxTenant := p.registers.all[rdx].occupiedBy
+			var borrowedAReg bool
+			var regBorrowed int
+			if rdxTenant != invalidVn {
+				if regBorrowed, borrowedAReg := p.registers.nextAvailable(); borrowedAReg {
+					p.movRegReg(regBorrowed, rdx)
+				} else {
+					p.memRegCommand("mov", rdxTenant, rdxTenant)
+				}
+			}
+			p.issueCommand("xor rdx, rdx")
+			p.giveRegisterToVar(rax, l)
+			needSignExtension := p.sizeof(l) > p.sizeof(r)
+			if !p.inRegister(r) && needSignExtension {
+				p.giveRegisterToVar(r8, r) // got to bring it into register to do sign extension
+			}
+			if p.inRegister(r) {
+				rReg := p.registerOf(r)
+				rRegLeftSize := rReg.nameForSize(p.sizeof(l))
+				if needSignExtension {
+					tightFit := p.fittingRegisterName(r)
+					p.issueCommand(fmt.Sprintf("movsx %s, %s", rRegLeftSize, tightFit))
+				}
+				p.issueCommand(fmt.Sprintf("idiv %s", rRegLeftSize))
+			} else {
+				if p.varStorage[r].rbpOffset == 0 {
+					panic("oprand to div doens't have stack offset nor is it in register. Where is the value?")
+				}
+				p.issueCommand(fmt.Sprintf("idiv [rbp-%d]", p.varStorage[r].rbpOffset))
+			}
+			if rdxTenant != invalidVn {
+				if borrowedAReg {
+					p.movRegReg(rdx, regBorrowed)
+				} else {
+					p.regMemCommand("mov", rdxTenant, rdxTenant)
+				}
+			}
 		case ir.JumpIfFalse:
 			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
 			addLine("\tcmp al, 0\n")

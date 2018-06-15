@@ -59,7 +59,7 @@ func (p *Parser) processLine(line string) error {
 	if tokens[0] == "//" {
 		return nil
 	}
-	fmt.Printf("%#v\n", tokens) // Dump(tokens)
+	// fmt.Printf("%#v\n", tokens) // Dump(tokens)
 	var n interface{}
 	var err error
 	if p.currentContext() == structContext {
