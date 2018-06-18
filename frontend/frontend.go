@@ -118,7 +118,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			if err != nil {
 				panic(err)
 			}
-			labelForIf := labelGen.GenLabel("if_%d")
+			labelForIf := labelGen.GenLabel("cond_not_met_%d")
 			gen.addOpt(ir.MakeUnaryInstWithAux(ir.JumpIfFalse, condVar, labelForIf))
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
 			gen.addOpt(labelInst(labelForIf))
@@ -126,7 +126,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			if !sawIfLastTime {
 				panic("Bare else. Should've been caught by the parser")
 			}
-			elseLabel := labelGen.GenLabel("else_%d")
+			elseLabel := labelGen.GenLabel("if_else_end_%d")
 			ifLabel := gen.opts[len(gen.opts)-1]
 			gen.opts[len(gen.opts)-1] = ir.MakeUnaryInstWithAux(ir.Jump, 0, elseLabel)
 			gen.addOpt(ifLabel)

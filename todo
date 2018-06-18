@@ -15,6 +15,7 @@
  √ can't loop and use var to access array @done (18-04-18 20:44)
  ✔ return values @done (18-06-11 20:23)
  ✔ continues/breaks @done (18-06-11 20:23)
+ ☐ ensureVarInRegister should take multiple arguments and make sure it doesn't swap a var that it just brought into a register
  ☐ factor out signExtendToMatchSize
  ☐ do some reserach about signedModulous -- how do we do s32 *= s64? what if on the right side the sign bit is set?
  ☐ we need a print_signed_int

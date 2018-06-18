@@ -107,14 +107,6 @@ func initRegisterBucket(bucket *registerBucket) {
 	}
 }
 
-func (r *registerBucket) copy() *registerBucket {
-	var newBucket registerBucket
-	newBucket = *r
-	newBucket.available = make([]int, len(r.available))
-	copy(newBucket.available, r.available)
-	return &newBucket
-}
-
 func (r *registerBucket) nextAvailable() (int, bool) {
 	if len(r.available) == 0 {
 		return 0, false
@@ -131,21 +123,45 @@ type varStorageInfo struct {
 	currentRegister int // invalidRegister if not in register
 }
 
-type procGen struct {
-	out                *outputBlock
-	firstOutputBlock   *outputBlock
-	prologueBlock      *outputBlock
-	staticDataBuf      *bytes.Buffer
-	block              frontend.OptBlock
-	env                *typing.EnvRecord
-	typer              *typing.Typer
+type fullVarState struct {
+	varStorage         []varStorageInfo
 	registers          registerBucket
-	currentFrameSize   int
 	nextRegToBeSwapped int
+}
+
+func (f *fullVarState) copyVarState() *fullVarState {
+	newState := *f
+	newState.registers.available = make([]int, len(f.registers.available))
+	copy(newState.registers.available, f.registers.available)
+	newState.varStorage = make([]varStorageInfo, len(f.varStorage))
+	copy(newState.varStorage, f.varStorage)
+	return &newState
+}
+
+type preJumpState struct {
+	out    *outputBlock
+	state  *fullVarState
+	optIdx int
+}
+
+type procGen struct {
+	*fullVarState
+	block            frontend.OptBlock
+	out              *outputBlock
+	firstOutputBlock *outputBlock
+	staticDataBuf    *bytes.Buffer
+	env              *typing.EnvRecord
+	typer            *typing.Typer
+	currentFrameSize int
+	nextLabelId      int
+	// info for backfilling instructions
+	prologueBlock    *outputBlock
+	conditionalJumps []preJumpState
+	jumps            []preJumpState
+	labelToState     map[string]*fullVarState
 	// all three below are vn-indexed
-	typeTable  []typing.TypeRecord
-	varStorage []varStorageInfo
-	lastUsage  []int
+	typeTable []typing.TypeRecord
+	lastUsage []int
 }
 
 func (p *procGen) switchToNewOutBlock() {
@@ -154,17 +170,17 @@ func (p *procGen) switchToNewOutBlock() {
 	current.next = p.out
 }
 
-func (p *procGen) registerOf(vn int) *registerInfo {
-	return &(p.registers.all[p.varStorage[vn].currentRegister])
+func (f *fullVarState) registerOf(vn int) *registerInfo {
+	return &(f.registers.all[f.varStorage[vn].currentRegister])
 }
 
-func (p *procGen) inRegister(vn int) bool {
-	return p.varStorage[vn].currentRegister > -1
+func (f *fullVarState) inRegister(vn int) bool {
+	return f.varStorage[vn].currentRegister > -1
 }
 
-func (p *procGen) hasStackStroage(vn int) bool {
+func (f *fullVarState) hasStackStroage(vn int) bool {
 	// note that rbpOffset might be negative in case of arguments
-	return p.varStorage[vn].rbpOffset != 0
+	return f.varStorage[vn].rbpOffset != 0
 }
 
 func (p *procGen) issueCommand(command string) {
@@ -192,6 +208,35 @@ func (p *procGen) fittingRegisterName(vn int) string {
 	default:
 		panic("does not fit in a register")
 	}
+}
+
+func prefixForSize(size int) string {
+	var prefix string
+	switch size {
+	case 8:
+		prefix = "qword"
+	case 4:
+		prefix = "dword"
+	case 1:
+		prefix = "byte"
+	default:
+		panic("no usable prefix")
+	}
+	return prefix
+}
+
+func makeStackOperand(prefix string, offset int) string {
+	return fmt.Sprintf("%s[rbp-%d]", prefix, offset)
+
+}
+
+func (p *procGen) stackOperand(vn int) string {
+	prefix := prefixForSize(p.typeTable[vn].Size())
+	offset := p.varStorage[vn].rbpOffset
+	if offset == 0 {
+		panic("bad var offset")
+	}
+	return makeStackOperand(prefix, offset)
 }
 
 func (p *procGen) prefixRegisterAndOffset(memVar int, regVar int) (string, string, int) {
@@ -347,17 +392,74 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 	p.varStorage[vn].rbpOffset = p.currentFrameSize
 }
 
+func (p *procGen) morphToState(targetState *fullVarState) {
+	for regId, reg := range targetState.registers.all {
+		ourOccupiedBy := p.registers.all[regId].occupiedBy
+		theirOccupiedBy := reg.occupiedBy
+
+		if theirOccupiedBy == ourOccupiedBy {
+			continue
+		}
+
+		moveToMatch := func() {
+			if p.inRegister(theirOccupiedBy) {
+				p.movRegReg(regId, p.varStorage[theirOccupiedBy].currentRegister)
+			} else if p.hasStackStroage(theirOccupiedBy) {
+				p.issueCommand(fmt.Sprintf("mov %s, %s", reg.qwordName, p.stackOperand(theirOccupiedBy)))
+			}
+		}
+
+		movToStack := func() {
+			if targetState.hasStackStroage(ourOccupiedBy) {
+				stackMem := makeStackOperand(prefixForSize(p.sizeof(ourOccupiedBy)), targetState.varStorage[ourOccupiedBy].rbpOffset)
+				p.issueCommand(fmt.Sprintf("mov %s, %s", stackMem, p.fittingRegisterName(ourOccupiedBy)))
+			}
+		}
+
+		switch {
+		case theirOccupiedBy == invalidVn && ourOccupiedBy != invalidVn:
+			movToStack()
+		case theirOccupiedBy != invalidVn && ourOccupiedBy == invalidVn:
+			moveToMatch()
+		case theirOccupiedBy != invalidVn && ourOccupiedBy != invalidVn:
+			movToStack()
+			moveToMatch()
+		}
+	}
+}
+
+func (p *procGen) conditionalJump(jumpInst ir.Inst) {
+	label := jumpInst.Extra.(string)
+	targetState := p.labelToState[label]
+	nojump := p.genLabel(".nojump")
+	if jumpInst.Type == ir.JumpIfFalse {
+		p.issueCommand(fmt.Sprintf("jnz %s", nojump))
+	} else if jumpInst.Type == ir.JumpIfTrue {
+		p.issueCommand(fmt.Sprintf("jz %s", nojump))
+	}
+	p.morphToState(targetState)
+	p.issueCommand(fmt.Sprintf("jmp .%s", label))
+	fmt.Fprintf(p.out.buffer, "%s:\n", nojump)
+}
+
+func (p *procGen) jump(jumpInst ir.Inst) {
+	label := jumpInst.Extra.(string)
+	targetState := p.labelToState[label]
+	p.morphToState(targetState)
+	p.issueCommand(fmt.Sprintf("jmp .%s", label))
+}
+
+func (p *procGen) genLabel(prefix string) string {
+	label := fmt.Sprintf("%s_%d", prefix, p.nextLabelId)
+	p.nextLabelId++
+	return label
+}
+
 func (p *procGen) backendForOptBlock() {
-	nextId := 1
 	addLine := func(line string) {
 		io.WriteString(p.out.buffer, line)
 	}
 	varOffset := make([]int, p.block.NumberOfVars)
-	genLabel := func(prefix string) string {
-		label := fmt.Sprintf("%s_%d", prefix, nextId)
-		nextId++
-		return label
-	}
 
 	if p.block.NumberOfArgs > 0 {
 		// we push rbp in the prologue and call pushes the return address
@@ -443,7 +545,7 @@ func (p *procGen) backendForOptBlock() {
 				}
 				p.regImmCommand("mov", dst, val)
 			case string:
-				labelName := genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
+				labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
 				p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
 
 				var buf bytes.Buffer
@@ -549,6 +651,7 @@ func (p *procGen) backendForOptBlock() {
 				if regBorrowed, borrowedAReg := p.registers.nextAvailable(); borrowedAReg {
 					p.movRegReg(regBorrowed, rdx)
 				} else {
+					p.ensureStackOffsetValid(rdxTenant)
 					p.memRegCommand("mov", rdxTenant, rdxTenant)
 				}
 			}
@@ -579,14 +682,26 @@ func (p *procGen) backendForOptBlock() {
 					p.regMemCommand("mov", rdxTenant, rdxTenant)
 				}
 			}
-		case ir.JumpIfFalse:
-			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
-			addLine("\tcmp al, 0\n")
-			addLine(fmt.Sprintf("\tjz .%s\n", opt.Extra.(string)))
-		case ir.JumpIfTrue:
-			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
-			addLine("\tcmp al, 0\n")
-			addLine(fmt.Sprintf("\tjnz .%s\n", opt.Extra.(string)))
+		case ir.JumpIfFalse, ir.JumpIfTrue:
+			label := opt.Extra.(string)
+			in := opt.In()
+
+			if p.inRegister(in) {
+				regName := p.fittingRegisterName(in)
+				p.issueCommand(fmt.Sprintf("cmp %s, 0", regName))
+			} else {
+				p.issueCommand(fmt.Sprintf("cmp %s, 0", p.stackOperand(in)))
+			}
+			_, labelSeen := p.labelToState[label]
+			if labelSeen {
+				p.conditionalJump(opt)
+			} else {
+				p.conditionalJumps = append(p.conditionalJumps, preJumpState{
+					out:    p.out,
+					state:  p.copyVarState(),
+					optIdx: i})
+				p.switchToNewOutBlock()
+			}
 		case ir.Call:
 			extra := opt.Extra.(ir.CallExtra)
 			if _, isStruct := p.env.Types[parsing.IdName(extra.Name)]; isStruct {
@@ -622,6 +737,15 @@ func (p *procGen) backendForOptBlock() {
 				case typing.SystemV:
 					regOrder := [...]int{rdi, rsi, rdx, rcx, r8, r9}
 
+					regsThatGetDestroyed := [...]int{rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11}
+					for _, reg := range regsThatGetDestroyed {
+						owner := p.registers.all[reg].occupiedBy
+						if owner != invalidVn && p.lastUsage[owner] != i {
+							p.ensureStackOffsetValid(owner)
+							p.memRegCommand("mov", owner, owner)
+							p.releaseRegister(reg)
+						}
+					}
 					for i, arg := range extra.ArgVars {
 						if i >= len(regOrder) {
 							break
@@ -637,15 +761,6 @@ func (p *procGen) backendForOptBlock() {
 							}
 						default:
 							panic("Unsupported parameter size")
-						}
-					}
-					regsThatGetDestroyed := [...]int{rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11}
-					for _, reg := range regsThatGetDestroyed {
-						owner := p.registers.all[reg].occupiedBy
-						if owner != invalidVn && p.lastUsage[owner] != i {
-							p.ensureStackOffsetValid(owner)
-							p.memRegCommand("mov", owner, owner)
-							p.releaseRegister(reg)
 						}
 					}
 					if len(extra.ArgVars) > len(regOrder) {
@@ -708,9 +823,25 @@ func (p *procGen) backendForOptBlock() {
 				}
 			}
 		case ir.Jump:
-			addLine(fmt.Sprintf("\tjmp .%s\n", opt.Extra.(string)))
+			label := opt.Extra.(string)
+			_, labelSeen := p.labelToState[label]
+			if labelSeen {
+				p.jump(opt)
+			} else {
+				p.jumps = append(p.jumps, preJumpState{
+					out:    p.out,
+					state:  p.copyVarState(),
+					optIdx: i,
+				})
+				p.switchToNewOutBlock()
+			}
 		case ir.Label:
-			addLine(fmt.Sprintf(".%s:\n", opt.Extra.(string)))
+			label := opt.Extra.(string)
+			addLine(fmt.Sprintf(".%s:\n", label))
+			if _, alreadyThere := p.labelToState[label]; alreadyThere {
+				panic("same label issued twice")
+			}
+			p.labelToState[label] = p.copyVarState()
 		case ir.StartProc:
 			addLine(fmt.Sprintf("proc_%s:\n", opt.Extra.(string)))
 			addLine("\tpush rbp\n")
@@ -724,55 +855,64 @@ func (p *procGen) backendForOptBlock() {
 			fmt.Fprintf(p.prologueBlock.buffer, "\tsub rsp, %d\n", p.currentFrameSize)
 		case ir.Compare:
 			extra := opt.Extra.(ir.CompareExtra)
+			out := extra.Out
+			l := opt.Left()
+			r := opt.Right()
 			lt := p.typeTable[opt.Left()]
 			rt := p.typeTable[opt.Right()]
-			smaller := lt
-			if rt.Size() < lt.Size() {
-				smaller = rt
-			}
-			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) {
+			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) || ls != rt.Size() {
 				// array & struct compare
 				panic("Not yet")
 			}
 
-			var lReg string
-			var rReg string
-			switch smaller.Size() {
-			case 1:
-				lReg = "al"
-				rReg = "bl"
-				addLine(fmt.Sprintf("\tmov %s, %s\n", lReg, byteVarToStack(opt.Left())))
-				addLine(fmt.Sprintf("\tmov %s, %s\n", rReg, byteVarToStack(opt.Right())))
-			case 4:
-				lReg = "eax"
-				rReg = "ebx"
-				addLine(fmt.Sprintf("\tmov %s, %s\n", lReg, wordVarToStack(opt.Left())))
-				addLine(fmt.Sprintf("\tmov %s, %s\n", rReg, wordVarToStack(opt.Right())))
-			case 8:
-				lReg = "rax"
-				rReg = "rbx"
-				addLine(fmt.Sprintf("\tmov %s, %s\n", lReg, qwordVarToStack(opt.Left())))
-				addLine(fmt.Sprintf("\tmov %s, %s\n", rReg, qwordVarToStack(opt.Right())))
+			outReg, outInReg := p.registers.nextAvailable()
+			if outInReg {
+				p.giveRegisterToVar(outReg, out)
+				p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
+			} else {
+				p.ensureStackOffsetValid(out)
+				p.issueCommand(fmt.Sprintf("mov %s, 1", p.stackOperand(out)))
 			}
-			addLine(fmt.Sprintf("\tmov %s, 1\n", byteVarToStack(extra.Out)))
-			addLine(fmt.Sprintf("\tcmp %s, %s\n", lReg, rReg))
-			labelName := genLabel(".cmp")
+
+			// TODO: autoCommand() we can have a method that gives an operand preferring register.
+			// Not sure we do it in other places yet though.
+			if !p.inRegister(l) && !p.inRegister(r) {
+				p.ensureInRegister(l)
+			}
+			var firstOperand, secondOperand string
+			if p.inRegister(l) {
+				firstOperand = p.fittingRegisterName(l)
+			} else {
+				firstOperand = p.stackOperand(l)
+			}
+			if p.inRegister(r) {
+				secondOperand = p.fittingRegisterName(r)
+			} else {
+				secondOperand = p.stackOperand(r)
+			}
+			p.issueCommand(fmt.Sprintf("cmp %s, %s", firstOperand, secondOperand))
+			labelName := p.genLabel(".cmp")
 			switch extra.How {
 			case ir.Greater:
-				addLine(fmt.Sprintf("\tjg %s\n", labelName))
+				p.issueCommand(fmt.Sprintf("jg %s", labelName))
 			case ir.Lesser:
-				addLine(fmt.Sprintf("\tjl %s\n", labelName))
+				p.issueCommand(fmt.Sprintf("jl %s", labelName))
 			case ir.GreaterOrEqual:
-				addLine(fmt.Sprintf("\tjge %s\n", labelName))
+				p.issueCommand(fmt.Sprintf("jge %s", labelName))
 			case ir.LesserOrEqual:
-				addLine(fmt.Sprintf("\tjle %s\n", labelName))
+				p.issueCommand(fmt.Sprintf("jle %s", labelName))
 			case ir.AreEqual:
-				addLine(fmt.Sprintf("\tje %s\n", labelName))
+				p.issueCommand(fmt.Sprintf("je %s", labelName))
 			case ir.NotEqual:
-				addLine(fmt.Sprintf("\tjne %s\n", labelName))
+				p.issueCommand(fmt.Sprintf("jne %s", labelName))
 			}
-			addLine(fmt.Sprintf("\tmov %s, 0\n", byteVarToStack(extra.Out)))
-			addLine(fmt.Sprintf("%s:\n", labelName))
+
+			if outInReg {
+				p.issueCommand(fmt.Sprintf("mov %s, 0", p.fittingRegisterName(out)))
+			} else {
+				p.issueCommand(fmt.Sprintf("mov %s, 0", p.stackOperand(out)))
+			}
+			fmt.Fprintf(p.out.buffer, "%s:\n", labelName)
 		case ir.Transclude:
 			panic("Transcludes should be gone by now")
 		case ir.TakeAddress:
@@ -885,7 +1025,7 @@ func (p *procGen) backendForOptBlock() {
 				addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Out())))
 			}
 		case ir.Not:
-			setLabel := genLabel(".not")
+			setLabel := p.genLabel(".not")
 			addLine(fmt.Sprintf("\tmov %s, 0\n", byteVarToStack(opt.Out())))
 			switch p.typeTable[opt.In()].(type) {
 			case typing.Pointer:
@@ -941,6 +1081,17 @@ func (p *procGen) backendForOptBlock() {
 			decommissionIfLastUse(opt.Extra.(ir.CompareExtra).Out)
 		}
 	}
+
+	for _, jump := range p.conditionalJumps {
+		p.out = jump.out
+		p.fullVarState = jump.state
+		p.conditionalJump(p.block.Opts[jump.optIdx])
+	}
+	for _, jump := range p.jumps {
+		p.out = jump.out
+		p.fullVarState = jump.state
+		p.jump(p.block.Opts[jump.optIdx])
+	}
 }
 
 func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
@@ -990,6 +1141,7 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 	firstOut := newOutputBlock()
 	var staticDataBuf bytes.Buffer
 	gen := procGen{
+		fullVarState:     &fullVarState{},
 		out:              firstOut,
 		firstOutputBlock: firstOut,
 		block:            block,
@@ -997,6 +1149,7 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		env:              globalEnv,
 		typer:            typer,
 		staticDataBuf:    &staticDataBuf,
+		labelToState:     make(map[string]*fullVarState),
 		lastUsage:        findLastusage(block)}
 	initRegisterBucket(&gen.registers)
 	gen.varStorage = make([]varStorageInfo, block.NumberOfVars)
