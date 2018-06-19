@@ -154,6 +154,7 @@ type procGen struct {
 	typer            *typing.Typer
 	currentFrameSize int
 	nextLabelId      int
+	stackBoundVars   []int
 	// info for backfilling instructions
 	prologueBlock    *outputBlock
 	conditionalJumps []preJumpState
@@ -236,7 +237,6 @@ func prefixForSize(size int) string {
 
 func makeStackOperand(prefix string, offset int) string {
 	return fmt.Sprintf("%s[rbp-%d]", prefix, offset)
-
 }
 
 func (p *procGen) stackOperand(vn int) string {
@@ -302,6 +302,15 @@ func (p *procGen) regRegCommandSizedToFirst(command string, varA int, varB int) 
 
 func (p *procGen) movRegReg(regA int, regB int) {
 	p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[regA].qwordName, p.registers.all[regB].qwordName))
+}
+
+func (p *procGen) swapStackBoundVars() {
+	for _, vn := range p.stackBoundVars {
+		if p.inRegister(vn) {
+			p.memRegCommand("mov", vn, vn)
+			p.releaseRegister(p.varStorage[vn].currentRegister)
+		}
+	}
 }
 
 func (p *procGen) giveRegisterToVar(register int, vn int) {
@@ -711,6 +720,7 @@ func (p *procGen) backendForOptBlock() {
 				p.switchToNewOutBlock()
 			}
 		case ir.Call:
+			p.swapStackBoundVars()
 			extra := opt.Extra.(ir.CallExtra)
 			if _, isStruct := p.env.Types[parsing.IdName(extra.Name)]; isStruct {
 				// TODO: code to zero the members
@@ -930,9 +940,12 @@ func (p *procGen) backendForOptBlock() {
 		case ir.Transclude:
 			panic("Transcludes should be gone by now")
 		case ir.TakeAddress:
-			dest := qwordVarToStack(opt.Out())
-			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
-			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.In()]))
+			in := opt.In()
+			out := opt.Out()
+			p.ensureStackOffsetValid(in)
+			p.ensureInRegister(out)
+			p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registerOf(out).qwordName, p.varStorage[in].rbpOffset))
+			p.stackBoundVars = append(p.stackBoundVars, in)
 		case ir.ArrayToPointer:
 			in := opt.In()
 			out := opt.Out()
@@ -947,6 +960,7 @@ func (p *procGen) backendForOptBlock() {
 				panic("must be array or pointer to an array")
 			}
 		case ir.IndirectWrite:
+			p.swapStackBoundVars()
 			ptr := opt.Left()
 			data := opt.Right()
 			p.ensureInRegister(ptr)
@@ -956,6 +970,7 @@ func (p *procGen) backendForOptBlock() {
 			p.issueCommand(fmt.Sprintf("mov %s[%s], %s",
 				prefix, p.registerOf(ptr).qwordName, p.registerOf(data).nameForSize(pointedToSize)))
 		case ir.IndirectLoad:
+			p.swapStackBoundVars()
 			in := opt.In()
 			out := opt.Out()
 			pointedToSize := p.typeTable[opt.In()].(typing.Pointer).ToWhat.Size()
