@@ -183,6 +183,15 @@ func (f *fullVarState) hasStackStroage(vn int) bool {
 	return f.varStorage[vn].rbpOffset != 0
 }
 
+func (f *fullVarState) releaseRegister(register int) {
+	currentOwner := f.registers.all[register].occupiedBy
+	if currentOwner != invalidVn {
+		f.varStorage[currentOwner].currentRegister = invalidRegister
+	}
+	f.registers.all[register].occupiedBy = invalidVn
+	f.registers.available = append(f.registers.available, register)
+}
+
 func (p *procGen) issueCommand(command string) {
 	fmt.Fprintf(p.out.buffer, "\t%s\n", command)
 }
@@ -239,6 +248,14 @@ func (p *procGen) stackOperand(vn int) string {
 	return makeStackOperand(prefix, offset)
 }
 
+func (p *procGen) varOperand(vn int) string {
+	if p.inRegister(vn) {
+		return p.fittingRegisterName(vn)
+	} else {
+		return p.stackOperand(vn)
+	}
+}
+
 func (p *procGen) prefixRegisterAndOffset(memVar int, regVar int) (string, string, int) {
 	reg := p.registerOf(regVar)
 	var prefix string
@@ -285,15 +302,6 @@ func (p *procGen) regRegCommandSizedToFirst(command string, varA int, varB int) 
 
 func (p *procGen) movRegReg(regA int, regB int) {
 	p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[regA].qwordName, p.registers.all[regB].qwordName))
-}
-
-func (p *procGen) releaseRegister(register int) {
-	currentOwner := p.registers.all[register].occupiedBy
-	if currentOwner != invalidVn {
-		p.varStorage[currentOwner].currentRegister = invalidRegister
-	}
-	p.registers.all[register].occupiedBy = invalidVn
-	p.registers.available = append(p.registers.available, register)
 }
 
 func (p *procGen) giveRegisterToVar(register int, vn int) {
@@ -618,9 +626,9 @@ func (p *procGen) backendForOptBlock() {
 				}
 			}
 		case ir.Increment:
-			addLine(fmt.Sprintf("\tinc %s\n", qwordVarToStack(opt.In())))
+			p.issueCommand(fmt.Sprintf("inc %s", p.varOperand(opt.In())))
 		case ir.Decrement:
-			addLine(fmt.Sprintf("\tdec %s\n", qwordVarToStack(opt.In())))
+			p.issueCommand(fmt.Sprintf("dec %s", p.varOperand(opt.In())))
 		case ir.Mult:
 			l := opt.Left()
 			r := opt.Right()
