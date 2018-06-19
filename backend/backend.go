@@ -967,7 +967,7 @@ func (p *procGen) backendForOptBlock() {
 			p.ensureInRegister(data)
 			pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
 			prefix := prefixForSize(pointedToSize)
-			p.issueCommand(fmt.Sprintf("mov %s[%s], %s",
+			p.issueCommand(fmt.Sprintf("mov %s [%s], %s",
 				prefix, p.registerOf(ptr).qwordName, p.registerOf(data).nameForSize(pointedToSize)))
 		case ir.IndirectLoad:
 			p.swapStackBoundVars()
@@ -978,7 +978,7 @@ func (p *procGen) backendForOptBlock() {
 			p.ensureInRegister(in)
 			p.ensureInRegister(out)
 			prefix := prefixForSize(pointedToSize)
-			p.issueCommand(fmt.Sprintf("mov %s, %s[%s]",
+			p.issueCommand(fmt.Sprintf("mov %s, %s [%s]",
 				p.registerOf(out).nameForSize(pointedToSize), prefix, p.registerOf(in).qwordName))
 		case ir.StructMemberPtr:
 			baseType := p.typeTable[opt.In()]
@@ -1003,42 +1003,38 @@ func (p *procGen) backendForOptBlock() {
 			}
 			addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
 		case ir.LoadStructMember:
-			baseType := p.typeTable[opt.In()]
+			in := opt.In()
+			out := opt.Out()
+			baseType := p.typeTable[in]
+			outSize := p.sizeof(out)
+			p.ensureInRegister(out)
+			outReg := p.registerOf(out)
 			fieldName := opt.Extra.(string)
 
 			switch baseType := baseType.(type) {
 			case typing.Pointer:
+				p.ensureInRegister(in)
+				// p.ensureInRegister(in, out)
+				inReg := p.registerOf(in)
 				record := baseType.ToWhat.(*typing.StructRecord)
-				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-				addLine(fmt.Sprintf("\tmov rax, [rax+%d]\n", record.Members[fieldName].Offset))
+				p.issueCommand(fmt.Sprintf("mov %s, %s [%s+%d]",
+					outReg.nameForSize(outSize), prefixForSize(outSize), inReg.qwordName, record.Members[fieldName].Offset))
 			case *typing.StructRecord:
-				offset := varOffset[opt.In()] - baseType.Members[fieldName].Offset
-				if offset < 0 {
-					println(opt.In())
-					println(baseType.Members[fieldName].Offset)
-					panic("bad struct member offset")
-				}
-				addLine(fmt.Sprintf("\tmov rax, [rbp-%d]\n", offset))
+				p.ensureStackOffsetValid(in)
+				structOffset := p.varStorage[in].rbpOffset
+				memberOffset := baseType.Members[fieldName].Offset
+				p.issueCommand(fmt.Sprintf("mov %s, %s [rbp-%d+%d]",
+					outReg.nameForSize(outSize), prefixForSize(outSize), structOffset, memberOffset))
 			case typing.String:
+				p.ensureInRegister(in)
 				switch fieldName {
 				case "data":
-					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-					addLine("\tadd rax, 8\n")
+					p.issueCommand(fmt.Sprintf("lea %s, [%s+8]", outReg.qwordName, p.registerOf(in).qwordName))
 				case "length":
-					addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-					addLine("\tmov rax, [rax]\n")
+					p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
 				}
 			default:
-				panic("Type checker didn't do its job")
-			}
-			// TODO does not account for size of that member atm :morecopies
-			switch p.typeTable[opt.Out()].Size() {
-			case 8:
-				addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
-			case 4:
-				addLine(fmt.Sprintf("\tmov %s, eax\n", wordVarToStack(opt.Out())))
-			case 1:
-				addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Out())))
+				panic("unexpected input type for struct member load")
 			}
 		case ir.Not:
 			setLabel := p.genLabel(".not")
