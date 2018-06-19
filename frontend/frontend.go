@@ -481,35 +481,17 @@ func Prune(block *OptBlock) {
 		firstUseIdx  int
 		secondUseIdx int
 	}, block.NumberOfVars)
-	recordUsage := func(varNum int, optIdx int) {
-		if usageLog[varNum].count == 0 {
-			usageLog[varNum].firstUseIdx = optIdx
-		}
-		if usageLog[varNum].count == 1 {
-			usageLog[varNum].secondUseIdx = optIdx
-		}
-		usageLog[varNum].count++
-	}
 	for idx, opt := range block.Opts {
-		if opt.Type > ir.UnaryInstructions {
-			recordUsage(opt.Oprand1, idx)
-		}
-		if opt.Type > ir.BinaryInstructions {
-			recordUsage(opt.Oprand2, idx)
-		}
-		if opt.Type == ir.Call {
-			for _, vn := range opt.Extra.(ir.CallExtra).ArgVars {
-				recordUsage(vn, idx)
+		recordUsage := func(varNum int) {
+			if usageLog[varNum].count == 0 {
+				usageLog[varNum].firstUseIdx = idx
 			}
-		}
-		if opt.Type == ir.Return {
-			for _, vn := range opt.Extra.(ir.ReturnExtra).Values {
-				recordUsage(vn, idx)
+			if usageLog[varNum].count == 1 {
+				usageLog[varNum].secondUseIdx = idx
 			}
+			usageLog[varNum].count++
 		}
-		if opt.Type == ir.Compare {
-			recordUsage(opt.Extra.(ir.CompareExtra).Out, idx)
-		}
+		ir.IterOverAllVars(opt, recordUsage)
 	}
 	// keep track of all the uneeded assigns
 	hollow := make([]int, 0, len(block.Opts)/2)
@@ -577,21 +559,9 @@ func Prune(block *OptBlock) {
 
 	allVarNums := make([]int, 0, block.NumberOfVars)
 	for _, opt := range block.Opts {
-		if opt.Oprand1 >= block.NumberOfArgs {
-			allVarNums = append(allVarNums, opt.Oprand1)
-		}
-		if opt.Oprand2 >= block.NumberOfArgs {
-			allVarNums = append(allVarNums, opt.Oprand2)
-		}
-		if opt.Type == ir.Call {
-			allVarNums = append(allVarNums, opt.Extra.(ir.CallExtra).ArgVars...)
-		}
-		if opt.Type == ir.Return {
-			allVarNums = append(allVarNums, opt.Extra.(ir.ReturnExtra).Values...)
-		}
-		if opt.Type == ir.Compare {
-			allVarNums = append(allVarNums, opt.Extra.(ir.CompareExtra).Out)
-		}
+		ir.IterOverAllVars(opt, func(vn int) {
+			allVarNums = append(allVarNums, vn)
+		})
 	}
 	sort.Ints(allVarNums)
 	allVarNums = dedupSorted(allVarNums)

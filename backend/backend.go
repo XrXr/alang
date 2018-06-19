@@ -1123,33 +1123,37 @@ func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []in
 // return an array where the ith element has the index of the inst in which vn=i is last used
 func findLastusage(block frontend.OptBlock) []int {
 	lastUse := make([]int, block.NumberOfVars)
-	recordUsage := func(vn int, instIdx int) {
-		if lastUse[vn] == 0 { // the 0th instruction is always startproc, which doesn't use any var
-			lastUse[vn] = instIdx
+	for i := len(block.Opts) - 1; i >= 0; i-- {
+		recordUsage := func(vn int) {
+			if lastUse[vn] == 0 { // the 0th instruction is always startproc, which doesn't use any var
+				lastUse[vn] = i
+			}
+		}
+		ir.IterOverAllVars(block.Opts[i], recordUsage)
+	}
+
+	// adjust for jumpbacks
+	labelToIdx := make(map[string]int)
+	for i, opt := range block.Opts {
+		if opt.Type == ir.Label {
+			labelToIdx[opt.Extra.(string)] = i
 		}
 	}
 	for i := len(block.Opts) - 1; i >= 0; i-- {
 		opt := block.Opts[i]
-		if opt.Type > ir.UnaryInstructions {
-			recordUsage(opt.Oprand1, i)
-		}
-		if opt.Type > ir.BinaryInstructions {
-			recordUsage(opt.Oprand2, i)
-		}
-		if opt.Type == ir.Call {
-			for _, vn := range opt.Extra.(ir.CallExtra).ArgVars {
-				recordUsage(vn, i)
+		switch opt.Type {
+		case ir.JumpIfTrue, ir.JumpIfFalse, ir.Jump:
+			label := opt.Extra.(string)
+			for j := labelToIdx[label]; j < i; j++ {
+				ir.IterOverAllVars(block.Opts[j], func(vn int) {
+					if lastUse[vn] < i {
+						lastUse[vn] = i
+					}
+				})
 			}
-		}
-		if opt.Type == ir.Return {
-			for _, vn := range opt.Extra.(ir.ReturnExtra).Values {
-				recordUsage(vn, i)
-			}
-		}
-		if opt.Type == ir.Compare {
-			recordUsage(opt.Extra.(ir.CompareExtra).Out, i)
 		}
 	}
+
 	return lastUse
 }
 

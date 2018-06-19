@@ -93,6 +93,27 @@ func MakeBinaryInstWithAux(instType InstType, one int, two int, extra interface{
 	return newInst
 }
 
+func IterOverAllVars(opt Inst, cb func(vn int)) {
+	if opt.Type > UnaryInstructions {
+		cb(opt.Oprand1)
+	}
+	if opt.Type > BinaryInstructions {
+		cb(opt.Oprand2)
+	}
+	switch opt.Type {
+	case Call:
+		for _, vn := range opt.Extra.(CallExtra).ArgVars {
+			cb(vn)
+		}
+	case Return:
+		for _, vn := range opt.Extra.(ReturnExtra).Values {
+			cb(vn)
+		}
+	case Compare:
+		cb(opt.Extra.(CompareExtra).Out)
+	}
+}
+
 type CallExtra struct {
 	Name     string
 	ArgVars  []int
