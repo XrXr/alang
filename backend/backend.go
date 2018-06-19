@@ -860,7 +860,13 @@ func (p *procGen) backendForOptBlock() {
 			addLine("\tmov rsp, rbp\n")
 			addLine("\tpop rbp\n")
 			addLine("\tret\n")
-			fmt.Fprintf(p.prologueBlock.buffer, "\tsub rsp, %d\n", p.currentFrameSize)
+			framesize := p.currentFrameSize
+			if framesize%16 != 0 {
+				// align the stack for SystemV abi. Upon being called, we are 8 bytes misaligned.
+				// Since we push rbp in our prologue we align to 16 here
+				framesize += 16 - framesize%16
+			}
+			fmt.Fprintf(p.prologueBlock.buffer, "\tsub rsp, %d\n", framesize)
 		case ir.Compare:
 			extra := opt.Extra.(ir.CompareExtra)
 			out := extra.Out
@@ -928,50 +934,37 @@ func (p *procGen) backendForOptBlock() {
 			addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
 			addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.In()]))
 		case ir.ArrayToPointer:
-			dest := qwordVarToStack(opt.Out())
+			in := opt.In()
+			out := opt.Out()
+			p.ensureStackOffsetValid(in)
+			p.ensureInRegister(out)
 			switch p.typeTable[opt.In()].(type) {
 			case typing.Array:
-				addLine(fmt.Sprintf("\tmov %s, rbp\n", dest))
-				addLine(fmt.Sprintf("\tsub %s, %d\n", dest, varOffset[opt.In()]))
+				p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registerOf(out).qwordName, p.varStorage[in].rbpOffset))
 			case typing.Pointer:
-				simpleCopy(opt.In(), qwordVarToStack(opt.Out()))
+				p.issueCommand(fmt.Sprintf("mov %s, %s", p.fittingRegisterName(out), p.varOperand(in)))
 			default:
 				panic("must be array or pointer to an array")
 			}
 		case ir.IndirectWrite:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.Left())))
-			addLine(fmt.Sprintf("\tmov rbx, %s\n", qwordVarToStack(opt.Right())))
-			var prefix string
-			var register string
-			switch p.typeTable[opt.Left()].(typing.Pointer).ToWhat.Size() {
-			case 1:
-				prefix = "byte"
-				register = "bl"
-			case 4:
-				prefix = "dword"
-				register = "ebx"
-			case 8:
-				prefix = "qword"
-				register = "rbx"
-			}
-			addLine(fmt.Sprintf("\tmov %s [rax], %s\n", prefix, register))
+			ptr := opt.Left()
+			data := opt.Right()
+			p.ensureInRegister(ptr)
+			p.ensureInRegister(data)
+			pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
+			prefix := prefixForSize(pointedToSize)
+			p.issueCommand(fmt.Sprintf("mov %s[%s], %s",
+				prefix, p.registerOf(ptr).qwordName, p.registerOf(data).nameForSize(pointedToSize)))
 		case ir.IndirectLoad:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-			var prefix string
-			var register string
-			switch p.typeTable[opt.In()].(typing.Pointer).ToWhat.Size() {
-			case 1:
-				prefix = "byte"
-				register = "al"
-			case 4:
-				prefix = "dword"
-				register = "eax"
-			case 8:
-				prefix = "qword"
-				register = "rax"
-			}
-			addLine(fmt.Sprintf("\tmov %s, %s [rax]\n", register, prefix))
-			addLine(fmt.Sprintf("\tmov %s [rbp-%d], %s\n", prefix, varOffset[opt.Out()], register))
+			in := opt.In()
+			out := opt.Out()
+			pointedToSize := p.typeTable[opt.In()].(typing.Pointer).ToWhat.Size()
+
+			p.ensureInRegister(in)
+			p.ensureInRegister(out)
+			prefix := prefixForSize(pointedToSize)
+			p.issueCommand(fmt.Sprintf("mov %s, %s[%s]",
+				p.registerOf(out).nameForSize(pointedToSize), prefix, p.registerOf(in).qwordName))
 		case ir.StructMemberPtr:
 			baseType := p.typeTable[opt.In()]
 			fieldName := opt.Extra.(string)
