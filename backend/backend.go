@@ -981,27 +981,34 @@ func (p *procGen) backendForOptBlock() {
 			p.issueCommand(fmt.Sprintf("mov %s, %s [%s]",
 				p.registerOf(out).nameForSize(pointedToSize), prefix, p.registerOf(in).qwordName))
 		case ir.StructMemberPtr:
+			out := opt.Out()
+			in := opt.In()
+			p.ensureInRegister(out)
+			outReg := p.registerOf(out)
 			baseType := p.typeTable[opt.In()]
 			fieldName := opt.Extra.(string)
 			switch baseType := baseType.(type) {
 			case typing.Pointer:
+				p.ensureInRegister(in)
 				record := baseType.ToWhat.(*typing.StructRecord)
-				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-				addLine(fmt.Sprintf("\tadd rax, %d\n", record.Members[fieldName].Offset))
+				p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]",
+					outReg.qwordName, p.registerOf(in).qwordName, record.Members[fieldName].Offset))
 			case *typing.StructRecord:
-				addLine(fmt.Sprintf("\tlea rax, [rbp-%d+%d]\n", varOffset[opt.In()], baseType.Members[fieldName].Offset))
+				p.ensureStackOffsetValid(in)
+				p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]",
+					outReg.qwordName, p.varStorage[in].rbpOffset, baseType.Members[fieldName].Offset))
 			case typing.String:
-				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
+				p.ensureInRegister(in)
 				switch fieldName {
 				case "data":
-					addLine("\tadd rax, 8\n")
+					p.ensureInRegister(in)
+					p.issueCommand(fmt.Sprintf("lea %s, [%s+8]", outReg.qwordName, p.registerOf(in).qwordName))
 				case "length":
-					// it's pointing to it already
+					p.movRegReg(p.varStorage[out].currentRegister, p.varStorage[in].currentRegister)
 				}
 			default:
 				panic("Type checker didn't do its job")
 			}
-			addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Out())))
 		case ir.LoadStructMember:
 			in := opt.In()
 			out := opt.Out()
