@@ -445,6 +445,23 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 	}
 }
 
+// return the register of extendee sized to sizingVar
+func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
+	extendedReg := p.registerOf(extendee).nameForSize(p.sizeof(sizingVar))
+	if p.sizeof(sizingVar) > p.sizeof(extendee) {
+		tightFit := p.fittingRegisterName(extendee)
+		var mnemonic string
+		switch p.typeTable[extendee] {
+		case p.typer.Builtins[typing.U8Idx], p.typer.Builtins[typing.U32Idx], p.typer.Builtins[typing.U64Idx]:
+			mnemonic = "movzx"
+		default:
+			mnemonic = "movsx"
+		}
+		p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, extendedReg, tightFit))
+	}
+	return extendedReg
+}
+
 func (p *procGen) conditionalJump(jumpInst ir.Inst) {
 	label := jumpInst.Extra.(string)
 	targetState := p.labelToState[label]
@@ -620,11 +637,7 @@ func (p *procGen) backendForOptBlock() {
 				p.issueCommand(
 					fmt.Sprintf(leaFormatString, p.registers.all[lReg].qwordName, rReg.qwordName, pointer.ToWhat.Size()))
 			} else {
-				rRegLeftSize := rReg.nameForSize(p.sizeof(opt.Left()))
-				if p.sizeof(opt.Left()) > p.sizeof(opt.Right()) {
-					tightFit := p.fittingRegisterName(opt.Right())
-					p.issueCommand(fmt.Sprintf("movsx %s, %s", rRegLeftSize, tightFit))
-				}
+				rRegLeftSize := p.signOrZeroExtendIfNeeded(opt.Right(), opt.Left())
 				if p.inRegister(opt.Left()) {
 					// we sign extend right above in case sizeof(left) > sizeof(right)
 					// in case that sizeof(left) <= sizeof(right) we don't need to do anything extra
@@ -884,8 +897,9 @@ func (p *procGen) backendForOptBlock() {
 			r := opt.Right()
 			lt := p.typeTable[opt.Left()]
 			rt := p.typeTable[opt.Right()]
-			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) || ls != rt.Size() {
+			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) {
 				// array & struct compare
+				println(i)
 				panic("Not yet")
 			}
 
@@ -898,22 +912,31 @@ func (p *procGen) backendForOptBlock() {
 				p.issueCommand(fmt.Sprintf("mov %s, 1", p.stackOperand(out)))
 			}
 
-			// TODO: autoCommand() we can have a method that gives an operand preferring register.
-			// Not sure we do it in other places yet though.
-			if !p.inRegister(l) && !p.inRegister(r) {
-				p.ensureInRegister(l)
-			}
 			var firstOperand, secondOperand string
-			if p.inRegister(l) {
-				firstOperand = p.fittingRegisterName(l)
+			if lt.Size() != rt.Size() {
+				if lt.IsNumber() && rt.IsNumber() {
+					p.ensureInRegister(l)
+					p.ensureInRegister(r)
+					if lt.Size() < rt.Size() {
+						firstOperand = p.signOrZeroExtendIfNeeded(l, r)
+						secondOperand = p.fittingRegisterName(r)
+					} else {
+						firstOperand = p.fittingRegisterName(l)
+						secondOperand = p.signOrZeroExtendIfNeeded(r, l)
+					}
+				} else {
+					panic("faulty ir: comparsion between non numbers with different sizes")
+				}
 			} else {
-				firstOperand = p.stackOperand(l)
+				// TODO: autoCommand() we can have a method that gives an operand preferring register.
+				// Not sure we do it in other places yet though.
+				if !p.inRegister(l) && !p.inRegister(r) {
+					p.ensureInRegister(l)
+				}
+				firstOperand = p.varOperand(l)
+				secondOperand = p.varOperand(r)
 			}
-			if p.inRegister(r) {
-				secondOperand = p.fittingRegisterName(r)
-			} else {
-				secondOperand = p.stackOperand(r)
-			}
+
 			p.issueCommand(fmt.Sprintf("cmp %s, %s", firstOperand, secondOperand))
 			labelName := p.genLabel(".cmp")
 			switch extra.How {
@@ -931,11 +954,7 @@ func (p *procGen) backendForOptBlock() {
 				p.issueCommand(fmt.Sprintf("jne %s", labelName))
 			}
 
-			if outInReg {
-				p.issueCommand(fmt.Sprintf("mov %s, 0", p.fittingRegisterName(out)))
-			} else {
-				p.issueCommand(fmt.Sprintf("mov %s, 0", p.stackOperand(out)))
-			}
+			p.issueCommand(fmt.Sprintf("mov %s, 0", p.varOperand(out)))
 			fmt.Fprintf(p.out.buffer, "%s:\n", labelName)
 		case ir.Transclude:
 			panic("Transcludes should be gone by now")
