@@ -47,14 +47,10 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			}
 			argRecords[i] = record
 		}
-		callingConvention := typing.Cdecl
-		if order.ProcDecl.IsForeign {
-			callingConvention = typing.SystemV
-		}
 		env.Procs[order.Name] = typing.ProcRecord{
 			typer.ConstructTypeRecord(order.ProcDecl.Return),
 			argRecords,
-			callingConvention,
+			typing.SystemV,
 			order.ProcDecl.IsForeign,
 		}
 	}

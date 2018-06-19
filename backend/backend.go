@@ -830,14 +830,10 @@ func (p *procGen) backendForOptBlock() {
 					if len(extra.ArgVars) > 6 {
 						addLine(fmt.Sprintf("\tadd rsp, %d\n", numExtraArgs*8+numExtraArgs%2*8))
 					}
-					switch p.typeTable[opt.Oprand1].Size() {
-					case 1:
-						addLine(fmt.Sprintf("\tmov %s, al\n", byteVarToStack(opt.Oprand1)))
-					case 4:
-						addLine(fmt.Sprintf("\tmov %s, eax\n", wordVarToStack(opt.Oprand1)))
-					case 8:
-						addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Oprand1)))
+					if p.registers.all[rax].occupiedBy != invalidVn {
+						panic("rax should've been freed up before the call")
 					}
+					p.giveRegisterToVar(rax, opt.Oprand1)
 				case typing.Cdecl:
 					addLine(fmt.Sprintf("\tadd rsp, %d\n", totalArgSize))
 					if p.typeTable[opt.Oprand1].Size() > 0 {
@@ -880,9 +876,10 @@ func (p *procGen) backendForOptBlock() {
 			p.prologueBlock = p.out
 			p.switchToNewOutBlock()
 		case ir.EndProc:
-			addLine("\tmov rsp, rbp\n")
-			addLine("\tpop rbp\n")
-			addLine("\tret\n")
+			fmt.Fprintln(p.out.buffer, ".end_of_proc:")
+			p.issueCommand("mov rsp, rbp")
+			p.issueCommand("pop rbp")
+			p.issueCommand("ret")
 			framesize := p.currentFrameSize
 			if framesize%16 != 0 {
 				// align the stack for SystemV abi. Upon being called, we are 8 bytes misaligned.
@@ -1077,18 +1074,29 @@ func (p *procGen) backendForOptBlock() {
 			addLine(fmt.Sprintf("\tmov %s, 1\n", byteVarToStack(opt.Out())))
 			addLine(fmt.Sprintf("%s:\n", setLabel))
 		case ir.BoolAnd:
-			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
-			addLine(fmt.Sprintf("\tand %s, al\n", byteVarToStack(opt.Left())))
+			l := opt.Left()
+			r := opt.Right()
+			if !p.inRegister(l) && !p.inRegister(r) {
+				p.ensureInRegister(l)
+			}
+			p.issueCommand(fmt.Sprintf("and %s, %s", p.varOperand(l), p.varOperand(r)))
 		case ir.BoolOr:
-			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.Right())))
-			addLine(fmt.Sprintf("\tor %s, al\n", byteVarToStack(opt.Left())))
+			l := opt.Left()
+			r := opt.Right()
+			if !p.inRegister(l) && !p.inRegister(r) {
+				p.ensureInRegister(l)
+			}
+			p.issueCommand(fmt.Sprintf("or %s, %s", p.varOperand(l), p.varOperand(r)))
 		case ir.Return:
 			returnExtra := opt.Extra.(ir.ReturnExtra)
-			addLine("\tmov rax, rbp\n")
-			addLine(fmt.Sprintf("\tsub rax, %d\n", varOffset[returnExtra.Values[0]]))
-			addLine("\tmov rsp, rbp\n")
-			addLine("\tpop rbp\n")
-			addLine("\tret\n")
+			retVar := returnExtra.Values[0]
+			if p.sizeof(retVar) <= 8 {
+				p.issueCommand(fmt.Sprintf("mov %s, %s",
+					p.registers.all[rax].nameForSize(p.sizeof(retVar)), p.varOperand(retVar)))
+			} else {
+				panic("Can't handle non register size returns yet")
+			}
+			p.issueCommand("jmp .end_of_proc")
 		default:
 			panic(opt)
 		}
