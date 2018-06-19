@@ -1060,19 +1060,15 @@ func (p *procGen) backendForOptBlock() {
 				panic("unexpected input type for struct member load")
 			}
 		case ir.Not:
-			setLabel := p.genLabel(".not")
-			addLine(fmt.Sprintf("\tmov %s, 0\n", byteVarToStack(opt.Out())))
-			switch p.typeTable[opt.In()].(type) {
-			case typing.Pointer:
-				addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(opt.In())))
-				addLine(fmt.Sprintf("\tcmp rax, 0\n"))
-			case typing.Boolean:
-				addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(opt.In())))
-				addLine(fmt.Sprintf("\tcmp al, 0\n"))
-			}
-			addLine(fmt.Sprintf("\tjnz %s\n", setLabel))
-			addLine(fmt.Sprintf("\tmov %s, 1\n", byteVarToStack(opt.Out())))
-			addLine(fmt.Sprintf("%s:\n", setLabel))
+			setLabel := p.genLabel(".keep_zero")
+			out := opt.Out()
+			in := opt.In()
+			p.ensureInRegister(out)
+			p.issueCommand(fmt.Sprintf("mov %s, 0", p.fittingRegisterName(out)))
+			p.issueCommand(fmt.Sprintf("cmp %s, 0", p.varOperand(in)))
+			p.issueCommand(fmt.Sprintf("jnz %s", setLabel))
+			p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
+			fmt.Fprintf(p.out.buffer, "%s:\n", setLabel)
 		case ir.BoolAnd:
 			l := opt.Left()
 			r := opt.Right()
