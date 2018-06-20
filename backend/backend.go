@@ -341,7 +341,7 @@ func (p *procGen) giveRegisterToVar(register int, vn int) {
 	vnRegister := p.varStorage[vn].currentRegister
 	defer func() {
 		// move the var from stack to reg, if it's on stack
-		if !vnAlreadyInRegister && p.varStorage[vn].rbpOffset != 0 {
+		if !vnAlreadyInRegister && p.hasStackStroage(vn) {
 			p.regMemCommand("mov", vn, vn)
 		}
 	}()
@@ -494,12 +494,17 @@ func (p *procGen) backendForOptBlock() {
 		io.WriteString(p.out.buffer, line)
 	}
 	varOffset := make([]int, p.block.NumberOfVars)
+	paramPassingRegOrder := [...]int{rdi, rsi, rdx, rcx, r8, r9}
 
-	if p.block.NumberOfArgs > 0 {
-		// we push rbp in the prologue and call pushes the return address
-		varOffset[0] = -16
-		for i := 1; i < p.block.NumberOfArgs; i++ {
-			varOffset[i] = varOffset[i-1] - p.typeTable[i-1].Size()
+	{
+		paramOffset := -16
+		for i := 0; i < p.block.NumberOfArgs; i++ {
+			if i < len(paramPassingRegOrder) {
+				p.giveRegisterToVar(paramPassingRegOrder[i], i)
+			} else {
+				p.varStorage[i].rbpOffset = paramOffset
+				paramOffset -= p.sizeof(i)
+			}
 		}
 	}
 
@@ -549,8 +554,8 @@ func (p *procGen) backendForOptBlock() {
 		framesize += 16 - framesize%16
 	}
 	backendDebug(framesize, p.typeTable, varOffset)
-	for i, opt := range p.block.Opts {
-		addLine(fmt.Sprintf(";ir line %d\n", i))
+	for optIdx, opt := range p.block.Opts {
+		addLine(fmt.Sprintf(";ir line %d\n", optIdx))
 
 		switch opt.Type {
 		case ir.Assign:
@@ -729,7 +734,7 @@ func (p *procGen) backendForOptBlock() {
 				p.conditionalJumps = append(p.conditionalJumps, preJumpState{
 					out:    p.out,
 					state:  p.copyVarState(),
-					optIdx: i})
+					optIdx: optIdx})
 				p.switchToNewOutBlock()
 			}
 		case ir.Call:
@@ -766,19 +771,19 @@ func (p *procGen) backendForOptBlock() {
 						offset += thisArgSize
 					}
 				case typing.SystemV:
-					regOrder := [...]int{rdi, rsi, rdx, rcx, r8, r9}
-
-					regsThatGetDestroyed := [...]int{rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11}
-					for _, reg := range regsThatGetDestroyed {
+					// the first part of this array is the same as paramPassingRegOrder for checking
+					// if we need to save a var that is in a param-passing register
+					regsThatGetDestroyed := [...]int{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
+					for i, reg := range regsThatGetDestroyed {
 						owner := p.registers.all[reg].occupiedBy
-						if owner != invalidVn && p.lastUsage[owner] != i {
+						if owner != invalidVn && (p.lastUsage[owner] != optIdx || i < len(extra.ArgVars)) {
 							p.ensureStackOffsetValid(owner)
 							p.memRegCommand("mov", owner, owner)
 							p.releaseRegister(reg)
 						}
 					}
 					for i, arg := range extra.ArgVars {
-						if i >= len(regOrder) {
+						if i >= len(paramPassingRegOrder) {
 							break
 						}
 						switch p.typeTable[arg].Size() {
@@ -786,17 +791,17 @@ func (p *procGen) backendForOptBlock() {
 							switch p.varStorage[arg].currentRegister {
 							case rbx, r12, r13, r14, r15:
 								// these registers are preserved across calls
-								p.movRegReg(regOrder[i], p.varStorage[arg].currentRegister)
+								p.movRegReg(paramPassingRegOrder[i], p.varStorage[arg].currentRegister)
 							default:
-								p.giveRegisterToVar(regOrder[i], arg)
+								p.giveRegisterToVar(paramPassingRegOrder[i], arg)
 							}
 						default:
 							panic("Unsupported parameter size")
 						}
 					}
-					if len(extra.ArgVars) > len(regOrder) {
+					if len(extra.ArgVars) > len(paramPassingRegOrder) {
 						// TODO :newbackend
-						numExtraArgs = len(extra.ArgVars) - len(regOrder)
+						numExtraArgs = len(extra.ArgVars) - len(paramPassingRegOrder)
 						if numExtraArgs%2 == 1 {
 							// Make sure we are aligned to 16
 							addLine("\tsub rsp, 8\n")
@@ -858,7 +863,7 @@ func (p *procGen) backendForOptBlock() {
 				p.jumps = append(p.jumps, preJumpState{
 					out:    p.out,
 					state:  p.copyVarState(),
-					optIdx: i,
+					optIdx: optIdx,
 				})
 				p.switchToNewOutBlock()
 			}
@@ -896,7 +901,6 @@ func (p *procGen) backendForOptBlock() {
 			rt := p.typeTable[opt.Right()]
 			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) {
 				// array & struct compare
-				println(i)
 				panic("Not yet")
 			}
 
@@ -1099,7 +1103,7 @@ func (p *procGen) backendForOptBlock() {
 
 		decommissionIfLastUse := func(vn int) {
 			reg := p.varStorage[vn].currentRegister
-			if reg != invalidRegister && p.lastUsage[vn] == i {
+			if reg != invalidRegister && p.lastUsage[vn] == optIdx {
 				p.releaseRegister(reg)
 			}
 		}
