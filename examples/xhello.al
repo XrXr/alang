@@ -103,6 +103,10 @@ main :: proc () {
 	var s s32
 
   	d = XOpenDisplay(0)
+  	if !d {
+  		puts("Can't open display\n")
+  		exit(1)
+  	}
 
   	s = d.default_screen
   	screen := d.screens + s

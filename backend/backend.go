@@ -157,6 +157,7 @@ type procGen struct {
 	procRecord                typing.ProcRecord
 	typer                     *typing.Typer
 	callerProvidesReturnSpace bool
+	discardVarWhenNoRoom      bool // used by morphToState
 	currentFrameSize          int
 	nextLabelId               int
 	stackBoundVars            []int
@@ -215,6 +216,11 @@ func (f *fullVarState) allocateRegToVar(register registerId, vn int) {
 }
 
 func (f *fullVarState) releaseRegister(register registerId) {
+	for _, reg := range f.registers.available {
+		if reg == register {
+			panic("double release")
+		}
+	}
 	currentOwner := f.registers.all[register].occupiedBy
 	if currentOwner != invalidVn {
 		f.varStorage[currentOwner].currentRegister = invalidRegister
@@ -390,9 +396,12 @@ func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 			p.allocateRegToVar(newReg, currentTenant)
 			p.changeRegisterBookKeepking(vn, register)
 		} else {
-			// swap currentTenant to stack
-			p.ensureStackOffsetValid(currentTenant)
-			p.memRegCommand("mov", currentTenant, currentTenant)
+			// only used by morphToState
+			if !p.discardVarWhenNoRoom {
+				// swap currentTenant to stack
+				p.ensureStackOffsetValid(currentTenant)
+				p.memRegCommand("mov", currentTenant, currentTenant)
+			}
 			p.changeRegisterBookKeepking(vn, register)
 			p.varStorage[currentTenant].currentRegister = invalidRegister
 		}
@@ -410,7 +419,6 @@ func (p *procGen) ensureInRegister(vn int) registerId {
 
 	reg, freeRegExists := p.registers.nextAvailable()
 	if freeRegExists {
-
 		p.loadRegisterWithVar(reg, vn)
 		return reg
 	} else {
@@ -433,39 +441,47 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 }
 
 func (p *procGen) morphToState(targetState *fullVarState) {
+	backup := p.fullVarState.copyVarState()
+	// first pass, do register swaps and simple mov
 	for regId, reg := range targetState.registers.all {
 		ourOccupiedBy := p.registers.all[regId].occupiedBy
 		theirOccupiedBy := reg.occupiedBy
-
 		if theirOccupiedBy == ourOccupiedBy {
 			continue
 		}
-
-		moveToMatch := func() {
-			if p.inRegister(theirOccupiedBy) {
-				p.movRegReg(registerId(regId), p.varStorage[theirOccupiedBy].currentRegister)
-			} else if p.hasStackStroage(theirOccupiedBy) {
-				p.issueCommand(fmt.Sprintf("mov %s, %s", reg.nameForSize(p.sizeof(theirOccupiedBy)), p.stackOperand(theirOccupiedBy)))
-			}
+		if ourOccupiedBy == invalidVn && theirOccupiedBy != invalidVn {
+			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
 		}
-
-		movToStack := func() {
-			if targetState.hasStackStroage(ourOccupiedBy) {
-				stackMem := makeStackOperand(prefixForSize(p.sizeof(ourOccupiedBy)), targetState.varStorage[ourOccupiedBy].rbpOffset)
-				p.issueCommand(fmt.Sprintf("mov %s, %s", stackMem, p.fittingRegisterName(ourOccupiedBy)))
-			}
-		}
-
-		switch {
-		case theirOccupiedBy == invalidVn && ourOccupiedBy != invalidVn:
-			movToStack()
-		case theirOccupiedBy != invalidVn && ourOccupiedBy == invalidVn:
-			moveToMatch()
-		case theirOccupiedBy != invalidVn && ourOccupiedBy != invalidVn:
-			movToStack()
-			moveToMatch()
+		if ourOccupiedBy != invalidVn && theirOccupiedBy != invalidVn &&
+			p.inRegister(ourOccupiedBy) && p.inRegister(theirOccupiedBy) {
+			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
 		}
 	}
+	// second pass, load from stack into register. We discard vars which don't have stack storage in the
+	// target state
+	p.discardVarWhenNoRoom = true
+	for regId, reg := range targetState.registers.all {
+		ourOccupiedBy := p.registers.all[regId].occupiedBy
+		theirOccupiedBy := reg.occupiedBy
+		if theirOccupiedBy == ourOccupiedBy {
+			continue
+		}
+		if theirOccupiedBy == invalidVn && ourOccupiedBy != invalidVn {
+			if targetState.hasStackStroage(ourOccupiedBy) {
+				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
+				p.memRegCommand("mov", ourOccupiedBy, ourOccupiedBy)
+			}
+		}
+		if theirOccupiedBy != invalidVn && ourOccupiedBy != invalidVn {
+			if targetState.hasStackStroage(ourOccupiedBy) {
+				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
+			}
+			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
+		}
+	}
+
+	p.discardVarWhenNoRoom = false
+	p.fullVarState = backup
 }
 
 // return the register of extendee sized to sizingVar
@@ -553,7 +569,7 @@ func (p *procGen) generate() {
 	}
 	backendDebug(framesize, p.typeTable, varOffset)
 	for optIdx, opt := range p.block.Opts {
-		addLine(fmt.Sprintf(";ir line %d\n", optIdx))
+		addLine(fmt.Sprintf(".ir_line_%d:\n", optIdx))
 		for i := 0; i < len(p.dontSwap); i++ {
 			p.dontSwap[i] = false
 		}
@@ -689,11 +705,10 @@ func (p *procGen) generate() {
 			l := opt.Left()
 			r := opt.Right()
 			p.loadRegisterWithVar(rax, l)
+			p.dontSwap[rax] = true
 			if p.sizeof(l) > p.sizeof(r) {
 				p.ensureInRegister(r)
-				rRegLeftSize := p.registerOf(r).nameForSize(p.sizeof(l))
-				tightFit := p.fittingRegisterName(r)
-				p.issueCommand(fmt.Sprintf("movsx %s, %s", rRegLeftSize, tightFit))
+				p.signOrZeroExtendIfNeeded(r, l)
 			}
 			if p.sizeof(l) == 1 {
 				// we have to bring r to a register to do a 8 bit multiply
@@ -782,11 +797,11 @@ func (p *procGen) generate() {
 
 				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
 				// the first part of this array is the same as paramPassingRegOrder for checking
-				// if we need to save a var that is in a param-passing register
+				// if we need to save a var that is in a param-passing register to stack
 				regsThatGetDestroyed := [...]registerId{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
-				for i, reg := range regsThatGetDestroyed {
+				for _, reg := range regsThatGetDestroyed {
 					owner := p.registers.all[reg].occupiedBy
-					if owner != invalidVn && (p.lastUsage[owner] != optIdx || i < numArgs) {
+					if owner != invalidVn {
 						p.ensureStackOffsetValid(owner)
 						p.memRegCommand("mov", owner, owner)
 						p.releaseRegister(reg)
@@ -818,6 +833,7 @@ func (p *procGen) generate() {
 						panic("Unsupported parameter size")
 					}
 				}
+
 				if realArgsPassedInReg < len(extra.ArgVars) {
 					// TODO :newbackend
 					numStackVars = len(extra.ArgVars) - realArgsPassedInReg
@@ -844,6 +860,18 @@ func (p *procGen) generate() {
 						}
 					}
 				}
+
+				for _, reg := range regsThatGetDestroyed {
+					owner := p.registers.all[reg].occupiedBy
+					if owner != invalidVn {
+						if p.lastUsage[owner] != optIdx {
+							p.ensureStackOffsetValid(owner)
+							p.memRegCommand("mov", owner, owner)
+						}
+						p.releaseRegister(reg)
+					}
+				}
+
 				if procRecord.IsForeign {
 					p.issueCommand(fmt.Sprintf("call %s", extra.Name))
 				} else {
@@ -852,7 +880,7 @@ func (p *procGen) generate() {
 
 				// TODO this needs to change when we support things bigger than 8 bytes
 				// TODO :newbackend
-				if numArgs > 6 {
+				if numArgs > len(paramPassingRegOrder) {
 					p.issueCommand(fmt.Sprintf("add rsp, %d", numStackVars*8+numStackVars%2*8))
 				}
 				if p.registers.all[rax].occupiedBy != invalidVn {

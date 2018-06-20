@@ -40,7 +40,7 @@ itoa :: proc (number int, out *asciiNumber) {
             }
         }
     }
-    // do the carray
+    // do the carry
     for i := 0..18 {
         if digits[i] > 9 {
             carry := digits[i] / 10
