@@ -7,7 +7,6 @@
  √ range loop @done (18-01-03 13:11)
  √ procedures @done (18-01-04 00:14)
  √ print numbers (big milestone!) @done (18-01-04 18:56)
-
  √ refactor ir for better pruning (no more type switching) @done (18-02-19 13:48)
  √ support types of different sizes. Right now pointers to u8 are broken for example @done (18-02-22 20:47)
  √ proper [] operatator @done (18-02-23 13:37)

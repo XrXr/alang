@@ -537,24 +537,6 @@ func (p *procGen) backendForOptBlock() {
 	byteVarToStack := func(varNum int) string {
 		return fmt.Sprintf("byte [rbp-%d]", varOffset[varNum])
 	}
-	simpleCopy := func(sourceVarNum int, dest string) {
-		soruceType := p.typeTable[sourceVarNum]
-		switch soruceType.Size() {
-		case 1:
-			addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(sourceVarNum)))
-			addLine(fmt.Sprintf("\tmov %s, al\n", dest))
-		case 4:
-			addLine(fmt.Sprintf("\tmov eax, %s\n", wordVarToStack(sourceVarNum)))
-			addLine(fmt.Sprintf("\tmov %s, eax\n", dest))
-		case 8:
-			addLine(fmt.Sprintf("\tmov rax, %s\n", qwordVarToStack(sourceVarNum)))
-			addLine(fmt.Sprintf("\tmov %s, rax\n", dest))
-		default:
-			// TODO not panicing right now because we assign structs to unused vars in ir
-			// search for :morecopies
-			// panic("need a complex copy")
-		}
-	}
 
 	framesize := 0
 	for _, typeRecord := range p.typeTable {
@@ -771,75 +753,54 @@ func (p *procGen) backendForOptBlock() {
 				var numExtraArgs int
 
 				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
-				switch procRecord.CallingConvention {
-				case typing.Cdecl:
-					addLine(fmt.Sprintf("\tsub rsp, %d\n", totalArgSize))
-					offset := 0
-
-					for _, arg := range extra.ArgVars {
-						thisArgSize := p.typeTable[arg].Size()
-						var dest string
-						switch thisArgSize {
-						case 1:
-							dest = fmt.Sprintf("byte [rsp+%d]", offset)
-						case 4:
-							dest = fmt.Sprintf("word [rsp+%d]", offset)
-						case 8:
-							dest = fmt.Sprintf("qword [rsp+%d]", offset)
-						}
-						simpleCopy(arg, dest)
-						offset += thisArgSize
+				// the first part of this array is the same as paramPassingRegOrder for checking
+				// if we need to save a var that is in a param-passing register
+				regsThatGetDestroyed := [...]int{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
+				for i, reg := range regsThatGetDestroyed {
+					owner := p.registers.all[reg].occupiedBy
+					if owner != invalidVn && (p.lastUsage[owner] != optIdx || i < len(extra.ArgVars)) {
+						p.ensureStackOffsetValid(owner)
+						p.memRegCommand("mov", owner, owner)
+						p.releaseRegister(reg)
 					}
-				case typing.SystemV:
-					// the first part of this array is the same as paramPassingRegOrder for checking
-					// if we need to save a var that is in a param-passing register
-					regsThatGetDestroyed := [...]int{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
-					for i, reg := range regsThatGetDestroyed {
-						owner := p.registers.all[reg].occupiedBy
-						if owner != invalidVn && (p.lastUsage[owner] != optIdx || i < len(extra.ArgVars)) {
-							p.ensureStackOffsetValid(owner)
-							p.memRegCommand("mov", owner, owner)
-							p.releaseRegister(reg)
-						}
+				}
+				for i, arg := range extra.ArgVars {
+					if i >= len(paramPassingRegOrder) {
+						break
 					}
-					for i, arg := range extra.ArgVars {
-						if i >= len(paramPassingRegOrder) {
-							break
+					switch p.typeTable[arg].Size() {
+					case 8, 4, 1:
+						switch p.varStorage[arg].currentRegister {
+						case rbx, r12, r13, r14, r15:
+							// these registers are preserved across calls
+							p.movRegReg(paramPassingRegOrder[i], p.varStorage[arg].currentRegister)
+						default:
+							p.giveRegisterToVar(paramPassingRegOrder[i], arg)
 						}
+					default:
+						panic("Unsupported parameter size")
+					}
+				}
+				if len(extra.ArgVars) > len(paramPassingRegOrder) {
+					// TODO :newbackend
+					numExtraArgs = len(extra.ArgVars) - len(paramPassingRegOrder)
+					if numExtraArgs%2 == 1 {
+						// Make sure we are aligned to 16
+						addLine("\tsub rsp, 8\n")
+					}
+					for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numExtraArgs; i-- {
+						arg := extra.ArgVars[i]
 						switch p.typeTable[arg].Size() {
-						case 8, 4, 1:
-							switch p.varStorage[arg].currentRegister {
-							case rbx, r12, r13, r14, r15:
-								// these registers are preserved across calls
-								p.movRegReg(paramPassingRegOrder[i], p.varStorage[arg].currentRegister)
-							default:
-								p.giveRegisterToVar(paramPassingRegOrder[i], arg)
-							}
+						case 8:
+							addLine(fmt.Sprintf("\tpush %s\n", qwordVarToStack(arg)))
+						case 4:
+							addLine(fmt.Sprintf("\tmov eax, %s\n", wordVarToStack(arg)))
+							addLine("\tpush rax\n")
+						case 1:
+							addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(arg)))
+							addLine("\tpush rax\n")
 						default:
 							panic("Unsupported parameter size")
-						}
-					}
-					if len(extra.ArgVars) > len(paramPassingRegOrder) {
-						// TODO :newbackend
-						numExtraArgs = len(extra.ArgVars) - len(paramPassingRegOrder)
-						if numExtraArgs%2 == 1 {
-							// Make sure we are aligned to 16
-							addLine("\tsub rsp, 8\n")
-						}
-						for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numExtraArgs; i-- {
-							arg := extra.ArgVars[i]
-							switch p.typeTable[arg].Size() {
-							case 8:
-								addLine(fmt.Sprintf("\tpush %s\n", qwordVarToStack(arg)))
-							case 4:
-								addLine(fmt.Sprintf("\tmov eax, %s\n", wordVarToStack(arg)))
-								addLine("\tpush rax\n")
-							case 1:
-								addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(arg)))
-								addLine("\tpush rax\n")
-							default:
-								panic("Unsupported parameter size")
-							}
 						}
 					}
 				}
@@ -848,31 +809,16 @@ func (p *procGen) backendForOptBlock() {
 				} else {
 					addLine(fmt.Sprintf("\tcall proc_%s\n", extra.Name))
 				}
-				switch procRecord.CallingConvention {
-				case typing.SystemV:
-					// TODO this needs to change when we support things bigger than 8 bytes
-					// TODO :newbackend
-					if len(extra.ArgVars) > 6 {
-						addLine(fmt.Sprintf("\tadd rsp, %d\n", numExtraArgs*8+numExtraArgs%2*8))
-					}
-					if p.registers.all[rax].occupiedBy != invalidVn {
-						panic("rax should've been freed up before the call")
-					}
-					p.giveRegisterToVar(rax, opt.Oprand1)
-				case typing.Cdecl:
-					addLine(fmt.Sprintf("\tadd rsp, %d\n", totalArgSize))
-					if p.typeTable[opt.Oprand1].Size() > 0 {
-						if procRecord.IsForeign {
-							addLine(fmt.Sprintf("\tmov %s, rax\n", qwordVarToStack(opt.Oprand1)))
-						} else {
-							returnType := procRecord.Return
-							addLine(fmt.Sprintf("\tmov rdx, %d\n", returnType.Size()))
-							addLine(fmt.Sprintf("\tlea rdi, [rbp-%d]\n", varOffset[opt.Oprand1]))
-							addLine("\tmov rsi, rax\n")
-							addLine("\tcall _intrinsic_memcpy\n")
-						}
-					}
+
+				// TODO this needs to change when we support things bigger than 8 bytes
+				// TODO :newbackend
+				if len(extra.ArgVars) > 6 {
+					addLine(fmt.Sprintf("\tadd rsp, %d\n", numExtraArgs*8+numExtraArgs%2*8))
 				}
+				if p.registers.all[rax].occupiedBy != invalidVn {
+					panic("rax should've been freed up before the call")
+				}
+				p.giveRegisterToVar(rax, opt.Oprand1)
 			}
 		case ir.Jump:
 			label := opt.Extra.(string)
