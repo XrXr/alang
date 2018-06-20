@@ -126,6 +126,7 @@ type varStorageInfo struct {
 type fullVarState struct {
 	varStorage         []varStorageInfo
 	registers          registerBucket
+	dontSwap           [numRegisters]bool
 	nextRegToBeSwapped int
 }
 
@@ -314,6 +315,9 @@ func (p *procGen) swapStackBoundVars() {
 }
 
 func (p *procGen) giveRegisterToVar(register int, vn int) {
+	if p.sizeof(vn) > 8 {
+		panic("tried to put a var into a register when it doesn't fit")
+	}
 	takeRegister := func(register int) {
 		found := false
 		var idxInAvailable int
@@ -386,18 +390,26 @@ func (p *procGen) giveRegisterToVar(register int, vn int) {
 }
 
 func (p *procGen) ensureInRegister(vn int) int {
-	if currentReg := p.varStorage[vn].currentRegister; currentReg != invalidRegister {
-		return currentReg
+	reg := invalidRegister
+	defer func() {
+		p.dontSwap[reg] = true
+	}()
+	if reg = p.varStorage[vn].currentRegister; reg != invalidRegister {
+		return reg
 	}
 
-	if reg, freeRegExists := p.registers.nextAvailable(); freeRegExists {
+	reg, freeRegExists := p.registers.nextAvailable()
+	if freeRegExists {
 		p.giveRegisterToVar(reg, vn)
 		return reg
 	} else {
-		target := p.nextRegToBeSwapped
-		p.giveRegisterToVar(p.nextRegToBeSwapped, vn)
-		p.nextRegToBeSwapped = (p.nextRegToBeSwapped + 1) % numRegisters
-		return target
+		reg = p.nextRegToBeSwapped
+		for p.dontSwap[reg] {
+			reg = (reg + 1) % numRegisters
+		}
+		p.giveRegisterToVar(reg, vn)
+		p.nextRegToBeSwapped = (reg + 1) % numRegisters
+		return reg
 	}
 }
 
@@ -422,7 +434,7 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 			if p.inRegister(theirOccupiedBy) {
 				p.movRegReg(regId, p.varStorage[theirOccupiedBy].currentRegister)
 			} else if p.hasStackStroage(theirOccupiedBy) {
-				p.issueCommand(fmt.Sprintf("mov %s, %s", reg.qwordName, p.stackOperand(theirOccupiedBy)))
+				p.issueCommand(fmt.Sprintf("mov %s, %s", reg.nameForSize(p.sizeof(theirOccupiedBy)), p.stackOperand(theirOccupiedBy)))
 			}
 		}
 
@@ -556,7 +568,9 @@ func (p *procGen) backendForOptBlock() {
 	backendDebug(framesize, p.typeTable, varOffset)
 	for optIdx, opt := range p.block.Opts {
 		addLine(fmt.Sprintf(";ir line %d\n", optIdx))
-
+		for i := 0; i < len(p.dontSwap); i++ {
+			p.dontSwap[i] = false
+		}
 		switch opt.Type {
 		case ir.Assign:
 			dst := opt.Left()
@@ -573,17 +587,22 @@ func (p *procGen) backendForOptBlock() {
 			}
 		case ir.AssignImm:
 			dst := opt.Oprand1
-			destReg := p.ensureInRegister(dst)
 			switch value := opt.Extra.(type) {
 			case int64:
+				p.ensureInRegister(dst)
 				p.regImmCommand("mov", dst, value)
+			case uint64:
+				p.ensureInRegister(dst)
+				p.issueCommand(fmt.Sprintf("mov %s, %d", p.registerOf(dst).qwordName, value))
 			case bool:
+				p.ensureInRegister(dst)
 				var val int64 = 0
 				if value == true {
 					val = 1
 				}
 				p.regImmCommand("mov", dst, val)
 			case string:
+				destReg := p.ensureInRegister(dst)
 				labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
 				p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
 
@@ -621,6 +640,7 @@ func (p *procGen) backendForOptBlock() {
 			case parsing.TypeDecl:
 				// TODO zero out decl
 			default:
+				parsing.Dump(value)
 				panic("unknown immediate value type")
 			}
 		case ir.Add, ir.Sub:

@@ -15,7 +15,7 @@
  √ can't loop and use var to access array @done (18-04-18 20:44)
  ✔ return values @done (18-06-11 20:23)
  ✔ continues/breaks @done (18-06-11 20:23)
- ☐ ensureVarInRegister should take multiple arguments and make sure it doesn't swap a var that it just brought into a register
+ ✔ ensureVarInRegister should take multiple arguments and make sure it doesn't swap a var that it just brought into a register @done (18-06-20 12:50)
  ☐ zero out plain declarations
  ☐ :morecopies copying full structs
  ✔ factor out signExtendToMatchSize @done (18-06-19 20:07)
