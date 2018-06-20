@@ -21,8 +21,10 @@ func newOutputBlock() *outputBlock {
 	return &block
 }
 
+type registerId int
+
 const (
-	rax int = iota
+	rax registerId = iota
 	rbx
 	rcx
 	rdx
@@ -40,7 +42,7 @@ const (
 )
 
 const invalidVn int = -1
-const invalidRegister int = -1
+const invalidRegister registerId = -1
 
 type registerInfo struct {
 	qwordName string // 64 bit
@@ -65,7 +67,7 @@ func (r *registerInfo) nameForSize(size int) string {
 
 type registerBucket struct {
 	all       [numRegisters]registerInfo
-	available []int
+	available []registerId
 }
 
 func initRegisterBucket(bucket *registerBucket) {
@@ -88,7 +90,7 @@ func initRegisterBucket(bucket *registerBucket) {
 		bucket.all[i].occupiedBy = invalidVn
 	}
 
-	bucket.available = []int{
+	bucket.available = []registerId{
 		rax,
 		rcx,
 		rdx,
@@ -107,7 +109,7 @@ func initRegisterBucket(bucket *registerBucket) {
 	}
 }
 
-func (r *registerBucket) nextAvailable() (int, bool) {
+func (r *registerBucket) nextAvailable() (registerId, bool) {
 	if len(r.available) == 0 {
 		return 0, false
 	}
@@ -119,20 +121,20 @@ func (r *registerBucket) allInUse() bool {
 }
 
 type varStorageInfo struct {
-	rbpOffset       int // 0 if not on stack / unknown at this time
-	currentRegister int // invalidRegister if not in register
+	rbpOffset       int        // 0 if not on stack / unknown at this time
+	currentRegister registerId // invalidRegister if not in register
 }
 
 type fullVarState struct {
 	varStorage         []varStorageInfo
 	registers          registerBucket
 	dontSwap           [numRegisters]bool
-	nextRegToBeSwapped int
+	nextRegToBeSwapped registerId
 }
 
 func (f *fullVarState) copyVarState() *fullVarState {
 	newState := *f
-	newState.registers.available = make([]int, len(f.registers.available))
+	newState.registers.available = make([]registerId, len(f.registers.available))
 	copy(newState.registers.available, f.registers.available)
 	newState.varStorage = make([]varStorageInfo, len(f.varStorage))
 	copy(newState.varStorage, f.varStorage)
@@ -187,7 +189,32 @@ func (f *fullVarState) hasStackStroage(vn int) bool {
 	return f.varStorage[vn].rbpOffset != 0
 }
 
-func (f *fullVarState) releaseRegister(register int) {
+func (f *fullVarState) changeRegisterBookKeepking(vn int, register registerId) {
+	f.registers.all[register].occupiedBy = vn
+	f.varStorage[vn].currentRegister = register
+}
+
+func (f *fullVarState) allocateRegToVar(register registerId, vn int) {
+	found := false
+	var idxInAvailable int
+	for i, reg := range f.registers.available {
+		if reg == register {
+			found = true
+			idxInAvailable = i
+			break
+		}
+	}
+	if !found {
+		panic("tried to take a register that's already taken")
+	}
+	for i := idxInAvailable + 1; i < len(f.registers.available); i++ {
+		f.registers.available[i-1] = f.registers.available[i]
+	}
+	f.registers.available = f.registers.available[:len(f.registers.available)-1]
+	f.changeRegisterBookKeepking(vn, register)
+}
+
+func (f *fullVarState) releaseRegister(register registerId) {
 	currentOwner := f.registers.all[register].occupiedBy
 	if currentOwner != invalidVn {
 		f.varStorage[currentOwner].currentRegister = invalidRegister
@@ -303,11 +330,11 @@ func (p *procGen) regRegCommandSizedToFirst(command string, varA int, varB int) 
 	p.issueCommand(fmt.Sprintf("%s %s, %s", command, varARegName, varBSizedToA))
 }
 
-func (p *procGen) movRegReg(regA int, regB int) {
+func (p *procGen) movRegReg(regA registerId, regB registerId) {
 	p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[regA].qwordName, p.registers.all[regB].qwordName))
 }
 
-func (p *procGen) loadVarOffsetIntoReg(vn int, reg int) {
+func (p *procGen) loadVarOffsetIntoReg(vn int, reg registerId) {
 	p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registers.all[reg].qwordName, p.varStorage[vn].rbpOffset))
 }
 
@@ -320,34 +347,12 @@ func (p *procGen) swapStackBoundVars() {
 	}
 }
 
-func (p *procGen) giveRegisterToVar(register int, vn int) {
+func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 	switch vnSize := p.sizeof(vn); {
 	case vnSize == 0:
 		return
 	case vnSize > 8:
 		panic("tried to put a var into a register when it doesn't fit")
-	}
-	takeRegister := func(register int) {
-		found := false
-		var idxInAvailable int
-		for i, reg := range p.registers.available {
-			if reg == register {
-				found = true
-				idxInAvailable = i
-				break
-			}
-		}
-		if !found {
-			panic("register available list inconsistent")
-		}
-		for i := idxInAvailable + 1; i < len(p.registers.available); i++ {
-			p.registers.available[i-1] = p.registers.available[i]
-		}
-		p.registers.available = p.registers.available[:len(p.registers.available)-1]
-	}
-	changeCurrentRegister := func(vn int, register int) {
-		p.registers.all[register].occupiedBy = vn
-		p.varStorage[vn].currentRegister = register
 	}
 
 	vnAlreadyInRegister := p.inRegister(vn)
@@ -365,40 +370,36 @@ func (p *procGen) giveRegisterToVar(register int, vn int) {
 			p.movRegReg(register, vnRegister)
 			p.releaseRegister(vnRegister)
 		}
-		takeRegister(register)
-		changeCurrentRegister(vn, register)
+		p.allocateRegToVar(register, vn)
 	} else {
 		if currentTenant == vn {
 			return
 		}
 		if vnAlreadyInRegister {
 			// both are in regiser. do a swap
-			p.regRegCommand("xor", vn, currentTenant)
-			p.regRegCommand("xor", currentTenant, vn)
-			p.regRegCommand("xor", vn, currentTenant)
-			changeCurrentRegister(currentTenant, vnRegister)
-			changeCurrentRegister(vn, register)
+			p.regRegCommand("xchg", vn, currentTenant)
+			p.changeRegisterBookKeepking(currentTenant, vnRegister)
+			p.changeRegisterBookKeepking(vn, register)
 			return
 		}
 
 		newReg, freeRegExists := p.registers.nextAvailable()
 		if freeRegExists {
 			// swap currentTenant to a new register
-			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[register].qwordName, p.registers.all[newReg].qwordName))
-			takeRegister(newReg)
-			changeCurrentRegister(currentTenant, newReg)
-			changeCurrentRegister(vn, register)
+			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[newReg].qwordName, p.registers.all[register].qwordName))
+			p.allocateRegToVar(newReg, currentTenant)
+			p.changeRegisterBookKeepking(vn, register)
 		} else {
 			// swap currentTenant to stack
 			p.ensureStackOffsetValid(currentTenant)
 			p.memRegCommand("mov", currentTenant, currentTenant)
-			changeCurrentRegister(vn, register)
+			p.changeRegisterBookKeepking(vn, register)
 			p.varStorage[currentTenant].currentRegister = invalidRegister
 		}
 	}
 }
 
-func (p *procGen) ensureInRegister(vn int) int {
+func (p *procGen) ensureInRegister(vn int) registerId {
 	reg := invalidRegister
 	defer func() {
 		p.dontSwap[reg] = true
@@ -409,14 +410,15 @@ func (p *procGen) ensureInRegister(vn int) int {
 
 	reg, freeRegExists := p.registers.nextAvailable()
 	if freeRegExists {
-		p.giveRegisterToVar(reg, vn)
+
+		p.loadRegisterWithVar(reg, vn)
 		return reg
 	} else {
 		reg = p.nextRegToBeSwapped
 		for p.dontSwap[reg] {
 			reg = (reg + 1) % numRegisters
 		}
-		p.giveRegisterToVar(reg, vn)
+		p.loadRegisterWithVar(reg, vn)
 		p.nextRegToBeSwapped = (reg + 1) % numRegisters
 		return reg
 	}
@@ -441,7 +443,7 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 
 		moveToMatch := func() {
 			if p.inRegister(theirOccupiedBy) {
-				p.movRegReg(regId, p.varStorage[theirOccupiedBy].currentRegister)
+				p.movRegReg(registerId(regId), p.varStorage[theirOccupiedBy].currentRegister)
 			} else if p.hasStackStroage(theirOccupiedBy) {
 				p.issueCommand(fmt.Sprintf("mov %s, %s", reg.nameForSize(p.sizeof(theirOccupiedBy)), p.stackOperand(theirOccupiedBy)))
 			}
@@ -515,7 +517,7 @@ func (p *procGen) generate() {
 		io.WriteString(p.out.buffer, line)
 	}
 	varOffset := make([]int, p.block.NumberOfVars)
-	paramPassingRegOrder := [...]int{rdi, rsi, rdx, rcx, r8, r9}
+	paramPassingRegOrder := [...]registerId{rdi, rsi, rdx, rcx, r8, r9}
 
 	{
 		paramOffset := -16
@@ -525,7 +527,7 @@ func (p *procGen) generate() {
 				regOrder += 1
 			}
 			if regOrder < len(paramPassingRegOrder) {
-				p.giveRegisterToVar(paramPassingRegOrder[regOrder], i)
+				p.loadRegisterWithVar(paramPassingRegOrder[regOrder], i)
 			} else {
 				p.varStorage[i].rbpOffset = paramOffset
 				paramOffset -= p.sizeof(i)
@@ -540,17 +542,6 @@ func (p *procGen) generate() {
 			varOffset[i] = varOffset[i-1] + p.typeTable[i].Size()
 		}
 	}
-	// Take note that not everything uses these. Namely indirect read/write
-	qwordVarToStack := func(varNum int) string {
-		return fmt.Sprintf("qword [rbp-%d]", varOffset[varNum])
-	}
-	wordVarToStack := func(varNum int) string {
-		return fmt.Sprintf("dword [rbp-%d]", varOffset[varNum])
-	}
-	byteVarToStack := func(varNum int) string {
-		return fmt.Sprintf("byte [rbp-%d]", varOffset[varNum])
-	}
-
 	framesize := 0
 	for _, typeRecord := range p.typeTable {
 		framesize += typeRecord.Size()
@@ -649,13 +640,36 @@ func (p *procGen) generate() {
 				mnemonic = "sub"
 			}
 			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
-			p.ensureInRegister(opt.Right())
+			rRegIdx := p.ensureInRegister(opt.Right())
 			rReg := p.registerOf(opt.Right())
 
 			if leftIsPointer {
-				lReg := p.ensureInRegister(opt.Left())
-				p.issueCommand(
-					fmt.Sprintf(leaFormatString, p.registers.all[lReg].qwordName, rReg.qwordName, pointer.ToWhat.Size()))
+				lRegIdx := p.ensureInRegister(opt.Left())
+				pointedToSize := pointer.ToWhat.Size()
+				switch pointedToSize {
+				case 1, 2, 4, 8:
+					p.issueCommand(
+						fmt.Sprintf(leaFormatString, p.registers.all[lRegIdx].qwordName, rReg.qwordName, pointedToSize))
+				default:
+					tempReg, freeRegExists := p.registers.nextAvailable()
+					var tempRegTenant int
+					if !freeRegExists {
+						tempReg = rRegIdx
+						for tempReg == lRegIdx || tempReg == rRegIdx {
+							tempReg = (tempReg + 1) % numRegisters
+						}
+						tempRegTenant = p.registers.all[tempReg].occupiedBy
+						p.ensureStackOffsetValid(tempRegTenant)
+						p.memRegCommand("mov", tempRegTenant, tempRegTenant)
+					}
+					p.movRegReg(tempReg, rRegIdx)
+					tempRegName := p.registers.all[tempReg].qwordName
+					p.issueCommand(fmt.Sprintf("imul %s, %d", tempRegName, pointedToSize))
+					p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.registerOf(opt.Left()).qwordName, tempRegName))
+					if !freeRegExists {
+						p.regMemCommand("mov", tempRegTenant, tempRegTenant)
+					}
+				}
 			} else {
 				rRegLeftSize := p.signOrZeroExtendIfNeeded(opt.Right(), opt.Left())
 				if p.inRegister(opt.Left()) {
@@ -674,7 +688,7 @@ func (p *procGen) generate() {
 		case ir.Mult:
 			l := opt.Left()
 			r := opt.Right()
-			p.giveRegisterToVar(rax, l)
+			p.loadRegisterWithVar(rax, l)
 			if p.sizeof(l) > p.sizeof(r) {
 				p.ensureInRegister(r)
 				rRegLeftSize := p.registerOf(r).nameForSize(p.sizeof(l))
@@ -696,7 +710,7 @@ func (p *procGen) generate() {
 
 			rdxTenant := p.registers.all[rdx].occupiedBy
 			var borrowedAReg bool
-			var regBorrowed int
+			var regBorrowed registerId
 			if rdxTenant != invalidVn {
 				if regBorrowed, borrowedAReg := p.registers.nextAvailable(); borrowedAReg {
 					p.movRegReg(regBorrowed, rdx)
@@ -706,10 +720,10 @@ func (p *procGen) generate() {
 				}
 			}
 			p.issueCommand("xor rdx, rdx")
-			p.giveRegisterToVar(rax, l)
+			p.loadRegisterWithVar(rax, l)
 			needSignExtension := p.sizeof(l) > p.sizeof(r)
 			if !p.inRegister(r) && needSignExtension {
-				p.giveRegisterToVar(r8, r) // got to bring it into register to do sign extension
+				p.loadRegisterWithVar(r8, r) // got to bring it into register to do sign extension
 			}
 			if p.inRegister(r) {
 				rReg := p.registerOf(r)
@@ -769,7 +783,7 @@ func (p *procGen) generate() {
 				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
 				// the first part of this array is the same as paramPassingRegOrder for checking
 				// if we need to save a var that is in a param-passing register
-				regsThatGetDestroyed := [...]int{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
+				regsThatGetDestroyed := [...]registerId{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
 				for i, reg := range regsThatGetDestroyed {
 					owner := p.registers.all[reg].occupiedBy
 					if owner != invalidVn && (p.lastUsage[owner] != optIdx || i < numArgs) {
@@ -782,6 +796,7 @@ func (p *procGen) generate() {
 					p.ensureStackOffsetValid(retVar)
 					p.loadVarOffsetIntoReg(retVar, rdi)
 				}
+				realArgsPassedInReg := 0
 				for i, arg := range extra.ArgVars {
 					if provideReturnStorage {
 						i += 1
@@ -789,6 +804,7 @@ func (p *procGen) generate() {
 					if i >= len(paramPassingRegOrder) {
 						break
 					}
+					realArgsPassedInReg++
 					switch p.typeTable[arg].Size() {
 					case 8, 4, 1:
 						switch p.varStorage[arg].currentRegister {
@@ -796,51 +812,57 @@ func (p *procGen) generate() {
 							// these registers are preserved across calls
 							p.movRegReg(paramPassingRegOrder[i], p.varStorage[arg].currentRegister)
 						default:
-							p.giveRegisterToVar(paramPassingRegOrder[i], arg)
+							p.loadRegisterWithVar(paramPassingRegOrder[i], arg)
 						}
 					default:
 						panic("Unsupported parameter size")
 					}
 				}
-				if len(extra.ArgVars) > len(paramPassingRegOrder) {
+				if realArgsPassedInReg < len(extra.ArgVars) {
 					// TODO :newbackend
-					numStackVars = len(extra.ArgVars) - len(paramPassingRegOrder)
+					numStackVars = len(extra.ArgVars) - realArgsPassedInReg
 					if numStackVars%2 == 1 {
 						// Make sure we are aligned to 16
-						addLine("\tsub rsp, 8\n")
+						p.issueCommand("sub rsp, 8")
 					}
 					for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numStackVars; i-- {
 						arg := extra.ArgVars[i]
-						switch p.typeTable[arg].Size() {
-						case 8:
-							addLine(fmt.Sprintf("\tpush %s\n", qwordVarToStack(arg)))
-						case 4:
-							addLine(fmt.Sprintf("\tmov eax, %s\n", wordVarToStack(arg)))
-							addLine("\tpush rax\n")
-						case 1:
-							addLine(fmt.Sprintf("\tmov al, %s\n", byteVarToStack(arg)))
-							addLine("\tpush rax\n")
+						argSize := p.typeTable[arg].Size()
+						switch argSize {
+						case 8, 4, 1:
+							if p.inRegister(arg) {
+								p.issueCommand(fmt.Sprintf("push %s", p.registerOf(arg).qwordName))
+							} else {
+								p.issueCommand(fmt.Sprintf("push %s", p.stackOperand(arg)))
+								if argSize < 8 {
+									// each param is rounded to 8 bytes
+									p.issueCommand(fmt.Sprintf("sub esp, %d", 8-argSize))
+								}
+							}
 						default:
 							panic("Unsupported parameter size")
 						}
 					}
 				}
 				if procRecord.IsForeign {
-					addLine(fmt.Sprintf("\tcall %s\n", extra.Name))
+					p.issueCommand(fmt.Sprintf("call %s", extra.Name))
 				} else {
-					addLine(fmt.Sprintf("\tcall proc_%s\n", extra.Name))
+					p.issueCommand(fmt.Sprintf("call proc_%s", extra.Name))
 				}
 
 				// TODO this needs to change when we support things bigger than 8 bytes
 				// TODO :newbackend
 				if numArgs > 6 {
-					addLine(fmt.Sprintf("\tadd rsp, %d\n", numStackVars*8+numStackVars%2*8))
+					p.issueCommand(fmt.Sprintf("add rsp, %d", numStackVars*8+numStackVars%2*8))
 				}
 				if p.registers.all[rax].occupiedBy != invalidVn {
 					panic("rax should've been freed up before the call")
 				}
-				if p.sizeof(retVar) <= 8 {
-					p.giveRegisterToVar(rax, opt.Operand1)
+				if p.sizeof(retVar) > 0 && p.sizeof(retVar) <= 8 {
+					if p.inRegister(retVar) {
+						p.releaseRegister(p.varStorage[retVar].currentRegister)
+					}
+					p.allocateRegToVar(rax, retVar)
 				}
 			}
 		case ir.Jump:
@@ -899,7 +921,7 @@ func (p *procGen) generate() {
 
 			outReg, outInReg := p.registers.nextAvailable()
 			if outInReg {
-				p.giveRegisterToVar(outReg, out)
+				p.loadRegisterWithVar(outReg, out)
 				p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
 			} else {
 				p.ensureStackOffsetValid(out)
