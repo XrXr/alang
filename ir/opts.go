@@ -1,10 +1,10 @@
 package ir
 
 type Inst struct {
-	Type    InstType
-	Oprand1 int
-	Oprand2 int
-	Extra   interface{}
+	Type     InstType
+	Operand1 int
+	Operand2 int
+	Extra    interface{}
 }
 
 //go:generate $GOPATH/bin/stringer -type=InstType
@@ -52,27 +52,27 @@ const (
 )
 
 func (i *Inst) Left() int {
-	return i.Oprand1
+	return i.Operand1
 }
 
 func (i *Inst) Right() int {
-	return i.Oprand2
+	return i.Operand2
 }
 
 func (i *Inst) In() int {
-	return i.Oprand1
+	return i.Operand1
 }
 
 func (i *Inst) Out() int {
-	return i.Oprand2
+	return i.Operand2
 }
 
 func (i *Inst) Swap(original int, newVar int) {
-	if i.Oprand1 == original {
-		i.Oprand1 = newVar
+	if i.Operand1 == original {
+		i.Operand1 = newVar
 	}
-	if i.Oprand2 == original {
-		i.Oprand2 = newVar
+	if i.Operand2 == original {
+		i.Operand2 = newVar
 	}
 }
 
@@ -80,7 +80,7 @@ func MakeUnaryInstWithAux(instType InstType, one int, extra interface{}) Inst {
 	var newInst Inst
 	newInst.Type = instType
 	newInst.Extra = extra
-	newInst.Oprand1 = one
+	newInst.Operand1 = one
 	return newInst
 }
 
@@ -88,17 +88,17 @@ func MakeBinaryInstWithAux(instType InstType, one int, two int, extra interface{
 	var newInst Inst
 	newInst.Type = instType
 	newInst.Extra = extra
-	newInst.Oprand1 = one
-	newInst.Oprand2 = two
+	newInst.Operand1 = one
+	newInst.Operand2 = two
 	return newInst
 }
 
 func IterOverAllVars(opt Inst, cb func(vn int)) {
 	if opt.Type > UnaryInstructions {
-		cb(opt.Oprand1)
+		cb(opt.Operand1)
 	}
 	if opt.Type > BinaryInstructions {
-		cb(opt.Oprand2)
+		cb(opt.Operand2)
 	}
 	switch opt.Type {
 	case Call:

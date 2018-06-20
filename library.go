@@ -105,9 +105,8 @@ proc_print_int:
 	pop rbp
 	ret
 
-; rdi is dest, rsi is source, rdx is size
+; rdi is dest, rsi is source, rcx is size
 _intrinsic_memcpy:
-	mov rcx, rdx
 	cld
 	rep movsb
 	ret`)

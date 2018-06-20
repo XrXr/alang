@@ -147,15 +147,17 @@ type preJumpState struct {
 
 type procGen struct {
 	*fullVarState
-	block            frontend.OptBlock
-	out              *outputBlock
-	firstOutputBlock *outputBlock
-	staticDataBuf    *bytes.Buffer
-	env              *typing.EnvRecord
-	typer            *typing.Typer
-	currentFrameSize int
-	nextLabelId      int
-	stackBoundVars   []int
+	block                     frontend.OptBlock
+	out                       *outputBlock
+	firstOutputBlock          *outputBlock
+	staticDataBuf             *bytes.Buffer
+	env                       *typing.EnvRecord
+	procRecord                typing.ProcRecord
+	typer                     *typing.Typer
+	callerProvidesReturnSpace bool
+	currentFrameSize          int
+	nextLabelId               int
+	stackBoundVars            []int
 	// info for backfilling instructions
 	prologueBlock    *outputBlock
 	conditionalJumps []preJumpState
@@ -305,6 +307,10 @@ func (p *procGen) movRegReg(regA int, regB int) {
 	p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[regA].qwordName, p.registers.all[regB].qwordName))
 }
 
+func (p *procGen) loadVarOffsetIntoReg(vn int, reg int) {
+	p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registers.all[reg].qwordName, p.varStorage[vn].rbpOffset))
+}
+
 func (p *procGen) swapStackBoundVars() {
 	for _, vn := range p.stackBoundVars {
 		if p.inRegister(vn) {
@@ -315,7 +321,10 @@ func (p *procGen) swapStackBoundVars() {
 }
 
 func (p *procGen) giveRegisterToVar(register int, vn int) {
-	if p.sizeof(vn) > 8 {
+	switch vnSize := p.sizeof(vn); {
+	case vnSize == 0:
+		return
+	case vnSize > 8:
 		panic("tried to put a var into a register when it doesn't fit")
 	}
 	takeRegister := func(register int) {
@@ -501,7 +510,7 @@ func (p *procGen) genLabel(prefix string) string {
 	return label
 }
 
-func (p *procGen) backendForOptBlock() {
+func (p *procGen) generate() {
 	addLine := func(line string) {
 		io.WriteString(p.out.buffer, line)
 	}
@@ -511,8 +520,12 @@ func (p *procGen) backendForOptBlock() {
 	{
 		paramOffset := -16
 		for i := 0; i < p.block.NumberOfArgs; i++ {
-			if i < len(paramPassingRegOrder) {
-				p.giveRegisterToVar(paramPassingRegOrder[i], i)
+			regOrder := i
+			if p.callerProvidesReturnSpace {
+				regOrder += 1
+			}
+			if regOrder < len(paramPassingRegOrder) {
+				p.giveRegisterToVar(paramPassingRegOrder[regOrder], i)
 			} else {
 				p.varStorage[i].rbpOffset = paramOffset
 				paramOffset -= p.sizeof(i)
@@ -568,7 +581,7 @@ func (p *procGen) backendForOptBlock() {
 				p.regRegCommand("mov", dst, src)
 			}
 		case ir.AssignImm:
-			dst := opt.Oprand1
+			dst := opt.Operand1
 			switch value := opt.Extra.(type) {
 			case int64:
 				p.ensureInRegister(dst)
@@ -708,7 +721,7 @@ func (p *procGen) backendForOptBlock() {
 				p.issueCommand(fmt.Sprintf("idiv %s", rRegLeftSize))
 			} else {
 				if p.varStorage[r].rbpOffset == 0 {
-					panic("oprand to div doens't have stack offset nor is it in register. Where is the value?")
+					panic("operand to div doens't have stack offset nor is it in register. Where is the value?")
 				}
 				p.issueCommand(fmt.Sprintf("idiv [rbp-%d]", p.varStorage[r].rbpOffset))
 			}
@@ -745,12 +758,13 @@ func (p *procGen) backendForOptBlock() {
 			if _, isStruct := p.env.Types[parsing.IdName(extra.Name)]; isStruct {
 				// TODO: code to zero the members
 			} else {
-				// TODO: this can be done once
-				totalArgSize := 0
-				for _, arg := range extra.ArgVars {
-					totalArgSize += p.typeTable[arg].Size()
+				retVar := opt.Operand1
+				var numStackVars int
+				numArgs := len(extra.ArgVars)
+				provideReturnStorage := p.sizeof(retVar) > 16
+				if provideReturnStorage {
+					numArgs += 1
 				}
-				var numExtraArgs int
 
 				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
 				// the first part of this array is the same as paramPassingRegOrder for checking
@@ -758,13 +772,20 @@ func (p *procGen) backendForOptBlock() {
 				regsThatGetDestroyed := [...]int{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
 				for i, reg := range regsThatGetDestroyed {
 					owner := p.registers.all[reg].occupiedBy
-					if owner != invalidVn && (p.lastUsage[owner] != optIdx || i < len(extra.ArgVars)) {
+					if owner != invalidVn && (p.lastUsage[owner] != optIdx || i < numArgs) {
 						p.ensureStackOffsetValid(owner)
 						p.memRegCommand("mov", owner, owner)
 						p.releaseRegister(reg)
 					}
 				}
+				if provideReturnStorage {
+					p.ensureStackOffsetValid(retVar)
+					p.loadVarOffsetIntoReg(retVar, rdi)
+				}
 				for i, arg := range extra.ArgVars {
+					if provideReturnStorage {
+						i += 1
+					}
 					if i >= len(paramPassingRegOrder) {
 						break
 					}
@@ -783,12 +804,12 @@ func (p *procGen) backendForOptBlock() {
 				}
 				if len(extra.ArgVars) > len(paramPassingRegOrder) {
 					// TODO :newbackend
-					numExtraArgs = len(extra.ArgVars) - len(paramPassingRegOrder)
-					if numExtraArgs%2 == 1 {
+					numStackVars = len(extra.ArgVars) - len(paramPassingRegOrder)
+					if numStackVars%2 == 1 {
 						// Make sure we are aligned to 16
 						addLine("\tsub rsp, 8\n")
 					}
-					for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numExtraArgs; i-- {
+					for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numStackVars; i-- {
 						arg := extra.ArgVars[i]
 						switch p.typeTable[arg].Size() {
 						case 8:
@@ -812,13 +833,15 @@ func (p *procGen) backendForOptBlock() {
 
 				// TODO this needs to change when we support things bigger than 8 bytes
 				// TODO :newbackend
-				if len(extra.ArgVars) > 6 {
-					addLine(fmt.Sprintf("\tadd rsp, %d\n", numExtraArgs*8+numExtraArgs%2*8))
+				if numArgs > 6 {
+					addLine(fmt.Sprintf("\tadd rsp, %d\n", numStackVars*8+numStackVars%2*8))
 				}
 				if p.registers.all[rax].occupiedBy != invalidVn {
 					panic("rax should've been freed up before the call")
 				}
-				p.giveRegisterToVar(rax, opt.Oprand1)
+				if p.sizeof(retVar) <= 8 {
+					p.giveRegisterToVar(rax, opt.Operand1)
+				}
 			}
 		case ir.Jump:
 			label := opt.Extra.(string)
@@ -841,9 +864,13 @@ func (p *procGen) backendForOptBlock() {
 			}
 			p.labelToState[label] = p.copyVarState()
 		case ir.StartProc:
-			addLine(fmt.Sprintf("proc_%s:\n", opt.Extra.(string)))
-			addLine("\tpush rbp\n")
-			addLine("\tmov rbp, rsp\n")
+			fmt.Fprintf(p.out.buffer, "proc_%s:\n", opt.Extra.(string))
+			p.issueCommand("push rbp")
+			p.issueCommand("mov rbp, rsp")
+			if p.callerProvidesReturnSpace {
+				p.issueCommand("push rdi")
+				p.currentFrameSize += 8
+			}
 			p.prologueBlock = p.out
 			p.switchToNewOutBlock()
 		case ir.EndProc:
@@ -929,8 +956,8 @@ func (p *procGen) backendForOptBlock() {
 			in := opt.In()
 			out := opt.Out()
 			p.ensureStackOffsetValid(in)
-			p.ensureInRegister(out)
-			p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registerOf(out).qwordName, p.varStorage[in].rbpOffset))
+			outReg := p.ensureInRegister(out)
+			p.loadVarOffsetIntoReg(in, outReg)
 			p.stackBoundVars = append(p.stackBoundVars, in)
 		case ir.ArrayToPointer:
 			in := opt.In()
@@ -1059,8 +1086,19 @@ func (p *procGen) backendForOptBlock() {
 			if p.sizeof(retVar) <= 8 {
 				p.issueCommand(fmt.Sprintf("mov %s, %s",
 					p.registers.all[rax].nameForSize(p.sizeof(retVar)), p.varOperand(retVar)))
+			} else if p.sizeof(retVar) > 16 {
+				if !p.callerProvidesReturnSpace {
+					panic("big var to return but space is not provided")
+				}
+				if p.inRegister(retVar) {
+					panic("a var this big shouldn't be in register")
+				}
+				p.issueCommand("mov rdi, qword [rbp-8]")
+				p.loadVarOffsetIntoReg(retVar, rsi)
+				p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
+				p.issueCommand("rep movsb")
 			} else {
-				panic("Can't handle non register size returns yet")
+				panic("Can't handle return where 8 < size <= 16 yet")
 			}
 			p.issueCommand("jmp .end_of_proc")
 		default:
@@ -1074,10 +1112,10 @@ func (p *procGen) backendForOptBlock() {
 			}
 		}
 		if opt.Type > ir.UnaryInstructions {
-			decommissionIfLastUse(opt.Oprand1)
+			decommissionIfLastUse(opt.Operand1)
 		}
 		if opt.Type > ir.BinaryInstructions {
-			decommissionIfLastUse(opt.Oprand2)
+			decommissionIfLastUse(opt.Operand2)
 		}
 		if opt.Type == ir.Call {
 			for _, vn := range opt.Extra.(ir.CallExtra).ArgVars {
@@ -1153,27 +1191,28 @@ func findLastusage(block frontend.OptBlock) []int {
 	return lastUse
 }
 
-func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer) *bytes.Buffer {
+func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer, procRecord typing.ProcRecord) *bytes.Buffer {
 	firstOut := newOutputBlock()
 	var staticDataBuf bytes.Buffer
 	gen := procGen{
-		fullVarState:     &fullVarState{},
-		out:              firstOut,
-		firstOutputBlock: firstOut,
-		block:            block,
-		typeTable:        typeTable,
-		env:              globalEnv,
-		typer:            typer,
-		staticDataBuf:    &staticDataBuf,
-		labelToState:     make(map[string]*fullVarState),
-		lastUsage:        findLastusage(block)}
+		fullVarState:              &fullVarState{},
+		out:                       firstOut,
+		firstOutputBlock:          firstOut,
+		block:                     block,
+		typeTable:                 typeTable,
+		env:                       globalEnv,
+		typer:                     typer,
+		staticDataBuf:             &staticDataBuf,
+		labelToState:              make(map[string]*fullVarState),
+		lastUsage:                 findLastusage(block),
+		callerProvidesReturnSpace: procRecord.Return.Size() > 16}
 	initRegisterBucket(&gen.registers)
 	gen.varStorage = make([]varStorageInfo, block.NumberOfVars)
 	for i := 0; i < block.NumberOfVars; i++ {
 		gen.varStorage[i].currentRegister = -1
 	}
 
-	gen.backendForOptBlock()
+	gen.generate()
 	outBlock := gen.firstOutputBlock
 	for outBlock != nil {
 		_, err := outBlock.buffer.WriteTo(out)

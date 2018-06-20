@@ -586,8 +586,8 @@ func Prune(block *OptBlock) {
 		vnMap[i] = i
 	}
 	for i, opt := range block.Opts {
-		opt.Oprand1 = vnMap[opt.Oprand1]
-		opt.Oprand2 = vnMap[opt.Oprand2]
+		opt.Operand1 = vnMap[opt.Operand1]
+		opt.Operand2 = vnMap[opt.Operand2]
 		if opt.Type == ir.Call {
 			extra := opt.Extra.(ir.CallExtra)
 			for i, vn := range extra.ArgVars {

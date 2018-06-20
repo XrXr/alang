@@ -31,8 +31,8 @@ type Typer struct {
 
 func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRecord) error {
 	resolve := func(opt ir.Inst) (TypeRecord, TypeRecord) {
-		l := typeTable[opt.Oprand1]
-		r := typeTable[opt.Oprand2]
+		l := typeTable[opt.Operand1]
+		r := typeTable[opt.Operand2]
 		return l, r
 	}
 	checkAndFindStructMemberType := func(baseVn int, fieldName string) TypeRecord {
@@ -45,7 +45,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		baseIsString := baseType == t.Builtins[StringIdx]
 
 		if !baseIsStruct && !baseIsString {
-			panic("oprand is not a struct or pointer to a struct")
+			panic("operand is not a struct or pointer to a struct")
 		}
 		var field *StructField
 		if baseIsStruct {
@@ -78,13 +78,15 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			typeTable[target] = typeRecord
 		} else {
 			if !t.TypesCompatible(currentType, typeRecord) {
+				parsing.Dump(currentType)
+				parsing.Dump(typeRecord)
 				panic("type a is incompatible with type b")
 			}
 		}
 	}
 	switch opt.Type {
 	case ir.AssignImm:
-		giveTypeOrVerify(opt.Oprand1, t.typeImmediate(opt.Extra))
+		giveTypeOrVerify(opt.Operand1, t.typeImmediate(opt.Extra))
 	case ir.TakeAddress:
 		varType := typeTable[opt.In()]
 		if varType == nil {
@@ -108,15 +110,15 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				panic("Call to undefined procedure")
 			}
 			//TODO check arg types
-			if typeTable[opt.Oprand1] == nil {
-				typeTable[opt.Oprand1] = procRecord.Return
+			if typeTable[opt.Operand1] == nil {
+				typeTable[opt.Operand1] = procRecord.Return
 				// TODO checking oppotunity
 			}
 			return nil
 		}
 		// TODO Temporary hack for making a struct
 		structRecord := typeRecord.(*StructRecord)
-		typeTable[opt.Oprand1] = structRecord
+		typeTable[opt.Operand1] = structRecord
 	case ir.Compare:
 		l := typeTable[opt.Left()]
 		r := typeTable[opt.Right()]

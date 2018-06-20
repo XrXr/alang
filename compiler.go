@@ -17,67 +17,49 @@ import (
 
 // resolve all the type of members in structs and build the global environment
 func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*interface{}]*typing.StructRecord, workOrders []*frontend.ProcWorkOrder) error {
-	notDone := make(map[parsing.IdName][]*typing.StructField)
+	notDone := make(map[parsing.IdName][]*typing.TypeRecord)
 	type argsMut struct {
 		argTypes []typing.TypeRecord
 		idx      int
 	}
-	argsNotDone := make(map[parsing.IdName][]argsMut)
 	for _, structRecord := range nodeToStruct {
 		for _, field := range structRecord.Members {
 			unresolved, isUnresolved := field.Type.(typing.Unresolved)
-			name := unresolved.Decl.Base
 			if isUnresolved {
-				notDone[name] = append(notDone[name], field)
+				name := unresolved.Decl.Base
+				notDone[name] = append(notDone[name], &field.Type)
 			}
 		}
 	}
 	for _, order := range workOrders {
 		argRecords := make([]typing.TypeRecord, len(order.ProcDecl.Args))
+		returnType := typer.ConstructTypeRecord(order.ProcDecl.Return)
 		for i, argDecl := range order.ProcDecl.Args {
 			record := typer.ConstructTypeRecord(argDecl.Type)
+			argRecords[i] = record
 			if _, recordIsUnresolved := record.(typing.Unresolved); recordIsUnresolved {
 				if argDecl.Type.ArrayBase != nil {
 					panic("Not implemented")
 				}
-				argsNotDone[argDecl.Type.Base] = append(argsNotDone[argDecl.Type.Base], argsMut{
-					argRecords,
-					i,
-				})
+				notDone[argDecl.Type.Base] = append(notDone[argDecl.Type.Base], &argRecords[i])
 			}
-			argRecords[i] = record
 		}
 		env.Procs[order.Name] = typing.ProcRecord{
-			typer.ConstructTypeRecord(order.ProcDecl.Return),
+			returnType,
 			argRecords,
 			typing.SystemV,
 			order.ProcDecl.IsForeign,
 		}
 	}
 
-	numResolved := 0
-	numArgResolved := 0
 	for node, structRecord := range nodeToStruct {
 		structNode := (*node).(parsing.StructDeclare)
 		name := structNode.Name
-		increment := 0
-		argIncrement := 0
-		for _, field := range notDone[name] {
-			increment = 1
-			// safe because we checked above
-			unresolved := field.Type.(typing.Unresolved)
-			field.Type = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
-		}
-		for _, mutRecord := range argsNotDone[name] {
-			argIncrement = 1
-			// safe because we checked above
-			unresolved := mutRecord.argTypes[mutRecord.idx].(typing.Unresolved)
-			mutRecord.argTypes[mutRecord.idx] = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
+		for _, typeRecordPtr := range notDone[name] {
+			unresolved := (*typeRecordPtr).(typing.Unresolved)
+			*typeRecordPtr = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
 		}
 		delete(notDone, name)
-		delete(argsNotDone, name)
-		numResolved += increment
-		numArgResolved += argIncrement
 		env.Types[structNode.Name] = structRecord
 	}
 	for _, structRecord := range nodeToStruct {
@@ -88,12 +70,6 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			return fmt.Errorf("%s does not name a type", typeName)
 		}
 	}
-	if len(argsNotDone) > 0 {
-		for typeName := range argsNotDone {
-			return fmt.Errorf("%s does not name a type", typeName)
-		}
-	}
-
 	return nil
 }
 
@@ -230,7 +206,8 @@ func main() {
 		frontend.Prune(&ir)
 		frontend.DumpIr(ir)
 		// parsing.Dump(env)
-		typeTable, err := typer.InferAndCheck(env, &ir, env.Procs[workOrder.Name])
+		procRecord := env.Procs[workOrder.Name]
+		typeTable, err := typer.InferAndCheck(env, &ir, procRecord)
 		if err != nil {
 			panic(err)
 		}
@@ -244,7 +221,7 @@ func main() {
 			fmt.Fprintf(out, "extern %s\n", workOrder.Name)
 			continue
 		}
-		staticData = append(staticData, backend.X86ForBlock(out, ir, typeTable, env, typer))
+		staticData = append(staticData, backend.X86ForBlock(out, ir, typeTable, env, typer, procRecord))
 	}
 
 	io.WriteString(out, "; ---user code end---\n")
