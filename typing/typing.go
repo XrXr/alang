@@ -14,7 +14,7 @@ const (
 )
 
 type ProcRecord struct {
-	Return            TypeRecord
+	Return            *TypeRecord
 	Args              []TypeRecord
 	CallingConvention int
 	IsForeign         bool
@@ -111,7 +111,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			}
 			//TODO check arg types
 			if typeTable[opt.Out()] == nil {
-				typeTable[opt.Out()] = procRecord.Return
+				typeTable[opt.Out()] = *procRecord.Return
 				// TODO checking oppotunity
 			}
 			return nil
@@ -175,19 +175,12 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			panic("Type mismatch")
 		}
 	case ir.Assign:
-		l, r := resolve(opt)
+		_, r := resolve(opt)
 		if r == nil {
 			parsing.Dump(typeTable)
-
 			panic("type should be resolved at this point")
 		}
-		if l != r {
-			if l == nil {
-				typeTable[opt.Left()] = r
-			} else {
-				return errors.New("incompatible types")
-			}
-		}
+		giveTypeOrVerify(opt.Left(), r)
 	case ir.ArrayToPointer:
 		good := false
 		switch array := typeTable[opt.In()].(type) {
@@ -375,8 +368,9 @@ func NewTyper() *Typer {
 }
 
 func NewEnvRecord(typer *Typer) *EnvRecord {
-	boolType := typer.Builtins[BoolIdx]
-	voidType := typer.Builtins[VoidIdx]
+	boolType := &typer.Builtins[BoolIdx]
+	voidType := &typer.Builtins[VoidIdx]
+	binTableReturn := BuildPointer(typer.Builtins[IntIdx], 1)
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
@@ -385,7 +379,7 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 			"print_int": {Return: voidType, CallingConvention: SystemV},
 			"testbit":   {Return: boolType, CallingConvention: SystemV},
 			"binToDecTable": {
-				Return:            BuildPointer(typer.Builtins[IntIdx], 1),
+				Return:            &binTableReturn,
 				CallingConvention: SystemV,
 			},
 		},

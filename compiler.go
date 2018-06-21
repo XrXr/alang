@@ -18,10 +18,6 @@ import (
 // resolve all the type of members in structs and build the global environment
 func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*interface{}]*typing.StructRecord, workOrders []*frontend.ProcWorkOrder) error {
 	notDone := make(map[parsing.IdName][]*typing.TypeRecord)
-	type argsMut struct {
-		argTypes []typing.TypeRecord
-		idx      int
-	}
 	for _, structRecord := range nodeToStruct {
 		for _, field := range structRecord.Members {
 			unresolved, isUnresolved := field.Type.(typing.Unresolved)
@@ -34,6 +30,11 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 	for _, order := range workOrders {
 		argRecords := make([]typing.TypeRecord, len(order.ProcDecl.Args))
 		returnType := typer.ConstructTypeRecord(order.ProcDecl.Return)
+		if unresolved, returnIsUnresolved := returnType.(typing.Unresolved); returnIsUnresolved {
+			name := unresolved.Decl.Base
+			notDone[name] = append(notDone[name], &returnType)
+		}
+
 		for i, argDecl := range order.ProcDecl.Args {
 			record := typer.ConstructTypeRecord(argDecl.Type)
 			argRecords[i] = record
@@ -45,7 +46,7 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			}
 		}
 		env.Procs[order.Name] = typing.ProcRecord{
-			returnType,
+			&returnType,
 			argRecords,
 			typing.SystemV,
 			order.ProcDecl.IsForeign,

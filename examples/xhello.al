@@ -76,7 +76,7 @@ struct XEvent {
 	fill [188]u8
 }
 
-XOpenDisplay :: foreign proc (name *u8) -> *XDisplay;
+XOpenDisplay :: foreign proc (name *u8) -> *XDisplay
 
 XCreateSimpleWindow :: foreign proc (display *XDisplay, window u64, x s32, y s32, width u32, height u32, border_width u32, border u64, background u64) -> u64
 

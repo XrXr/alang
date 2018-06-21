@@ -1237,6 +1237,7 @@ func findLastusage(block frontend.OptBlock) []int {
 func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer, procRecord typing.ProcRecord) *bytes.Buffer {
 	firstOut := newOutputBlock()
 	var staticDataBuf bytes.Buffer
+	returnRecord := *procRecord.Return
 	gen := procGen{
 		fullVarState:              &fullVarState{},
 		out:                       firstOut,
@@ -1248,7 +1249,7 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		staticDataBuf:             &staticDataBuf,
 		labelToState:              make(map[string]*fullVarState),
 		lastUsage:                 findLastusage(block),
-		callerProvidesReturnSpace: procRecord.Return.Size() > 16}
+		callerProvidesReturnSpace: returnRecord.Size() > 16}
 	initRegisterBucket(&gen.registers)
 	gen.varStorage = make([]varStorageInfo, block.NumberOfVars)
 	for i := 0; i < block.NumberOfVars; i++ {
