@@ -1161,25 +1161,7 @@ func (p *procGen) generate() {
 				p.releaseRegister(reg)
 			}
 		}
-		if opt.Type > ir.UnaryInstructions {
-			decommissionIfLastUse(opt.Operand1)
-		}
-		if opt.Type > ir.BinaryInstructions {
-			decommissionIfLastUse(opt.Operand2)
-		}
-		if opt.Type == ir.Call {
-			for _, vn := range opt.Extra.(ir.CallExtra).ArgVars {
-				decommissionIfLastUse(vn)
-			}
-		}
-		if opt.Type == ir.Return {
-			for _, vn := range opt.Extra.(ir.ReturnExtra).Values {
-				decommissionIfLastUse(vn)
-			}
-		}
-		if opt.Type == ir.Compare {
-			decommissionIfLastUse(opt.Extra.(ir.CompareExtra).Out)
-		}
+		ir.IterOverAllVars(opt, decommissionIfLastUse)
 	}
 
 	for _, jump := range p.conditionalJumps {
