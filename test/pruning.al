@@ -4,6 +4,7 @@ main :: proc () {
     c := b
     d := c
     e := d
+    unused := a
     print_int(e)
     f := 1
     g := 2

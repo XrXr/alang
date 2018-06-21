@@ -474,7 +474,7 @@ func boolStrToBool(s string) bool {
 }
 
 // Get rid of aliasing ir.Assign. Works by catching vars that appear on the rhs of an ir.Assign but is never
-// used again
+// used again. Also get rid of unused variables.
 func Prune(block *OptBlock) {
 	if block.NumberOfVars == 0 {
 		return
@@ -497,25 +497,29 @@ func Prune(block *OptBlock) {
 		ir.IterOverAllVars(opt, recordUsage)
 	}
 	// keep track of all the uneeded assigns
-	hollow := make([]int, 0, len(block.Opts)/2)
+	holes := make([]int, 0, len(block.Opts)/2)
 	sort.Slice(usageLog, func(i int, j int) bool {
 		return usageLog[i].secondUseIdx < usageLog[j].secondUseIdx
 	})
 	for _, log := range usageLog {
-		if log.count != 2 {
+		if log.count > 2 {
+			continue
+		}
+		genesis := block.Opts[log.firstUseIdx]
+		if log.count == 1 && (genesis.Type == ir.Assign || genesis.Type == ir.AssignImm) {
+			holes = append(holes, log.firstUseIdx)
 			continue
 		}
 		changed := false
-		genesis := block.Opts[log.firstUseIdx]
 		if genesis.Type == ir.AssignImm && block.Opts[log.secondUseIdx].Type == ir.Assign {
 			changed = true
-			hollow = append(hollow, log.firstUseIdx)
+			holes = append(holes, log.firstUseIdx)
 			block.Opts[log.secondUseIdx].Type = ir.AssignImm
 			block.Opts[log.secondUseIdx].Extra = block.Opts[log.firstUseIdx].Extra
 		}
 		if genesis.Type == ir.Assign {
 			changed = true
-			hollow = append(hollow, log.firstUseIdx)
+			holes = append(holes, log.firstUseIdx)
 			ir.IterAndMutate(&block.Opts[log.secondUseIdx], func(vn *int) {
 				if *vn == genesis.Left() {
 					*vn = genesis.Right()
@@ -526,11 +530,11 @@ func Prune(block *OptBlock) {
 			// DumpIr(*block)
 		}
 	}
-	sort.Ints(hollow)
-	hollow = dedupSorted(hollow)
+	sort.Ints(holes)
+	holes = dedupSorted(holes)
 	pushDist := 0
 	for i, j := 0, 0; i < len(block.Opts); i++ {
-		if j < len(hollow) && hollow[j] == i {
+		if j < len(holes) && holes[j] == i {
 			pushDist++
 			j++
 			continue
@@ -539,7 +543,7 @@ func Prune(block *OptBlock) {
 			block.Opts[i-pushDist] = block.Opts[i]
 		}
 	}
-	block.Opts = block.Opts[0 : len(block.Opts)-len(hollow)]
+	block.Opts = block.Opts[0 : len(block.Opts)-len(holes)]
 
 	// renumber all the vars
 	allVarNums := make([]int, 0, block.NumberOfVars)
