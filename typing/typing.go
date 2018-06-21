@@ -31,8 +31,8 @@ type Typer struct {
 
 func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRecord) error {
 	resolve := func(opt ir.Inst) (TypeRecord, TypeRecord) {
-		l := typeTable[opt.Operand1]
-		r := typeTable[opt.Operand2]
+		l := typeTable[opt.Left()]
+		r := typeTable[opt.Right()]
 		return l, r
 	}
 	checkAndFindStructMemberType := func(baseVn int, fieldName string) TypeRecord {
@@ -86,7 +86,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	}
 	switch opt.Type {
 	case ir.AssignImm:
-		giveTypeOrVerify(opt.Operand1, t.typeImmediate(opt.Extra))
+		giveTypeOrVerify(opt.Out(), t.typeImmediate(opt.Extra))
 	case ir.TakeAddress:
 		varType := typeTable[opt.In()]
 		if varType == nil {
@@ -110,19 +110,19 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				panic("Call to undefined procedure")
 			}
 			//TODO check arg types
-			if typeTable[opt.Operand1] == nil {
-				typeTable[opt.Operand1] = procRecord.Return
+			if typeTable[opt.Out()] == nil {
+				typeTable[opt.Out()] = procRecord.Return
 				// TODO checking oppotunity
 			}
 			return nil
 		}
 		// TODO Temporary hack for making a struct
 		structRecord := typeRecord.(*StructRecord)
-		typeTable[opt.Operand1] = structRecord
+		typeTable[opt.Out()] = structRecord
 	case ir.Compare:
-		l := typeTable[opt.Left()]
-		r := typeTable[opt.Right()]
 		extra := opt.Extra.(ir.CompareExtra)
+		l := typeTable[opt.In()]
+		r := typeTable[extra.Right]
 		if !(l.IsNumber() && r.IsNumber()) {
 			good := false
 			if extra.How == ir.AreEqual || extra.How == ir.NotEqual {
@@ -177,6 +177,8 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	case ir.Assign:
 		l, r := resolve(opt)
 		if r == nil {
+			parsing.Dump(typeTable)
+
 			panic("type should be resolved at this point")
 		}
 		if l != r {
@@ -219,7 +221,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if !(l.IsNumber() && r.IsNumber()) {
 			return errors.New("operands must be numbers")
 		}
-	case ir.BoolAnd, ir.BoolOr:
+	case ir.And, ir.Or:
 		l, r := resolve(opt)
 		_, lIsBool := l.(Boolean)
 		_, rIsBool := r.(Boolean)
@@ -227,19 +229,13 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			return errors.New("operands must be booleans")
 		}
 	case ir.Not:
-		l, r := resolve(opt)
-		_, lIsBool := l.(Boolean)
-		_, lIsPtr := l.(Pointer)
-		_, rIsBool := r.(Boolean)
-		if !lIsBool && !lIsPtr {
+		inT := typeTable[opt.In()]
+		_, inIsPtr := inT.(Pointer)
+		_, inIsBool := inT.(Boolean)
+		if !inIsBool && !inIsPtr {
 			return errors.New("The not operator works booleans and pointers")
 		}
-		if r == nil {
-			typeTable[opt.Out()] = t.Builtins[BoolIdx]
-		}
-		if r != nil && !rIsBool {
-			panic("out var of ir.Not has a type and it's not boolean")
-		}
+		giveTypeOrVerify(opt.Out(), t.Builtins[BoolIdx])
 	case ir.Div:
 		l, r := resolve(opt)
 		if !(l.IsNumber() && r.IsNumber()) {

@@ -480,6 +480,17 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 		}
 	}
 
+	// for regId, reg := range targetState.registers.all {
+	// 	ourOccupiedBy := p.registers.all[regId].occupiedBy
+	// 	theirOccupiedBy := reg.occupiedBy
+
+	// 	if theirOccupiedBy != invalidVn && ourOccupiedBy != theirOccupiedBy {
+	// 		println(reg.occupiedBy)
+	// 		println(p.registers.all[regId].occupiedBy)
+	// 		panic("bug!")
+	// 	}
+	// }
+
 	p.discardVarWhenNoRoom = false
 	p.fullVarState = backup
 }
@@ -588,7 +599,7 @@ func (p *procGen) generate() {
 				p.regRegCommand("mov", dst, src)
 			}
 		case ir.AssignImm:
-			dst := opt.Operand1
+			dst := opt.Out()
 			switch value := opt.Extra.(type) {
 			case int64:
 				p.ensureInRegister(dst)
@@ -698,9 +709,9 @@ func (p *procGen) generate() {
 				}
 			}
 		case ir.Increment:
-			p.issueCommand(fmt.Sprintf("inc %s", p.varOperand(opt.In())))
+			p.issueCommand(fmt.Sprintf("inc %s", p.varOperand(opt.MutateOperand)))
 		case ir.Decrement:
-			p.issueCommand(fmt.Sprintf("dec %s", p.varOperand(opt.In())))
+			p.issueCommand(fmt.Sprintf("dec %s", p.varOperand(opt.MutateOperand)))
 		case ir.Mult:
 			l := opt.Left()
 			r := opt.Right()
@@ -787,7 +798,7 @@ func (p *procGen) generate() {
 			if _, isStruct := p.env.Types[parsing.IdName(extra.Name)]; isStruct {
 				// TODO: code to zero the members
 			} else {
-				retVar := opt.Operand1
+				retVar := opt.Out()
 				var numStackVars int
 				numArgs := len(extra.ArgVars)
 				provideReturnStorage := p.sizeof(retVar) > 16
@@ -938,10 +949,10 @@ func (p *procGen) generate() {
 		case ir.Compare:
 			extra := opt.Extra.(ir.CompareExtra)
 			out := extra.Out
-			l := opt.Left()
-			r := opt.Right()
-			lt := p.typeTable[opt.Left()]
-			rt := p.typeTable[opt.Right()]
+			l := opt.In()
+			r := extra.Right
+			lt := p.typeTable[l]
+			rt := p.typeTable[r]
 			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) {
 				// array & struct compare
 				panic("Not yet")
@@ -1116,14 +1127,14 @@ func (p *procGen) generate() {
 			p.issueCommand(fmt.Sprintf("jnz %s", setLabel))
 			p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
 			fmt.Fprintf(p.out.buffer, "%s:\n", setLabel)
-		case ir.BoolAnd:
+		case ir.And:
 			l := opt.Left()
 			r := opt.Right()
 			if !p.inRegister(l) && !p.inRegister(r) {
 				p.ensureInRegister(l)
 			}
 			p.issueCommand(fmt.Sprintf("and %s, %s", p.varOperand(l), p.varOperand(r)))
-		case ir.BoolOr:
+		case ir.Or:
 			l := opt.Left()
 			r := opt.Right()
 			if !p.inRegister(l) && !p.inRegister(r) {

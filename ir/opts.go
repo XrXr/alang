@@ -1,10 +1,10 @@
 package ir
 
 type Inst struct {
-	Type     InstType
-	Operand1 int
-	Operand2 int
-	Extra    interface{}
+	Type          InstType
+	MutateOperand int
+	ReadOperand   int
+	Extra         interface{}
 }
 
 //go:generate $GOPATH/bin/stringer -type=InstType
@@ -23,16 +23,20 @@ const (
 	EndProc
 	Label
 
-	UnaryInstructions
+	MutateOnlyInstructions
 
 	Call
 	AssignImm
 	Increment
 	Decrement
+
+	ReadOnlyInstructions
+
 	JumpIfFalse
 	JumpIfTrue
+	Compare
 
-	BinaryInstructions
+	ReadAndMutateInstructions
 
 	Sub
 	Assign
@@ -45,61 +49,79 @@ const (
 	IndirectLoad
 	StructMemberPtr
 	LoadStructMember
-	Compare
 	Not
-	BoolAnd
-	BoolOr
+	And
+	Or
 )
 
 func (i *Inst) Left() int {
-	return i.Operand1
+	return i.MutateOperand
 }
 
 func (i *Inst) Right() int {
-	return i.Operand2
+	return i.ReadOperand
 }
 
 func (i *Inst) In() int {
-	return i.Operand1
+	return i.ReadOperand
 }
 
 func (i *Inst) Out() int {
-	return i.Operand2
+	return i.MutateOperand
 }
 
 func (i *Inst) Swap(original int, newVar int) {
-	if i.Operand1 == original {
-		i.Operand1 = newVar
+	if i.MutateOperand == original {
+		i.MutateOperand = newVar
 	}
-	if i.Operand2 == original {
-		i.Operand2 = newVar
+	if i.ReadOperand == original {
+		i.ReadOperand = newVar
 	}
 }
 
-func MakeUnaryInstWithAux(instType InstType, one int, extra interface{}) Inst {
+func MakePlainInst(instType InstType, extra interface{}) Inst {
 	var newInst Inst
 	newInst.Type = instType
 	newInst.Extra = extra
-	newInst.Operand1 = one
+	return newInst
+
+}
+
+func MakeReadOnlyInst(instType InstType, readVn int, extra interface{}) Inst {
+	var newInst Inst
+	newInst.Type = instType
+	newInst.Extra = extra
+	newInst.ReadOperand = readVn
 	return newInst
 }
 
-func MakeBinaryInstWithAux(instType InstType, one int, two int, extra interface{}) Inst {
+func MakeMutateOnlyInst(instType InstType, mutateVn int, extra interface{}) Inst {
 	var newInst Inst
 	newInst.Type = instType
 	newInst.Extra = extra
-	newInst.Operand1 = one
-	newInst.Operand2 = two
+	newInst.MutateOperand = mutateVn
+	return newInst
+}
+
+func MakeBinaryInst(instType InstType, mutateVn int, readVn int, extra interface{}) Inst {
+	var newInst Inst
+	newInst.Type = instType
+	newInst.Extra = extra
+	newInst.MutateOperand = mutateVn
+	newInst.ReadOperand = readVn
 	return newInst
 }
 
 func IterOverAllVars(opt Inst, cb func(vn int)) {
-	if opt.Type > UnaryInstructions {
-		cb(opt.Operand1)
+	if opt.Type > MutateOnlyInstructions && opt.Type < ReadOnlyInstructions {
+		cb(opt.MutateOperand)
+	} else if opt.Type > ReadOnlyInstructions && opt.Type < ReadAndMutateInstructions {
+		cb(opt.ReadOperand)
+	} else if opt.Type > ReadAndMutateInstructions {
+		cb(opt.ReadOperand)
+		cb(opt.MutateOperand)
 	}
-	if opt.Type > BinaryInstructions {
-		cb(opt.Operand2)
-	}
+
 	switch opt.Type {
 	case Call:
 		for _, vn := range opt.Extra.(CallExtra).ArgVars {
@@ -111,6 +133,7 @@ func IterOverAllVars(opt Inst, cb func(vn int)) {
 		}
 	case Compare:
 		cb(opt.Extra.(CompareExtra).Out)
+		cb(opt.Extra.(CompareExtra).Right)
 	}
 }
 
@@ -137,6 +160,7 @@ const (
 )
 
 type CompareExtra struct {
-	How ComparisonMethod
-	Out int
+	How   ComparisonMethod
+	Right int
+	Out   int
 }
