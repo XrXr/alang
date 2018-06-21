@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
-	_ "sort"
+	"sort"
 	"strconv"
 )
 
@@ -473,151 +473,110 @@ func boolStrToBool(s string) bool {
 	return false
 }
 
-// we can do var replacements for vars that are only read
-// for vars that are created with an assignimm:
-//      if it only appears on the rhs of assigns: replace all assigns with assign imm, get rid of the original
-// for vars that are created with an assign:
-//      if it's only read we can get rid of the assign and redirect all reads to the original rhs
-
+// Get rid of aliasing ir.Assign. Works by catching vars that appear on the rhs of an ir.Assign but is never
+// used again
 func Prune(block *OptBlock) {
-	// if block.NumberOfVars == 0 {
-	// 	return
-	// }
-	// usageLog := make([]struct {
-	// 	count        int
-	// 	firstUseIdx  int
-	// 	secondUseIdx int
-	// }, block.NumberOfVars)
-	// for idx, opt := range block.Opts {
-	// 	recordUsage := func(varNum int) {
-	// 		if usageLog[varNum].count == 0 {
-	// 			usageLog[varNum].firstUseIdx = idx
-	// 		}
-	// 		if usageLog[varNum].count == 1 {
-	// 			usageLog[varNum].secondUseIdx = idx
-	// 		}
-	// 		usageLog[varNum].count++
-	// 	}
-	// 	ir.IterOverAllVars(opt, recordUsage)
-	// }
-	// // keep track of all the uneeded assigns
-	// hollow := make([]int, 0, len(block.Opts)/2)
-	// sort.Slice(usageLog, func(i int, j int) bool {
-	// 	return usageLog[i].secondUseIdx < usageLog[j].secondUseIdx
-	// })
-	// for _, log := range usageLog {
-	// 	if log.count != 2 {
-	// 		continue
-	// 	}
+	if block.NumberOfVars == 0 {
+		return
+	}
+	usageLog := make([]struct {
+		count        int
+		firstUseIdx  int
+		secondUseIdx int
+	}, block.NumberOfVars)
+	for idx, opt := range block.Opts {
+		recordUsage := func(varNum int) {
+			if usageLog[varNum].count == 0 {
+				usageLog[varNum].firstUseIdx = idx
+			}
+			if usageLog[varNum].count == 1 {
+				usageLog[varNum].secondUseIdx = idx
+			}
+			usageLog[varNum].count++
+		}
+		ir.IterOverAllVars(opt, recordUsage)
+	}
+	// keep track of all the uneeded assigns
+	hollow := make([]int, 0, len(block.Opts)/2)
+	sort.Slice(usageLog, func(i int, j int) bool {
+		return usageLog[i].secondUseIdx < usageLog[j].secondUseIdx
+	})
+	for _, log := range usageLog {
+		if log.count != 2 {
+			continue
+		}
+		changed := false
+		genesis := block.Opts[log.firstUseIdx]
+		if genesis.Type == ir.AssignImm && block.Opts[log.secondUseIdx].Type == ir.Assign {
+			changed = true
+			hollow = append(hollow, log.firstUseIdx)
+			block.Opts[log.secondUseIdx].Type = ir.AssignImm
+			block.Opts[log.secondUseIdx].Extra = block.Opts[log.firstUseIdx].Extra
+		}
+		if genesis.Type == ir.Assign {
+			changed = true
+			hollow = append(hollow, log.firstUseIdx)
+			ir.IterAndMutate(&block.Opts[log.secondUseIdx], func(vn *int) {
+				if *vn == genesis.Left() {
+					*vn = genesis.Right()
+				}
+			})
+		}
+		if changed {
+			// DumpIr(*block)
+		}
+	}
+	sort.Ints(hollow)
+	hollow = dedupSorted(hollow)
+	pushDist := 0
+	for i, j := 0, 0; i < len(block.Opts); i++ {
+		if j < len(hollow) && hollow[j] == i {
+			pushDist++
+			j++
+			continue
+		}
+		if pushDist > 0 {
+			block.Opts[i-pushDist] = block.Opts[i]
+		}
+	}
+	block.Opts = block.Opts[0 : len(block.Opts)-len(hollow)]
 
-	// 	genesis := block.Opts[log.firstUseIdx]
-	// 	if genesis.Type == ir.AssignImm && block.Opts[log.secondUseIdx].Type == ir.Assign {
-	// 		hollow = append(hollow, log.secondUseIdx)
-	// 	}
-	// 	if genesis.Type == ir.Assign {
-	// 		hollow = append(hollow, log.firstUseIdx)
+	// renumber all the vars
+	allVarNums := make([]int, 0, block.NumberOfVars)
+	for _, opt := range block.Opts {
+		ir.IterOverAllVars(opt, func(vn int) {
+			allVarNums = append(allVarNums, vn)
+		})
+	}
+	sort.Ints(allVarNums)
+	allVarNums = dedupSorted(allVarNums)
+	start := len(allVarNums)
+	for i, vn := range allVarNums {
+		if vn >= block.NumberOfArgs {
+			start = i
+			break
+		}
+	}
+	if start < len(allVarNums) {
+		allVarNums = allVarNums[start:]
+	} else {
+		allVarNums = []int{}
+	}
 
-	// 		second := block.Opts[log.secondUseIdx]
-	// 		switch second.Type {
-	// 		default:
-	// 			block.Opts[log.secondUseIdx].Swap(genesis.Left(), genesis.Right())
-	// 			if second.Type == ir.Compare {
-	// 				extra := second.Extra.(ir.CompareExtra)
-	// 				if extra.Out == genesis.Left() {
-	// 					extra.Out = genesis.Right()
-	// 					block.Opts[log.secondUseIdx].Extra = extra
-	// 				}
-	// 			}
-	// 		case ir.Call:
-	// 			extra := block.Opts[log.secondUseIdx].Extra.(ir.CallExtra)
-	// 			for i, vn := range extra.ArgVars {
-	// 				if vn == genesis.Left() {
-	// 					extra.ArgVars[i] = genesis.Right()
-	// 				}
-	// 			}
-	// 			block.Opts[log.secondUseIdx].Extra = extra
-	// 		case ir.Return:
-	// 			extra := block.Opts[log.secondUseIdx].Extra.(ir.ReturnExtra)
-	// 			for i, vn := range extra.Values {
-	// 				if vn == genesis.Left() {
-	// 					extra.Values[i] = genesis.Right()
-	// 				}
-	// 			}
-	// 			block.Opts[log.secondUseIdx].Extra = extra
-	// 		}
-	// 	}
-	// }
-	// sort.Ints(hollow)
-	// hollow = dedupSorted(hollow)
-	// pushDist := 0
-	// for i, j := 0, 0; i < len(block.Opts); i++ {
-	// 	if j < len(hollow) && hollow[j] == i {
-	// 		pushDist++
-	// 		j++
-	// 		continue
-	// 	}
-	// 	if pushDist > 0 {
-	// 		block.Opts[i-pushDist] = block.Opts[i]
-	// 	}
-	// }
-	// block.Opts = block.Opts[0 : len(block.Opts)-len(hollow)]
+	vnMap := make([]int, block.NumberOfVars)
+	for idx, vn := range allVarNums {
+		vnMap[vn] = idx + block.NumberOfArgs
+	}
+	for i := 0; i < block.NumberOfArgs; i++ {
+		vnMap[i] = i
+	}
+	for i := range block.Opts {
+		ir.IterAndMutate(&block.Opts[i], func(vn *int) {
+			*vn = vnMap[*vn]
+		})
+	}
 
-	// // renumber all the vars
-
-	// allVarNums := make([]int, 0, block.NumberOfVars)
-	// for _, opt := range block.Opts {
-	// 	ir.IterOverAllVars(opt, func(vn int) {
-	// 		allVarNums = append(allVarNums, vn)
-	// 	})
-	// }
-	// sort.Ints(allVarNums)
-	// allVarNums = dedupSorted(allVarNums)
-	// start := len(allVarNums)
-	// for i, vn := range allVarNums {
-	// 	if vn >= block.NumberOfArgs {
-	// 		start = i
-	// 		break
-	// 	}
-	// }
-	// if start < len(allVarNums) {
-	// 	allVarNums = allVarNums[start:]
-	// } else {
-	// 	allVarNums = []int{}
-	// }
-
-	// vnMap := make([]int, block.NumberOfVars)
-	// for idx, vn := range allVarNums {
-	// 	vnMap[vn] = idx + block.NumberOfArgs
-	// }
-	// for i := 0; i < block.NumberOfArgs; i++ {
-	// 	vnMap[i] = i
-	// }
-	// for i, opt := range block.Opts {
-	// 	opt.Operand1 = vnMap[opt.Operand1]
-	// 	opt.Operand2 = vnMap[opt.Operand2]
-	// 	if opt.Type == ir.Call {
-	// 		extra := opt.Extra.(ir.CallExtra)
-	// 		for i, vn := range extra.ArgVars {
-	// 			extra.ArgVars[i] = vnMap[vn]
-	// 		}
-	// 		opt.Extra = extra
-	// 	}
-	// 	if opt.Type == ir.Compare {
-	// 		extra := opt.Extra.(ir.CompareExtra)
-	// 		extra.Out = vnMap[extra.Out]
-	// 		opt.Extra = extra
-	// 	}
-	// 	if opt.Type == ir.Return {
-	// 		extra := opt.Extra.(ir.ReturnExtra)
-	// 		for i, vn := range extra.Values {
-	// 			extra.Values[i] = vnMap[vn]
-	// 		}
-	// 		opt.Extra = extra
-	// 	}
-	// 	block.Opts[i] = opt
-	// }
-
-	// block.NumberOfVars = len(allVarNums) + block.NumberOfArgs
+	block.NumberOfVars = len(allVarNums) + block.NumberOfArgs
 }
 
 func labelInst(name string) ir.Inst {

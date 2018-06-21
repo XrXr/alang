@@ -137,6 +137,37 @@ func IterOverAllVars(opt Inst, cb func(vn int)) {
 	}
 }
 
+func IterAndMutate(opt *Inst, cb func(vn *int)) {
+	if opt.Type > MutateOnlyInstructions && opt.Type < ReadOnlyInstructions {
+		cb(&opt.MutateOperand)
+	} else if opt.Type > ReadOnlyInstructions && opt.Type < ReadAndMutateInstructions {
+		cb(&opt.ReadOperand)
+	} else if opt.Type > ReadAndMutateInstructions {
+		cb(&opt.ReadOperand)
+		cb(&opt.MutateOperand)
+	}
+
+	switch opt.Type {
+	case Call:
+		extra := opt.Extra.(CallExtra)
+		for i := range extra.ArgVars {
+			cb(&extra.ArgVars[i])
+		}
+		opt.Extra = extra
+	case Return:
+		extra := opt.Extra.(ReturnExtra)
+		for i := range extra.Values {
+			cb(&extra.Values[i])
+		}
+		opt.Extra = extra
+	case Compare:
+		extra := opt.Extra.(CompareExtra)
+		cb(&extra.Out)
+		cb(&extra.Right)
+		opt.Extra = extra
+	}
+}
+
 type CallExtra struct {
 	Name     string
 	ArgVars  []int
