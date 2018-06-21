@@ -86,7 +86,15 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	}
 	switch opt.Type {
 	case ir.AssignImm:
-		giveTypeOrVerify(opt.Out(), t.typeImmediate(opt.Extra))
+		finalType := t.typeImmediate(opt.Extra)
+		if unresolved, isUnresolved := finalType.(Unresolved); isUnresolved {
+			structRecord, ok := env.Types[unresolved.Decl.Base]
+			if !ok {
+				panic(unresolved.Decl.Base + " does not name a type")
+			}
+			finalType = BuildRecordWithIndirection(structRecord, unresolved.Decl.LevelOfIndirection)
+		}
+		giveTypeOrVerify(opt.Out(), finalType)
 	case ir.TakeAddress:
 		varType := typeTable[opt.In()]
 		if varType == nil {
@@ -269,7 +277,7 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	case bool:
 		return t.Builtins[BoolIdx]
 	case parsing.TypeDecl:
-		return t.ConstructTypeRecord(val)
+		return t.TypeRecordFromDecl(val)
 	}
 	panic("this must work")
 	return nil
@@ -312,7 +320,7 @@ func BuildArray(contained TypeRecord, nesting []int) TypeRecord {
 	return Array{Nesting: nesting, OfWhat: contained}
 }
 
-func BuildPointer(base TypeRecord, level int) TypeRecord {
+func BuildRecordWithIndirection(base TypeRecord, level int) TypeRecord {
 	if level == 0 {
 		return base
 	}
@@ -323,10 +331,10 @@ func BuildPointer(base TypeRecord, level int) TypeRecord {
 	return current
 }
 
-func (t *Typer) ConstructTypeRecord(decl parsing.TypeDecl) TypeRecord {
+func (t *Typer) TypeRecordFromDecl(decl parsing.TypeDecl) TypeRecord {
 	var base TypeRecord
 	if decl.ArrayBase != nil {
-		base = t.ConstructTypeRecord(*decl.ArrayBase)
+		base = t.TypeRecordFromDecl(*decl.ArrayBase)
 	} else {
 		base = t.mapToBuiltinType(decl.Base)
 	}
@@ -334,7 +342,7 @@ func (t *Typer) ConstructTypeRecord(decl parsing.TypeDecl) TypeRecord {
 		return Unresolved{Decl: decl}
 	}
 	base = BuildArray(base, decl.ArraySizes)
-	return BuildPointer(base, decl.LevelOfIndirection)
+	return BuildRecordWithIndirection(base, decl.LevelOfIndirection)
 }
 
 const (
@@ -370,7 +378,7 @@ func NewTyper() *Typer {
 func NewEnvRecord(typer *Typer) *EnvRecord {
 	boolType := &typer.Builtins[BoolIdx]
 	voidType := &typer.Builtins[VoidIdx]
-	binTableReturn := BuildPointer(typer.Builtins[IntIdx], 1)
+	binTableReturn := BuildRecordWithIndirection(typer.Builtins[IntIdx], 1)
 	return &EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{

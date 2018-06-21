@@ -29,14 +29,14 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 	}
 	for _, order := range workOrders {
 		argRecords := make([]typing.TypeRecord, len(order.ProcDecl.Args))
-		returnType := typer.ConstructTypeRecord(order.ProcDecl.Return)
+		returnType := typer.TypeRecordFromDecl(order.ProcDecl.Return)
 		if unresolved, returnIsUnresolved := returnType.(typing.Unresolved); returnIsUnresolved {
 			name := unresolved.Decl.Base
 			notDone[name] = append(notDone[name], &returnType)
 		}
 
 		for i, argDecl := range order.ProcDecl.Args {
-			record := typer.ConstructTypeRecord(argDecl.Type)
+			record := typer.TypeRecordFromDecl(argDecl.Type)
 			argRecords[i] = record
 			if _, recordIsUnresolved := record.(typing.Unresolved); recordIsUnresolved {
 				if argDecl.Type.ArrayBase != nil {
@@ -58,7 +58,7 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		name := structNode.Name
 		for _, typeRecordPtr := range notDone[name] {
 			unresolved := (*typeRecordPtr).(typing.Unresolved)
-			*typeRecordPtr = typing.BuildPointer(structRecord, unresolved.Decl.LevelOfIndirection)
+			*typeRecordPtr = typing.BuildRecordWithIndirection(structRecord, unresolved.Decl.LevelOfIndirection)
 		}
 		delete(notDone, name)
 		env.Types[structNode.Name] = structRecord
@@ -166,7 +166,7 @@ func main() {
 			parentStruct, found := structs[parent]
 			if found {
 				newField := &typing.StructField{
-					Type: typer.ConstructTypeRecord(typeDeclare.Type),
+					Type: typer.TypeRecordFromDecl(typeDeclare.Type),
 				}
 				parentStruct.MemberOrder = append(parentStruct.MemberOrder, newField)
 				parentStruct.Members[string(typeDeclare.Name)] = newField
@@ -222,7 +222,8 @@ func main() {
 			fmt.Fprintf(out, "extern %s\n", workOrder.Name)
 			continue
 		}
-		staticData = append(staticData, backend.X86ForBlock(out, ir, typeTable, env, typer, procRecord))
+		static := backend.X86ForBlock(out, ir, typeTable, env, typer, procRecord)
+		staticData = append(staticData, static)
 	}
 
 	io.WriteString(out, "; ---user code end---\n")

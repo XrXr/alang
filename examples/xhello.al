@@ -93,11 +93,9 @@ XSelectInput :: foreign proc (display *XDisplay, w u64, event_mask s64) -> int
 XCloseDisplay :: foreign proc (display *XDisplay) -> s32
 
 main :: proc () {
-	// hack to get a pointer to XDisplay without the compiler freaking out
-	hack := XDisplay()
-	d := &hack
+	var d *XDisplay
 	var w u64
-	e := XEvent()
+	var e XEvent
 	msg := "he's done it"
 
 	var s s32
