@@ -30,6 +30,7 @@
    □ can't have array of structs/array of pointer to structs in your struct
    ☐ can't do var foo *somestruct
  ✔ better pruning @done (18-06-15 19:55)
+ ☐ pruning2.al
  ☐ unsigned numbers
  □ error reporting
    □ parse errors: binary operators missing operands ("i++" parses atm)
