@@ -14,10 +14,7 @@ main :: proc () {
 	m := 13
 	n := 14
 	if a == 1 {
-		o := 23423
-		p := 2342323
-		q := 2342323
-		kek := a +  828
+		kek := a + 828
 		cook := a / 382
 		dance := f + j
 		print_int(dance + kek + cook)
@@ -28,6 +25,8 @@ main :: proc () {
 		o := 23423
 		p := 2342323
 		q := 2342323
+		puts(foo)
+		print_int(o + p + q)
 	}
 	print_int(a)
 	print_int(b)
