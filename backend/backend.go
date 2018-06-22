@@ -157,7 +157,7 @@ type procGen struct {
 	procRecord                typing.ProcRecord
 	typer                     *typing.Typer
 	callerProvidesReturnSpace bool
-	discardVarWhenNoRoom      bool // used by morphToState
+	noNewStackStorage         bool // used by morphToState
 	currentFrameSize          int
 	nextLabelId               int
 	stackBoundVars            []int
@@ -396,10 +396,12 @@ func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 			p.allocateRegToVar(newReg, currentTenant)
 			p.changeRegisterBookKeepking(vn, register)
 		} else {
+			// swap currentTenant to stack
 			// only used by morphToState
-			if !p.discardVarWhenNoRoom {
-				// swap currentTenant to stack
+			if !p.noNewStackStorage {
 				p.ensureStackOffsetValid(currentTenant)
+			}
+			if p.hasStackStroage(currentTenant) {
 				p.memRegCommand("mov", currentTenant, currentTenant)
 			}
 			p.changeRegisterBookKeepking(vn, register)
@@ -459,7 +461,7 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 	}
 	// second pass, load from stack into register. We discard vars which don't have stack storage in the
 	// target state
-	p.discardVarWhenNoRoom = true
+	p.noNewStackStorage = true
 	for regId, reg := range targetState.registers.all {
 		ourOccupiedBy := p.registers.all[regId].occupiedBy
 		theirOccupiedBy := reg.occupiedBy
@@ -480,18 +482,7 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 		}
 	}
 
-	// for regId, reg := range targetState.registers.all {
-	// 	ourOccupiedBy := p.registers.all[regId].occupiedBy
-	// 	theirOccupiedBy := reg.occupiedBy
-
-	// 	if theirOccupiedBy != invalidVn && ourOccupiedBy != theirOccupiedBy {
-	// 		println(reg.occupiedBy)
-	// 		println(p.registers.all[regId].occupiedBy)
-	// 		panic("bug!")
-	// 	}
-	// }
-
-	p.discardVarWhenNoRoom = false
+	p.noNewStackStorage = false
 	p.fullVarState = backup
 }
 
