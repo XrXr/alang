@@ -503,6 +503,35 @@ func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
 	return extendedReg
 }
 
+func (p *procGen) zeroOutVar(vn int) {
+	// free up rdi and rcx
+	for _, target := range [...]registerId{rdi, rcx} {
+		currentTenant := p.registers.all[target].occupiedBy
+		if currentTenant == invalidVn {
+			continue
+		}
+		foundDifferentRegister := false
+		for reg := range p.registers.available {
+			switch reg := registerId(reg); reg {
+			case rdi, rcx:
+				continue
+			default:
+				foundDifferentRegister = true
+				p.loadRegisterWithVar(reg, currentTenant)
+			}
+		}
+		if !foundDifferentRegister {
+			p.ensureStackOffsetValid(currentTenant)
+			p.memRegCommand("mov", currentTenant, currentTenant)
+			p.releaseRegister(target)
+		}
+	}
+	p.ensureStackOffsetValid(vn)
+	p.loadVarOffsetIntoReg(vn, rdi)
+	p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(vn)))
+	p.issueCommand("call _intrinsic_zero_mem")
+}
+
 func (p *procGen) conditionalJump(jumpInst ir.Inst) {
 	label := jumpInst.Extra.(string)
 	targetState := p.labelToState[label]
@@ -642,7 +671,14 @@ func (p *procGen) generate() {
 				p.staticDataBuf.ReadFrom(&buf)
 				p.staticDataBuf.WriteRune('\n')
 			case parsing.TypeDecl:
-				// TODO zero out decl
+				out := opt.Out()
+				freeReg, freeRegExists := p.registers.nextAvailable()
+				if freeRegExists && p.sizeof(out) < 8 {
+					p.loadRegisterWithVar(freeReg, out)
+					p.issueCommand(fmt.Sprintf("mov %s, 0", p.registers.all[freeReg].qwordName))
+				} else {
+					p.zeroOutVar(out)
+				}
 			default:
 				parsing.Dump(value)
 				panic("unknown immediate value type")
@@ -782,6 +818,7 @@ func (p *procGen) generate() {
 			p.swapStackBoundVars()
 			extra := opt.Extra.(ir.CallExtra)
 			if _, isStruct := p.env.Types[parsing.IdName(extra.Name)]; isStruct {
+				p.zeroOutVar(opt.Out())
 				// TODO: code to zero the members
 			} else {
 				retVar := opt.Out()

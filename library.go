@@ -105,6 +105,22 @@ proc_print_int:
 	pop rbp
 	ret
 
+_intrinsic_zero_mem:
+    cmp rcx, 8
+    jl .write1
+    mov qword [rdi], 0
+    add rdi, 8
+    sub rcx, 8
+.write1:
+    cmp rcx, 0
+    je .done
+.write1_loop:
+    mov byte [rdi], 0
+    inc rdi
+    loop .write1_loop
+.done:
+    ret
+
 ; rdi is dest, rsi is source, rcx is size
 _intrinsic_memcpy:
 	cld
