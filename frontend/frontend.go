@@ -54,10 +54,24 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		case parsing.ExprNode:
 			switch node.Op {
 			case parsing.Declare:
-				varNum := scope.newNamedVar(node.Left.(parsing.IdName))
-				err := genExpressionValueToVar(scope, varNum, node.Right)
-				if err != nil {
-					panic(err)
+				varName := node.Left.(parsing.IdName)
+				if _, alreadyExist := scope.resolve(varName); alreadyExist {
+					_, existsInCurrentScope := scope.varTable[varName]
+					if existsInCurrentScope {
+						panic("redeclaration of variable " + string(varName))
+					}
+					rhsResult, err := genExpressionValue(scope, node.Right)
+					if err != nil {
+						panic(err)
+					}
+					vnForNewVar := scope.newNamedVar(varName)
+					gen.addOpt(ir.MakeBinaryInst(ir.Assign, vnForNewVar, rhsResult, nil))
+				} else {
+					varNum := scope.newNamedVar(varName)
+					err := genExpressionValueToVar(scope, varNum, node.Right)
+					if err != nil {
+						panic(err)
+					}
 				}
 			case parsing.Assign, parsing.PlusEqual, parsing.MinusEqual:
 				leftAsIdent, leftIsIdent := node.Left.(parsing.IdName)

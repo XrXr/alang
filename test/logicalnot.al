@@ -13,8 +13,8 @@ main :: proc() {
 		puts("3/4 success\n")
 	}
 
-	b := &a
-	if !b {
+	c := &a
+	if !c {
 	} else {
 		puts("4/4 success\n")
 	}
