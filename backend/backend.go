@@ -793,17 +793,6 @@ func (p *procGen) generate() {
 				}
 
 				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
-				// the first part of this array is the same as paramPassingRegOrder for checking
-				// if we need to save a var that is in a param-passing register to stack
-				regsThatGetDestroyed := [...]registerId{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
-				for _, reg := range regsThatGetDestroyed {
-					owner := p.registers.all[reg].occupiedBy
-					if owner != invalidVn {
-						p.ensureStackOffsetValid(owner)
-						p.memRegCommand("mov", owner, owner)
-						p.releaseRegister(reg)
-					}
-				}
 				if provideReturnStorage {
 					p.ensureStackOffsetValid(retVar)
 					p.loadVarOffsetIntoReg(retVar, rdi)
@@ -819,13 +808,7 @@ func (p *procGen) generate() {
 					realArgsPassedInReg++
 					switch p.typeTable[arg].Size() {
 					case 8, 4, 1:
-						switch p.varStorage[arg].currentRegister {
-						case rbx, r12, r13, r14, r15:
-							// these registers are preserved across calls
-							p.movRegReg(paramPassingRegOrder[i], p.varStorage[arg].currentRegister)
-						default:
-							p.loadRegisterWithVar(paramPassingRegOrder[i], arg)
-						}
+						p.loadRegisterWithVar(paramPassingRegOrder[i], arg)
 					default:
 						panic("Unsupported parameter size")
 					}
@@ -858,6 +841,9 @@ func (p *procGen) generate() {
 					}
 				}
 
+				// the first part of this array is the same as paramPassingRegOrder for checking
+				// if we need to save a var that is in a param-passing register to stack
+				regsThatGetDestroyed := [...]registerId{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
 				for _, reg := range regsThatGetDestroyed {
 					owner := p.registers.all[reg].occupiedBy
 					if owner != invalidVn {
