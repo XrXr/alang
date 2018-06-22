@@ -137,6 +137,9 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				_, lIsBool := l.(Boolean)
 				_, rIsBool := r.(Boolean)
 				good = lIsBool && rIsBool
+				_, lIsPointer := l.(Pointer)
+				_, rIsPointer := r.(Pointer)
+				good = good || (lIsPointer && rIsPointer)
 			}
 			if !good {
 				parsing.Dump(l)
