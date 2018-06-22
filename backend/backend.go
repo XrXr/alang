@@ -734,11 +734,12 @@ func (p *procGen) generate() {
 			l := opt.Left()
 			r := opt.Right()
 
+			p.loadRegisterWithVar(rax, l)
 			rdxTenant := p.registers.all[rdx].occupiedBy
 			var borrowedAReg bool
 			var regBorrowed registerId
 			if rdxTenant != invalidVn {
-				if regBorrowed, borrowedAReg := p.registers.nextAvailable(); borrowedAReg {
+				if regBorrowed, borrowedAReg = p.registers.nextAvailable(); borrowedAReg {
 					p.movRegReg(regBorrowed, rdx)
 				} else {
 					p.ensureStackOffsetValid(rdxTenant)
@@ -746,24 +747,18 @@ func (p *procGen) generate() {
 				}
 			}
 			p.issueCommand("xor rdx, rdx")
-			p.loadRegisterWithVar(rax, l)
 			needSignExtension := p.sizeof(l) > p.sizeof(r)
 			if !p.inRegister(r) && needSignExtension {
 				p.loadRegisterWithVar(r8, r) // got to bring it into register to do sign extension
 			}
-			if p.inRegister(r) {
-				rReg := p.registerOf(r)
-				rRegLeftSize := rReg.nameForSize(p.sizeof(l))
-				if needSignExtension {
-					tightFit := p.fittingRegisterName(r)
-					p.issueCommand(fmt.Sprintf("movsx %s, %s", rRegLeftSize, tightFit))
-				}
+			if p.inRegister(r) && p.varStorage[r].currentRegister != rdx {
+				rRegLeftSize := p.signOrZeroExtendIfNeeded(r, l)
 				p.issueCommand(fmt.Sprintf("idiv %s", rRegLeftSize))
 			} else {
-				if p.varStorage[r].rbpOffset == 0 {
+				if !p.hasStackStroage(r) {
 					panic("operand to div doens't have stack offset nor is it in register. Where is the value?")
 				}
-				p.issueCommand(fmt.Sprintf("idiv [rbp-%d]", p.varStorage[r].rbpOffset))
+				p.issueCommand(fmt.Sprintf("idiv %s", p.stackOperand(r)))
 			}
 			if rdxTenant != invalidVn {
 				if borrowedAReg {
