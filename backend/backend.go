@@ -532,6 +532,19 @@ func (p *procGen) zeroOutVar(vn int) {
 	p.issueCommand("call _intrinsic_zero_mem")
 }
 
+func (p *procGen) varVarCopy(dest int, source int) {
+	p.ensureInRegister(source)
+	switch {
+	case p.inRegister(dest):
+		p.regRegCommand("mov", dest, source)
+	case !p.inRegister(dest) && p.hasStackStroage(dest):
+		p.memRegCommand("mov", dest, source)
+	case !p.inRegister(dest) && !p.hasStackStroage(dest):
+		p.ensureInRegister(dest)
+		p.regRegCommand("mov", dest, source)
+	}
+}
+
 func (p *procGen) conditionalJump(jumpInst ir.Inst) {
 	label := jumpInst.Extra.(string)
 	targetState := p.labelToState[label]
@@ -606,18 +619,7 @@ func (p *procGen) generate() {
 		}
 		switch opt.Type {
 		case ir.Assign:
-			dst := opt.Left()
-			src := opt.Right()
-			p.ensureInRegister(src)
-			switch {
-			case p.inRegister(dst):
-				p.regRegCommand("mov", dst, src)
-			case !p.inRegister(dst) && p.hasStackStroage(dst):
-				p.memRegCommand("mov", dst, src)
-			case !p.inRegister(dst) && !p.hasStackStroage(dst):
-				p.ensureInRegister(dst)
-				p.regRegCommand("mov", dst, src)
-			}
+			p.varVarCopy(opt.Left(), opt.Right())
 		case ir.AssignImm:
 			dst := opt.Out()
 			switch value := opt.Extra.(type) {
@@ -670,7 +672,7 @@ func (p *procGen) generate() {
 				p.staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
 				p.staticDataBuf.ReadFrom(&buf)
 				p.staticDataBuf.WriteRune('\n')
-			case parsing.TypeDecl:
+			case parsing.TypeDecl, parsing.LiteralType:
 				out := opt.Out()
 				freeReg, freeRegExists := p.registers.nextAvailable()
 				if freeRegExists && p.sizeof(out) < 8 {
@@ -817,9 +819,13 @@ func (p *procGen) generate() {
 		case ir.Call:
 			p.swapStackBoundVars()
 			extra := opt.Extra.(ir.CallExtra)
-			if _, isStruct := p.env.Types[parsing.IdName(extra.Name)]; isStruct {
-				p.zeroOutVar(opt.Out())
-				// TODO: code to zero the members
+			if typeRecord, callToType := p.env.Types[parsing.IdName(extra.Name)]; callToType {
+				switch typeRecord.(type) {
+				case *typing.StructRecord:
+					p.zeroOutVar(opt.Out())
+				default:
+					p.varVarCopy(opt.Out(), extra.ArgVars[0])
+				}
 			} else {
 				retVar := opt.Out()
 				var numStackVars int

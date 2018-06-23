@@ -504,6 +504,8 @@ func parseToken(s string) interface{} {
 		return Literal{Boolean, s}
 	} else if s[0] == '"' {
 		return Literal{String, s[1 : len(s)-1]}
+	} else if s == "nil" {
+		return Literal{Type: NilPtr}
 	} else {
 		return IdName(s)
 	}

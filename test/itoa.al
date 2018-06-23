@@ -3,19 +3,19 @@ main :: proc () {
     buffer := asciiNumber()
 
     itoa(18446744073709551615, &buffer)
-    puts(&buffer)
+    puts(string(&buffer))
     puts("\n")
 
     itoa(1337, &buffer)
-    puts(&buffer)
+    puts(string(&buffer))
     puts("\n")
 
     itoa(8382, &buffer)
-    puts(&buffer)
+    puts(string(&buffer))
     puts("\n")
 
     itoa(65536, &buffer)
-    puts(&buffer)
+    puts(string(&buffer))
     puts("\n")
 }
 

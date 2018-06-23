@@ -291,6 +291,8 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 			value = boolStrToBool(n.Value)
 		case parsing.String:
 			value = n.Value
+		case parsing.NilPtr:
+			value = parsing.NilPtr
 		}
 		gen.addOpt(ir.MakeMutateOnlyInst(ir.AssignImm, dest, value))
 	case parsing.ProcCall:

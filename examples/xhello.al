@@ -100,7 +100,7 @@ main :: proc () {
 
 	var s s32
 
-  	d = XOpenDisplay(0)
+  	d = XOpenDisplay(nil)
   	if !d {
   		puts("Can't open display\n")
   		exit(1)

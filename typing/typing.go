@@ -109,24 +109,44 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
 		giveTypeOrVerify(opt.Out(), outType)
 	case ir.Call:
+		out := opt.Out()
 		extra := opt.Extra.(ir.CallExtra)
-		typeRecord, ok := env.Types[parsing.IdName(extra.Name)]
-		if !ok {
-			procRecord, ok := env.Procs[parsing.IdName(extra.Name)]
+		callee := parsing.IdName(extra.Name)
+		typeRecord, callToType := env.Types[callee]
+		if callToType {
+			switch record := typeRecord.(type) {
+			case *StructRecord:
+				// making a struct
+				giveTypeOrVerify(out, record)
+			default:
+				// type casting
+				if len(extra.ArgVars) != 1 {
+					panic("Type casts can only operate on one variable")
+				}
+				if typeRecord.Size() != typeTable[extra.ArgVars[0]].Size() {
+					panic("Invalid cast: size of the types must match")
+				}
+				giveTypeOrVerify(out, typeRecord)
+			}
+		} else {
+			procRecord, ok := env.Procs[callee]
 			if !ok {
-				println(parsing.IdName(extra.Name))
-				panic("Call to undefined procedure")
+				panic("Call to undefined procedure " + extra.Name)
 			}
-			//TODO check arg types
-			if typeTable[opt.Out()] == nil {
-				typeTable[opt.Out()] = *procRecord.Return
-				// TODO checking oppotunity
+			if len(extra.ArgVars) != len(procRecord.Args) {
+				panic("Wrong number of argument for call to " + extra.Name)
 			}
+			for i, vn := range extra.ArgVars {
+				if !t.TypesCompatible(typeTable[vn], procRecord.Args[i]) {
+					parsing.Dump(typeTable[vn])
+					parsing.Dump(procRecord.Args[i])
+					panic(fmt.Sprintf("Argument %d of call to %s has incompatible type", i, extra.Name))
+				}
+			}
+
+			giveTypeOrVerify(out, *procRecord.Return)
 			return nil
 		}
-		// TODO Temporary hack for making a struct
-		structRecord := typeRecord.(*StructRecord)
-		typeTable[opt.Out()] = structRecord
 	case ir.Compare:
 		extra := opt.Extra.(ir.CompareExtra)
 		l := typeTable[opt.In()]
@@ -161,6 +181,9 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if !varIsPointer {
 			panic("That's not a pointer what are you doing")
 		}
+		if isVoidPointer(pointer) {
+			panic("Can't indirect a void pointer")
+		}
 		if pointer.ToWhat != typeForData {
 			if !(pointer.ToWhat == t.Builtins[U8Idx] && typeForData == t.Builtins[IntIdx]) {
 				parsing.Dump(pointer.ToWhat)
@@ -177,14 +200,10 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if !isPointer {
 			panic("Can't indirect a non pointer")
 		}
-		typeForOut := typeTable[opt.Out()]
-		if typeForOut == nil {
-			typeTable[opt.Out()] = pointer.ToWhat
-			typeForOut = pointer.ToWhat
+		if isVoidPointer(pointer) {
+			panic("Can't indirect a void pointer")
 		}
-		if pointer.ToWhat != typeForOut {
-			panic("Type mismatch")
-		}
+		giveTypeOrVerify(opt.Out(), pointer.ToWhat)
 	case ir.Assign:
 		_, r := resolve(opt)
 		if r == nil {
@@ -279,6 +298,10 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 		return t.Builtins[StringIdx]
 	case bool:
 		return t.Builtins[BoolIdx]
+	case parsing.LiteralType:
+		if val == parsing.NilPtr {
+			return t.Builtins[VoidPtrIdx]
+		}
 	case parsing.TypeDecl:
 		return t.TypeRecordFromDecl(val)
 	}
@@ -286,34 +309,45 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	return nil
 }
 
+var builtinTypes map[parsing.IdName]int = map[parsing.IdName]int{
+	"void":   VoidIdx,
+	"string": StringIdx,
+	"int":    IntIdx,
+	"bool":   BoolIdx,
+	"u8":     U8Idx,
+	"s8":     S8Idx,
+	"u32":    U32Idx,
+	"s32":    S32Idx,
+	"u64":    U64Idx,
+	"s64":    S64Idx,
+}
+
 func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
-	switch name {
-	case "void":
-		return t.Builtins[VoidIdx]
-	case "string":
-		return t.Builtins[StringIdx]
-	case "int":
-		return t.Builtins[IntIdx]
-	case "bool":
-		return t.Builtins[BoolIdx]
-	case "u8":
-		return t.Builtins[U8Idx]
-	case "s8":
-		return t.Builtins[S8Idx]
-	case "s32":
-		return t.Builtins[S32Idx]
-	case "u32":
-		return t.Builtins[U32Idx]
-	case "s64":
-		return t.Builtins[S64Idx]
-	case "u64":
-		return t.Builtins[U64Idx]
+	idx, ok := builtinTypes[name]
+	if ok {
+		return t.Builtins[idx]
+	} else {
+		return nil
 	}
-	return nil
 }
 
 func (t *Typer) TypesCompatible(a TypeRecord, b TypeRecord) bool {
-	return (a == b) || (a.IsNumber() && b.IsNumber())
+	if (a == b) || (a.IsNumber() && b.IsNumber()) {
+		return true
+	}
+	aPointer, aIsPointer := a.(Pointer)
+	bPointer, bIsPointer := b.(Pointer)
+	if aIsPointer && bIsPointer {
+		if isVoidPointer(aPointer) || isVoidPointer(bPointer) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVoidPointer(pointer Pointer) bool {
+	_, ok := pointer.ToWhat.(Void)
+	return ok
 }
 
 func BuildArray(contained TypeRecord, nesting []int) TypeRecord {
@@ -350,6 +384,7 @@ func (t *Typer) TypeRecordFromDecl(decl parsing.TypeDecl) TypeRecord {
 
 const (
 	VoidIdx int = iota
+	VoidPtrIdx
 	StringIdx
 	IntIdx
 	BoolIdx
@@ -365,6 +400,7 @@ func NewTyper() *Typer {
 	var typer Typer
 	typer.Builtins = []TypeRecord{
 		Void{},
+		nil, // void pointer
 		String{},
 		Int{},
 		Boolean{},
@@ -375,6 +411,7 @@ func NewTyper() *Typer {
 		S64{},
 		U64{},
 	}
+	typer.Builtins[1] = BuildRecordWithIndirection(typer.Builtins[0], 1)
 	return &typer
 }
 
@@ -382,17 +419,21 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 	boolType := &typer.Builtins[BoolIdx]
 	voidType := &typer.Builtins[VoidIdx]
 	binTableReturn := BuildRecordWithIndirection(typer.Builtins[IntIdx], 1)
-	return &EnvRecord{
+	env := EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
-			"exit":      {Return: voidType, CallingConvention: SystemV},
-			"puts":      {Return: voidType, CallingConvention: SystemV},
-			"print_int": {Return: voidType, CallingConvention: SystemV},
-			"testbit":   {Return: boolType, CallingConvention: SystemV},
+			"exit":      {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}, CallingConvention: SystemV},
+			"puts":      {Return: voidType, Args: []TypeRecord{typer.Builtins[StringIdx]}, CallingConvention: SystemV},
+			"print_int": {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}, CallingConvention: SystemV},
+			"testbit":   {Return: boolType, Args: []TypeRecord{typer.Builtins[U64Idx], typer.Builtins[IntIdx]}, CallingConvention: SystemV},
 			"binToDecTable": {
 				Return:            &binTableReturn,
 				CallingConvention: SystemV,
 			},
 		},
 	}
+	for name := range builtinTypes {
+		env.Types[name] = typer.mapToBuiltinType(name)
+	}
+	return &env
 }
