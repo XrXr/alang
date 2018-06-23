@@ -290,6 +290,14 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 	return typeTable, nil
 }
 
+func (t *Typer) IsUnsigned(record TypeRecord) bool {
+	switch record {
+	case t.Builtins[U8Idx], t.Builtins[U32Idx], t.Builtins[U64Idx]:
+		return true
+	}
+	return false
+}
+
 func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	switch val := val.(type) {
 	case int64, uint64, int:

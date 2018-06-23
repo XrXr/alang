@@ -1,14 +1,28 @@
 main :: proc () {
-	puts("addition\n")
+	puts("assigns\n")
 	big := 228282982198
-
 	var a s32
+	var small u8
+	var small_signed s8
+	var foo s64
+
+	a = -1
+	small = 255
+	a = small
+	print_int(a)
+
+	a = -1
+	small_signed = -123
+	a = small_signed
+	print_int(a)
+
+	puts("\naddition\n")
+
 	a = 626
 	print_int(a)
 	a += big
 	print_int(a)
 
-	var small s8
 	small = 232
 	small += big
 	print_int(small)
@@ -33,7 +47,7 @@ main :: proc () {
 	small -= big
 	print_int(small)
 
-	b := big
+	b = big
 	a = -382
 	b = b - a
 	print_int(b)
@@ -45,7 +59,6 @@ main :: proc () {
 
 	puts("\nmultiplication:\n")
 
-	var foo s64
 	foo = 251
 	a = -1234125
 	foo = foo * a

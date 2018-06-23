@@ -492,10 +492,9 @@ func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
 	if p.sizeof(sizingVar) > p.sizeof(extendee) {
 		tightFit := p.fittingRegisterName(extendee)
 		var mnemonic string
-		switch p.typeTable[extendee] {
-		case p.typer.Builtins[typing.U8Idx], p.typer.Builtins[typing.U32Idx], p.typer.Builtins[typing.U64Idx]:
+		if p.typer.IsUnsigned(p.typeTable[extendee]) {
 			mnemonic = "movzx"
-		default:
+		} else {
 			mnemonic = "movsx"
 		}
 		p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, extendedReg, tightFit))
@@ -532,16 +531,33 @@ func (p *procGen) zeroOutVar(vn int) {
 	p.issueCommand("call _intrinsic_zero_mem")
 }
 
+func (p *procGen) fitsInRegister(vn int) bool {
+	return p.sizeof(vn) <= 8
+}
+
 func (p *procGen) varVarCopy(dest int, source int) {
-	p.ensureInRegister(source)
-	switch {
-	case p.inRegister(dest):
-		p.regRegCommand("mov", dest, source)
-	case !p.inRegister(dest) && p.hasStackStroage(dest):
-		p.memRegCommand("mov", dest, source)
-	case !p.inRegister(dest) && !p.hasStackStroage(dest):
-		p.ensureInRegister(dest)
-		p.regRegCommand("mov", dest, source)
+	if p.fitsInRegister(source) {
+		p.ensureInRegister(source)
+		if p.inRegister(dest) {
+			if p.typeTable[dest].IsNumber() && p.typeTable[source].IsNumber() && p.sizeof(dest) > p.sizeof(source) {
+				sourceTightFit := p.fittingRegisterName(source)
+				destTightFit := p.fittingRegisterName(dest)
+				var mnemonic string
+				if p.typer.IsUnsigned(p.typeTable[source]) {
+					mnemonic = "movzx"
+				} else {
+					mnemonic = "movsx"
+				}
+				p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destTightFit, sourceTightFit))
+			} else {
+				p.regRegCommand("mov", dest, source)
+			}
+		} else {
+			p.ensureStackOffsetValid(dest)
+			p.memRegCommand("mov", dest, source)
+		}
+	} else {
+		panic("no not yet")
 	}
 }
 
@@ -912,7 +928,7 @@ func (p *procGen) generate() {
 				if p.registers.all[rax].occupiedBy != invalidVn {
 					panic("rax should've been freed up before the call")
 				}
-				if p.sizeof(retVar) > 0 && p.sizeof(retVar) <= 8 {
+				if p.sizeof(retVar) > 0 && p.fitsInRegister(retVar) {
 					if p.inRegister(retVar) {
 						p.releaseRegister(p.varStorage[retVar].currentRegister)
 					}
@@ -1159,7 +1175,7 @@ func (p *procGen) generate() {
 		case ir.Return:
 			returnExtra := opt.Extra.(ir.ReturnExtra)
 			retVar := returnExtra.Values[0]
-			if p.sizeof(retVar) <= 8 {
+			if p.fitsInRegister(retVar) {
 				p.issueCommand(fmt.Sprintf("mov %s, %s",
 					p.registers.all[rax].nameForSize(p.sizeof(retVar)), p.varOperand(retVar)))
 			} else if p.sizeof(retVar) > 16 {
