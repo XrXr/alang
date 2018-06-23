@@ -157,7 +157,7 @@ type procGen struct {
 	procRecord                typing.ProcRecord
 	typer                     *typing.Typer
 	callerProvidesReturnSpace bool
-	noNewStackStorage         bool // used by morphToState
+	noNewStackStorage         bool // checked by loadRegisterWithVar
 	currentFrameSize          int
 	nextLabelId               int
 	stackBoundVars            []int
@@ -397,7 +397,6 @@ func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 			p.changeRegisterBookKeepking(vn, register)
 		} else {
 			// swap currentTenant to stack
-			// only used by morphToState
 			if !p.noNewStackStorage {
 				p.ensureStackOffsetValid(currentTenant)
 			}
@@ -502,22 +501,23 @@ func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
 	return extendedReg
 }
 
-func (p *procGen) zeroOutVar(vn int) {
-	// free up rdi and rcx
-	for _, target := range [...]registerId{rdi, rcx} {
+// make sure that registers passed in all have no tenant
+func (p *procGen) freeUpRegisters(targetList ...registerId) {
+	for _, target := range targetList {
 		currentTenant := p.registers.all[target].occupiedBy
 		if currentTenant == invalidVn {
 			continue
 		}
 		foundDifferentRegister := false
+	searchForRegister:
 		for reg := range p.registers.available {
-			switch reg := registerId(reg); reg {
-			case rdi, rcx:
-				continue
-			default:
-				foundDifferentRegister = true
-				p.loadRegisterWithVar(reg, currentTenant)
+			for _, otherTarget := range targetList {
+				if otherTarget == registerId(reg) {
+					continue searchForRegister
+				}
 			}
+			foundDifferentRegister = true
+			p.loadRegisterWithVar(registerId(reg), currentTenant)
 		}
 		if !foundDifferentRegister {
 			p.ensureStackOffsetValid(currentTenant)
@@ -525,6 +525,11 @@ func (p *procGen) zeroOutVar(vn int) {
 			p.releaseRegister(target)
 		}
 	}
+
+}
+
+func (p *procGen) zeroOutVar(vn int) {
+	p.freeUpRegisters(rdi, rcx)
 	p.ensureStackOffsetValid(vn)
 	p.loadVarOffsetIntoReg(vn, rdi)
 	p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(vn)))
@@ -557,7 +562,19 @@ func (p *procGen) varVarCopy(dest int, source int) {
 			p.memRegCommand("mov", dest, source)
 		}
 	} else {
-		panic("no not yet")
+		if p.sizeof(dest) != p.sizeof(source) {
+			panic("Assignment of two non-register-size vars. This shouldn't have made it past type checking")
+		}
+		if p.varStorage[source].rbpOffset == 0 {
+			panic("Trying to copy from a non-register-size variable that doesn't have stack storage")
+		}
+		p.ensureStackOffsetValid(dest)
+
+		p.freeUpRegisters(rsi, rdi, rcx)
+		p.loadVarOffsetIntoReg(source, rsi)
+		p.loadVarOffsetIntoReg(dest, rdi)
+		p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(source)))
+		p.issueCommand("call _intrinsic_memcpy")
 	}
 }
 
@@ -1064,27 +1081,45 @@ func (p *procGen) generate() {
 			default:
 				panic("must be array or pointer to an array")
 			}
-		case ir.IndirectWrite:
+		case ir.IndirectLoad, ir.IndirectWrite:
 			p.swapStackBoundVars()
-			ptr := opt.Left()
-			data := opt.Right()
-			p.ensureInRegister(ptr)
-			p.ensureInRegister(data)
+			var ptr, data int
+			var commandTemplate string
+			if opt.Type == ir.IndirectLoad {
+				ptr = opt.In()
+				data = opt.Out()
+				commandTemplate = "mov %s, %s [%s]"
+			} else {
+				ptr = opt.Left()
+				data = opt.Right()
+				commandTemplate = "mov %[2]s [%[3]s], %[1]s"
+			}
 			pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
-			prefix := prefixForSize(pointedToSize)
-			p.issueCommand(fmt.Sprintf("mov %s [%s], %s",
-				prefix, p.registerOf(ptr).qwordName, p.registerOf(data).nameForSize(pointedToSize)))
-		case ir.IndirectLoad:
-			p.swapStackBoundVars()
-			in := opt.In()
-			out := opt.Out()
-			pointedToSize := p.typeTable[opt.In()].(typing.Pointer).ToWhat.Size()
-
-			p.ensureInRegister(in)
-			p.ensureInRegister(out)
-			prefix := prefixForSize(pointedToSize)
-			p.issueCommand(fmt.Sprintf("mov %s, %s [%s]",
-				p.registerOf(out).nameForSize(pointedToSize), prefix, p.registerOf(in).qwordName))
+			p.ensureInRegister(ptr)
+			if p.fitsInRegister(data) {
+				p.ensureInRegister(data)
+				dataRegName := p.registerOf(data).nameForSize(pointedToSize)
+				prefix := prefixForSize(pointedToSize)
+				ptrRegName := p.registerOf(ptr).qwordName
+				p.issueCommand(fmt.Sprintf(commandTemplate, dataRegName, prefix, ptrRegName))
+			} else {
+				if p.sizeof(data) != pointedToSize {
+					panic("indirect read/write with inconsistent sizes")
+				}
+				memcpy := func(dataDest registerId, ptrDest registerId) {
+					p.freeUpRegisters(rsi, rdi, rcx)
+					p.ensureStackOffsetValid(data)
+					p.loadVarOffsetIntoReg(data, dataDest)
+					p.movRegReg(ptrDest, p.varStorage[ptr].currentRegister)
+					p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
+					p.issueCommand("call _intrinsic_memcpy")
+				}
+				if opt.Type == ir.IndirectLoad {
+					memcpy(rdi, rsi)
+				} else {
+					memcpy(rsi, rdi)
+				}
+			}
 		case ir.StructMemberPtr:
 			out := opt.Out()
 			in := opt.In()
@@ -1185,10 +1220,13 @@ func (p *procGen) generate() {
 				if p.inRegister(retVar) {
 					panic("a var this big shouldn't be in register")
 				}
+				p.noNewStackStorage = true
+				p.freeUpRegisters(rsi, rdi, rcx)
 				p.issueCommand("mov rdi, qword [rbp-8]")
 				p.loadVarOffsetIntoReg(retVar, rsi)
 				p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
-				p.issueCommand("rep movsb")
+				p.issueCommand("call _intrinsic_memcpy")
+				p.noNewStackStorage = false
 			} else {
 				panic("Can't handle return where 8 < size <= 16 yet")
 			}

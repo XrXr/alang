@@ -15,12 +15,12 @@
  ✔ return values @done (18-06-11 20:23)
  ✔ continues/breaks @done (18-06-11 20:23)
  ✔ ensureVarInRegister should take multiple arguments and make sure it doesn't swap a var that it just brought into a register @done (18-06-20 12:50)
- ☐ zero out plain declarations
- ☐ :morecopies copying full structs
+ ✔ zero out plain declarations @done (18-06-23 20:51)
+ ✔ :morecopies copying full structs @done (18-06-23 20:51)
  ✔ factor out signExtendToMatchSize @done (18-06-19 20:07)
  ☐ do some reserach about signedModulous -- how do we do s32 *= s64? what if on the right side the sign bit is set?
  ☐ we need a print_signed_int
- ☐ proc argument type checking
+ ✔ proc argument type checking @done (18-06-23 20:51)
  ☐ proc overloading?
  ✔ complex expressions like if (rettrue() && retfalse() == false) @done (18-06-11 20:24)
  □ increment/decrement
