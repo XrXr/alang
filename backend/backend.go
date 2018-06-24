@@ -532,9 +532,9 @@ func (p *procGen) freeUpRegisters(allocateNewStackStorage bool, targetList ...re
 	}
 }
 
-func (p *procGen) zeroOutVar(vn int) {
-	p.freeUpRegisters(true, rdi, rcx)
+func (p *procGen) zeroOutVarOnStack(vn int) {
 	p.ensureStackOffsetValid(vn)
+	p.freeUpRegisters(true, rdi, rcx)
 	p.loadVarOffsetIntoReg(vn, rdi)
 	p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(vn)))
 	p.issueCommand("call _intrinsic_zero_mem")
@@ -710,13 +710,17 @@ func (p *procGen) generate() {
 				p.staticDataBuf.ReadFrom(&buf)
 				p.staticDataBuf.WriteRune('\n')
 			case parsing.TypeDecl, parsing.LiteralType:
+				// :structinreg
 				out := opt.Out()
+				_, isStruct := p.typeTable[out].(typing.StructRecord)
 				freeReg, freeRegExists := p.registers.nextAvailable()
-				if freeRegExists && p.sizeof(out) < 8 {
+				if !isStruct && p.fitsInRegister(out) && freeRegExists {
 					p.loadRegisterWithVar(freeReg, out)
-					p.issueCommand(fmt.Sprintf("mov %s, 0", p.registers.all[freeReg].qwordName))
+				}
+				if p.inRegister(out) {
+					p.issueCommand(fmt.Sprintf("mov %s, 0", p.registerOf(out).qwordName))
 				} else {
-					p.zeroOutVar(out)
+					p.zeroOutVarOnStack(out)
 				}
 			default:
 				parsing.Dump(value)
@@ -859,8 +863,9 @@ func (p *procGen) generate() {
 			if typeRecord, callToType := p.env.Types[parsing.IdName(extra.Name)]; callToType {
 				switch typeRecord.(type) {
 				case *typing.StructRecord:
-					// making a struct
-					p.zeroOutVar(opt.Out())
+					// making a struct. We never put structs in registers even if they fit
+					// :structinreg
+					p.zeroOutVarOnStack(opt.Out())
 				default:
 					// cast
 					p.varVarCopy(opt.Out(), extra.ArgVars[0])
