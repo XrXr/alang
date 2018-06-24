@@ -510,9 +510,9 @@ func (p *procGen) freeUpRegisters(allocateNewStackStorage bool, targetList ...re
 		}
 		foundDifferentRegister := false
 	searchForRegister:
-		for reg := range p.registers.available {
+		for _, reg := range p.registers.available {
 			for _, otherTarget := range targetList {
-				if otherTarget == registerId(reg) {
+				if otherTarget == reg {
 					continue searchForRegister
 				}
 			}
