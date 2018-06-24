@@ -184,12 +184,10 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if isVoidPointer(pointer) {
 			panic("Can't indirect a void pointer")
 		}
-		if pointer.ToWhat != typeForData {
-			if !(pointer.ToWhat == t.Builtins[U8Idx] && typeForData == t.Builtins[IntIdx]) {
-				parsing.Dump(pointer.ToWhat)
-				parsing.Dump(typeForData)
-				panic("Type mismatch")
-			}
+		if !t.TypesCompatible(pointer.ToWhat, typeForData) {
+			parsing.Dump(pointer.ToWhat)
+			parsing.Dump(typeForData)
+			panic("Type mismatch")
 		}
 	case ir.IndirectLoad:
 		ptrType := typeTable[opt.In()]
