@@ -517,7 +517,8 @@ func (p *procGen) freeUpRegisters(allocateNewStackStorage bool, targetList ...re
 				}
 			}
 			foundDifferentRegister = true
-			p.loadRegisterWithVar(registerId(reg), currentTenant)
+			p.loadRegisterWithVar(reg, currentTenant)
+			break
 		}
 		if !foundDifferentRegister {
 			if allocateNewStackStorage {
