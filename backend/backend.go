@@ -185,7 +185,7 @@ func (f *fullVarState) inRegister(vn int) bool {
 	return f.varStorage[vn].currentRegister > -1
 }
 
-func (f *fullVarState) hasStackStroage(vn int) bool {
+func (f *fullVarState) hasStackStorage(vn int) bool {
 	// note that rbpOffset might be negative in case of arguments
 	return f.varStorage[vn].rbpOffset != 0
 }
@@ -365,7 +365,7 @@ func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 	vnRegister := p.varStorage[vn].currentRegister
 	defer func() {
 		// move the var from stack to reg, if it's on stack
-		if !vnAlreadyInRegister && p.hasStackStroage(vn) {
+		if !vnAlreadyInRegister && p.hasStackStorage(vn) {
 			p.regMemCommand("mov", vn, vn)
 		}
 	}()
@@ -400,7 +400,7 @@ func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 			if !p.noNewStackStorage {
 				p.ensureStackOffsetValid(currentTenant)
 			}
-			if p.hasStackStroage(currentTenant) {
+			if p.hasStackStorage(currentTenant) {
 				p.memRegCommand("mov", currentTenant, currentTenant)
 			}
 			p.changeRegisterBookKeepking(vn, register)
@@ -468,13 +468,13 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 			continue
 		}
 		if theirOccupiedBy == invalidVn && ourOccupiedBy != invalidVn {
-			if targetState.hasStackStroage(ourOccupiedBy) {
+			if targetState.hasStackStorage(ourOccupiedBy) {
 				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
 				p.memRegCommand("mov", ourOccupiedBy, ourOccupiedBy)
 			}
 		}
 		if theirOccupiedBy != invalidVn && ourOccupiedBy != invalidVn {
-			if targetState.hasStackStroage(ourOccupiedBy) {
+			if targetState.hasStackStorage(ourOccupiedBy) {
 				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
 			}
 			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
@@ -502,7 +502,7 @@ func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
 }
 
 // make sure that registers passed in all have no tenant
-func (p *procGen) freeUpRegisters(targetList ...registerId) {
+func (p *procGen) freeUpRegisters(allocateNewStackStorage bool, targetList ...registerId) {
 	for _, target := range targetList {
 		currentTenant := p.registers.all[target].occupiedBy
 		if currentTenant == invalidVn {
@@ -520,16 +520,19 @@ func (p *procGen) freeUpRegisters(targetList ...registerId) {
 			p.loadRegisterWithVar(registerId(reg), currentTenant)
 		}
 		if !foundDifferentRegister {
-			p.ensureStackOffsetValid(currentTenant)
-			p.memRegCommand("mov", currentTenant, currentTenant)
+			if allocateNewStackStorage {
+				p.ensureStackOffsetValid(currentTenant)
+			}
+			if p.hasStackStorage(currentTenant) {
+				p.memRegCommand("mov", currentTenant, currentTenant)
+			}
 			p.releaseRegister(target)
 		}
 	}
-
 }
 
 func (p *procGen) zeroOutVar(vn int) {
-	p.freeUpRegisters(rdi, rcx)
+	p.freeUpRegisters(true, rdi, rcx)
 	p.ensureStackOffsetValid(vn)
 	p.loadVarOffsetIntoReg(vn, rdi)
 	p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(vn)))
@@ -570,7 +573,7 @@ func (p *procGen) varVarCopy(dest int, source int) {
 		}
 		p.ensureStackOffsetValid(dest)
 
-		p.freeUpRegisters(rsi, rdi, rcx)
+		p.freeUpRegisters(true, rsi, rdi, rcx)
 		p.loadVarOffsetIntoReg(source, rsi)
 		p.loadVarOffsetIntoReg(dest, rdi)
 		p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(source)))
@@ -817,7 +820,7 @@ func (p *procGen) generate() {
 				rRegLeftSize := p.signOrZeroExtendIfNeeded(r, l)
 				p.issueCommand(fmt.Sprintf("idiv %s", rRegLeftSize))
 			} else {
-				if !p.hasStackStroage(r) {
+				if !p.hasStackStorage(r) {
 					panic("operand to div doens't have stack offset nor is it in register. Where is the value?")
 				}
 				p.issueCommand(fmt.Sprintf("idiv %s", p.stackOperand(r)))
@@ -855,8 +858,10 @@ func (p *procGen) generate() {
 			if typeRecord, callToType := p.env.Types[parsing.IdName(extra.Name)]; callToType {
 				switch typeRecord.(type) {
 				case *typing.StructRecord:
+					// making a struct
 					p.zeroOutVar(opt.Out())
 				default:
+					// cast
 					p.varVarCopy(opt.Out(), extra.ArgVars[0])
 				}
 			} else {
@@ -869,10 +874,6 @@ func (p *procGen) generate() {
 				}
 
 				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
-				if provideReturnStorage {
-					p.ensureStackOffsetValid(retVar)
-					p.loadVarOffsetIntoReg(retVar, rdi)
-				}
 				realArgsPassedInReg := 0
 				for i, arg := range extra.ArgVars {
 					if provideReturnStorage {
@@ -917,8 +918,7 @@ func (p *procGen) generate() {
 					}
 				}
 
-				// the first part of this array is the same as paramPassingRegOrder for checking
-				// if we need to save a var that is in a param-passing register to stack
+				// the first part of this array is the same as paramPassingRegOrder
 				regsThatGetDestroyed := [...]registerId{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
 				for _, reg := range regsThatGetDestroyed {
 					owner := p.registers.all[reg].occupiedBy
@@ -929,6 +929,11 @@ func (p *procGen) generate() {
 						}
 						p.releaseRegister(reg)
 					}
+				}
+
+				if provideReturnStorage {
+					p.ensureStackOffsetValid(retVar)
+					p.loadVarOffsetIntoReg(retVar, rdi)
 				}
 
 				if procRecord.IsForeign {
@@ -1107,7 +1112,7 @@ func (p *procGen) generate() {
 					panic("indirect read/write with inconsistent sizes")
 				}
 				memcpy := func(dataDest registerId, ptrDest registerId) {
-					p.freeUpRegisters(rsi, rdi, rcx)
+					p.freeUpRegisters(true, rsi, rdi, rcx)
 					p.ensureStackOffsetValid(data)
 					p.loadVarOffsetIntoReg(data, dataDest)
 					p.movRegReg(ptrDest, p.varStorage[ptr].currentRegister)
@@ -1220,13 +1225,11 @@ func (p *procGen) generate() {
 				if p.inRegister(retVar) {
 					panic("a var this big shouldn't be in register")
 				}
-				p.noNewStackStorage = true
-				p.freeUpRegisters(rsi, rdi, rcx)
+				p.freeUpRegisters(false, rsi, rdi, rcx)
 				p.issueCommand("mov rdi, qword [rbp-8]")
 				p.loadVarOffsetIntoReg(retVar, rsi)
 				p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
 				p.issueCommand("call _intrinsic_memcpy")
-				p.noNewStackStorage = false
 			} else {
 				panic("Can't handle return where 8 < size <= 16 yet")
 			}
