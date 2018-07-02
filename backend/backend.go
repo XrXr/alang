@@ -539,6 +539,11 @@ func (p *procGen) fitsInRegister(vn int) bool {
 	return p.sizeof(vn) <= 8
 }
 
+func (p *procGen) perfectRegSize(vn int) bool {
+	size := p.sizeof(vn)
+	return size == 8 || size == 4 || size == 2 || size == 1
+}
+
 func (p *procGen) varVarCopy(dest int, source int) {
 	if p.fitsInRegister(source) {
 		p.ensureInRegister(source)
@@ -1166,34 +1171,57 @@ func (p *procGen) generate() {
 			out := opt.Out()
 			baseType := p.typeTable[in]
 			outSize := p.sizeof(out)
-			p.ensureInRegister(out)
-			outReg := p.registerOf(out)
 			fieldName := opt.Extra.(string)
+			if p.perfectRegSize(out) {
+				p.ensureInRegister(out)
+				outReg := p.registerOf(out)
 
-			switch baseType := baseType.(type) {
-			case typing.Pointer:
-				p.ensureInRegister(in)
-				// p.ensureInRegister(in, out)
-				inReg := p.registerOf(in)
-				record := baseType.ToWhat.(*typing.StructRecord)
-				p.issueCommand(fmt.Sprintf("mov %s, %s [%s+%d]",
-					outReg.nameForSize(outSize), prefixForSize(outSize), inReg.qwordName, record.Members[fieldName].Offset))
-			case *typing.StructRecord:
-				p.ensureStackOffsetValid(in)
-				structOffset := p.varStorage[in].rbpOffset
-				memberOffset := baseType.Members[fieldName].Offset
-				p.issueCommand(fmt.Sprintf("mov %s, %s [rbp-%d+%d]",
-					outReg.nameForSize(outSize), prefixForSize(outSize), structOffset, memberOffset))
-			case typing.String:
-				p.ensureInRegister(in)
-				switch fieldName {
-				case "data":
-					p.issueCommand(fmt.Sprintf("lea %s, [%s+8]", outReg.qwordName, p.registerOf(in).qwordName))
-				case "length":
-					p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+				switch baseType := baseType.(type) {
+				case typing.Pointer:
+					p.ensureInRegister(in)
+					// p.ensureInRegister(in, out)
+					inReg := p.registerOf(in)
+					record := baseType.ToWhat.(*typing.StructRecord)
+					p.issueCommand(fmt.Sprintf("mov %s, %s [%s+%d]",
+						outReg.nameForSize(outSize), prefixForSize(outSize), inReg.qwordName, record.Members[fieldName].Offset))
+				case *typing.StructRecord:
+					p.ensureStackOffsetValid(in)
+					structOffset := p.varStorage[in].rbpOffset
+					memberOffset := baseType.Members[fieldName].Offset
+					p.issueCommand(fmt.Sprintf("mov %s, %s [rbp-%d+%d]",
+						outReg.nameForSize(outSize), prefixForSize(outSize), structOffset, memberOffset))
+				case typing.String:
+					p.ensureInRegister(in)
+					switch fieldName {
+					case "data":
+						p.issueCommand(fmt.Sprintf("lea %s, [%s+8]", outReg.qwordName, p.registerOf(in).qwordName))
+					case "length":
+						p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+					}
+				default:
+					panic("unexpected input type for struct member load")
 				}
-			default:
-				panic("unexpected input type for struct member load")
+			} else {
+				p.ensureStackOffsetValid(out)
+				if p.inRegister(out) {
+					// :structinreg, we might need to swap from reg to stack here.
+				}
+				p.freeUpRegisters(true, rsi, rdi, rcx)
+				switch baseType := baseType.(type) {
+				case typing.Pointer:
+					p.ensureInRegister(in)
+					inReg := p.registerOf(in)
+					record := baseType.ToWhat.(*typing.StructRecord)
+					p.issueCommand(fmt.Sprintf("lea rsi, [%s+%d]", inReg.qwordName, record.Members[fieldName].Offset))
+				case *typing.StructRecord:
+					p.ensureStackOffsetValid(in)
+					structOffset := p.varStorage[in].rbpOffset
+					memberOffset := baseType.Members[fieldName].Offset
+					p.issueCommand(fmt.Sprintf("lea rsi, [rbp-%d+%d]", structOffset, memberOffset))
+				}
+				p.issueCommand(fmt.Sprintf("lea rdi, [rbp-%d]", p.varStorage[out].rbpOffset))
+				p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(out)))
+				p.issueCommand("call _intrinsic_memcpy")
 			}
 		case ir.Not:
 			setLabel := p.genLabel(".keep_zero")
@@ -1222,7 +1250,7 @@ func (p *procGen) generate() {
 		case ir.Return:
 			returnExtra := opt.Extra.(ir.ReturnExtra)
 			retVar := returnExtra.Values[0]
-			if p.fitsInRegister(retVar) {
+			if p.perfectRegSize(retVar) {
 				p.issueCommand(fmt.Sprintf("mov %s, %s",
 					p.registers.all[rax].nameForSize(p.sizeof(retVar)), p.varOperand(retVar)))
 			} else if p.sizeof(retVar) > 16 {
@@ -1238,7 +1266,7 @@ func (p *procGen) generate() {
 				p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
 				p.issueCommand("call _intrinsic_memcpy")
 			} else {
-				panic("Can't handle return where 8 < size <= 16 yet")
+				panic("Can't handle return where the data doesn't exactly fit a register or 8 < size <= 16 yet")
 			}
 			p.issueCommand("jmp .end_of_proc")
 		default:

@@ -6,6 +6,7 @@ import (
 	"github.com/XrXr/alang/frontend"
 	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
+	"reflect"
 )
 
 const (
@@ -339,14 +340,21 @@ func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
 	}
 }
 
+func pointerArrayConsistent(a Pointer, b Pointer) bool {
+	aArray, aPointsToArray := a.ToWhat.(Array)
+	return aPointsToArray && aArray.OfWhat == b.ToWhat
+}
+
 func (t *Typer) TypesCompatible(a TypeRecord, b TypeRecord) bool {
-	if (a == b) || (a.IsNumber() && b.IsNumber()) {
+	if reflect.DeepEqual(a, b) || (a.IsNumber() && b.IsNumber()) {
 		return true
 	}
 	aPointer, aIsPointer := a.(Pointer)
 	bPointer, bIsPointer := b.(Pointer)
 	if aIsPointer && bIsPointer {
 		if isVoidPointer(aPointer) || isVoidPointer(bPointer) {
+			return true
+		} else if pointerArrayConsistent(aPointer, bPointer) || pointerArrayConsistent(bPointer, aPointer) {
 			return true
 		}
 	}
@@ -431,11 +439,13 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 	boolType := &typer.Builtins[BoolIdx]
 	voidType := &typer.Builtins[VoidIdx]
 	binTableReturn := BuildRecordWithIndirection(typer.Builtins[IntIdx], 1)
+	u8Ptr := BuildRecordWithIndirection(typer.Builtins[U8Idx], 1)
 	env := EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
 			"exit":      {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}, CallingConvention: SystemV},
 			"puts":      {Return: voidType, Args: []TypeRecord{typer.Builtins[StringIdx]}, CallingConvention: SystemV},
+			"writes":    {Return: voidType, Args: []TypeRecord{u8Ptr, typer.Builtins[IntIdx]}, CallingConvention: SystemV},
 			"print_int": {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}, CallingConvention: SystemV},
 			"testbit":   {Return: boolType, Args: []TypeRecord{typer.Builtins[U64Idx], typer.Builtins[IntIdx]}, CallingConvention: SystemV},
 			"binToDecTable": {

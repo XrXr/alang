@@ -47,6 +47,14 @@ proc_puts:
 	syscall
 	ret
 
+proc_writes:
+	mov rdx, rsi
+	mov rsi, rdi
+	mov rax, 1
+	mov rdi, 1
+	syscall
+	ret
+
 proc_print_int:
 	push rbp
 	push rbx
