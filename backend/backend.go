@@ -45,9 +45,9 @@ const invalidVn int = -1
 const invalidRegister registerId = -1
 
 type registerInfo struct {
-	qwordName string // 64 bit
-	dwordName string // 32 bit
-	// wordName  string // 16 bit
+	qwordName  string // 64 bit
+	dwordName  string // 32 bit
+	wordName   string // 16 bit
 	byteName   string // 8 bit
 	occupiedBy int    // invalidVn if available
 }
@@ -58,6 +58,8 @@ func (r *registerInfo) nameForSize(size int) string {
 		return r.qwordName
 	case 4:
 		return r.dwordName
+	case 2:
+		return r.wordName
 	case 1:
 		return r.byteName
 	default:
@@ -75,6 +77,7 @@ func initRegisterBucket(bucket *registerBucket) {
 	for i, base := range baseNames {
 		bucket.all[i].qwordName = "r" + base
 		bucket.all[i].dwordName = "e" + base
+		bucket.all[i].wordName = base
 		bucket.all[i].byteName = base[0:1] + "l" // not correct for rsi and rdi. We adjust for those below
 	}
 	bucket.all[rsi].byteName = "sil"
@@ -82,6 +85,7 @@ func initRegisterBucket(bucket *registerBucket) {
 	for i := len(baseNames); i < len(bucket.all); i++ {
 		qwordName := fmt.Sprintf("r%d", i-len(baseNames)+8)
 		bucket.all[i].qwordName = qwordName
+		bucket.all[i].wordName = qwordName + "w"
 		bucket.all[i].dwordName = qwordName + "d"
 		bucket.all[i].byteName = qwordName + "b"
 	}
@@ -247,6 +251,8 @@ func (p *procGen) fittingRegisterName(vn int) string {
 	switch {
 	case size <= 1:
 		return reg.byteName
+	case size <= 2:
+		return reg.wordName
 	case size <= 4:
 		return reg.dwordName
 	case size <= 8:
@@ -263,6 +269,8 @@ func prefixForSize(size int) string {
 		prefix = "qword"
 	case 4:
 		prefix = "dword"
+	case 2:
+		prefix = "word"
 	case 1:
 		prefix = "byte"
 	default:
@@ -292,23 +300,10 @@ func (p *procGen) varOperand(vn int) string {
 	}
 }
 
-func (p *procGen) prefixRegisterAndOffset(memVar int, regVar int) (string, string, int) {
-	reg := p.registerOf(regVar)
-	var prefix string
-	var register string
-	switch p.typeTable[memVar].Size() {
-	case 1:
-		prefix = "byte"
-		register = reg.byteName
-	case 4:
-		prefix = "dword"
-		register = reg.dwordName
-	case 8:
-		prefix = "qword"
-		register = reg.qwordName
-	default:
-		panic("should've checked the size")
-	}
+func (p *procGen) rwInfoSizedToMem(memVar int, regVar int) (string, string, int) {
+	memSize := p.sizeof(memVar)
+	prefix := prefixForSize(memSize)
+	register := p.registerOf(regVar).nameForSize(memSize)
 	offset := p.varStorage[memVar].rbpOffset
 	if offset == 0 {
 		panic("tried to use the stack address of a var when it doesn't have one")
@@ -317,12 +312,12 @@ func (p *procGen) prefixRegisterAndOffset(memVar int, regVar int) (string, strin
 }
 
 func (p *procGen) memRegCommand(command string, memVar int, regVar int) {
-	prefix, register, offset := p.prefixRegisterAndOffset(memVar, regVar)
+	prefix, register, offset := p.rwInfoSizedToMem(memVar, regVar)
 	p.issueCommand(fmt.Sprintf("%s %s[rbp-%d], %s", command, prefix, offset, register))
 }
 
 func (p *procGen) regMemCommand(command string, regVar int, memVar int) {
-	prefix, register, offset := p.prefixRegisterAndOffset(memVar, regVar)
+	prefix, register, offset := p.rwInfoSizedToMem(memVar, regVar)
 	p.issueCommand(fmt.Sprintf("%s %s, %s[rbp-%d]", command, register, prefix, offset))
 }
 
@@ -487,7 +482,7 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 
 // return the register of extendee sized to sizingVar
 func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
-	extendedReg := p.registerOf(extendee).nameForSize(p.sizeof(sizingVar))
+	extendeeReg := p.registerOf(extendee)
 	if p.sizeof(sizingVar) > p.sizeof(extendee) {
 		tightFit := p.fittingRegisterName(extendee)
 		var mnemonic string
@@ -496,9 +491,9 @@ func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
 		} else {
 			mnemonic = "movsx"
 		}
-		p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, extendedReg, tightFit))
+		p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, extendeeReg.qwordName, tightFit))
 	}
-	return extendedReg
+	return extendeeReg.nameForSize(p.sizeof(sizingVar))
 }
 
 // make sure that registers passed in all have no tenant
@@ -549,15 +544,21 @@ func (p *procGen) varVarCopy(dest int, source int) {
 		p.ensureInRegister(source)
 		if p.inRegister(dest) {
 			if p.typeTable[dest].IsNumber() && p.typeTable[source].IsNumber() && p.sizeof(dest) > p.sizeof(source) {
+				destReg := p.registerOf(dest)
 				sourceTightFit := p.fittingRegisterName(source)
-				destTightFit := p.fittingRegisterName(dest)
+				destRegName := destReg.qwordName
 				var mnemonic string
 				if p.typer.IsUnsigned(p.typeTable[source]) {
-					mnemonic = "movzx"
+					if p.sizeof(source) == 4 && p.sizeof(dest) == 8 {
+						mnemonic = "mov" // automatic in this case
+						destRegName = destReg.nameForSize(4)
+					} else {
+						mnemonic = "movzx"
+					}
 				} else {
 					mnemonic = "movsx"
 				}
-				p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destTightFit, sourceTightFit))
+				p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destRegName, sourceTightFit))
 			} else {
 				p.regRegCommand("mov", dest, source)
 			}
@@ -890,7 +891,7 @@ func (p *procGen) generate() {
 					}
 					realArgsPassedInReg++
 					switch p.typeTable[arg].Size() {
-					case 8, 4, 1:
+					case 8, 4, 2, 1:
 						p.loadRegisterWithVar(paramPassingRegOrder[i], arg)
 					default:
 						panic("Unsupported parameter size")
@@ -908,7 +909,7 @@ func (p *procGen) generate() {
 						arg := extra.ArgVars[i]
 						argSize := p.typeTable[arg].Size()
 						switch argSize {
-						case 8, 4, 1:
+						case 8, 4, 2, 1:
 							if p.inRegister(arg) {
 								p.issueCommand(fmt.Sprintf("push %s", p.registerOf(arg).qwordName))
 							} else {

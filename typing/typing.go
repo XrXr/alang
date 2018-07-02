@@ -290,7 +290,7 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 
 func (t *Typer) IsUnsigned(record TypeRecord) bool {
 	switch record {
-	case t.Builtins[U8Idx], t.Builtins[U32Idx], t.Builtins[U64Idx]:
+	case t.Builtins[U8Idx], t.Builtins[U32Idx], t.Builtins[U16Idx], t.Builtins[U64Idx]:
 		return true
 	}
 	return false
@@ -322,6 +322,8 @@ var builtinTypes map[parsing.IdName]int = map[parsing.IdName]int{
 	"bool":   BoolIdx,
 	"u8":     U8Idx,
 	"s8":     S8Idx,
+	"u16":    U16Idx,
+	"s16":    S16Idx,
 	"u32":    U32Idx,
 	"s32":    S32Idx,
 	"u64":    U64Idx,
@@ -394,28 +396,32 @@ const (
 	StringIdx
 	IntIdx
 	BoolIdx
-	S8Idx
 	U8Idx
-	S32Idx
+	S8Idx
+	U16Idx
+	S16Idx
 	U32Idx
-	S64Idx
+	S32Idx
 	U64Idx
+	S64Idx
 )
 
 func NewTyper() *Typer {
 	var typer Typer
 	typer.Builtins = []TypeRecord{
 		Void{},
-		nil, // void pointer
+		nil, // void pointer. Filled in later.
 		String{},
 		Int{},
 		Boolean{},
-		S8{},
 		U8{},
-		S32{},
+		S8{},
+		U16{},
+		S16{},
 		U32{},
-		S64{},
+		S32{},
 		U64{},
+		S64{},
 	}
 	typer.Builtins[1] = BuildRecordWithIndirection(typer.Builtins[0], 1)
 	return &typer

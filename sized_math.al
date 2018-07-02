@@ -2,18 +2,31 @@ main :: proc () {
 	puts("assigns\n")
 	big := 228282982198
 	var a s32
-	var small u8
-	var small_signed s8
-	var foo s64
+	var dword u32
+	var word u16
+	var byte u8
+	var byte_signed s8
+	var full s64
 
+	// sign extension and zero extension
 	a = -1
-	small = 255
-	a = small
+	byte = 255
+	a = byte
 	print_int(a)
 
 	a = -1
-	small_signed = -123
-	a = small_signed
+	word = 65535
+	a = word
+	print_int(a)
+
+	full = -1
+	dword = 4294967295
+	full = dword
+	print_int(full)
+
+	a = -1
+	byte_signed = -123
+	a = byte_signed
 	print_int(a)
 
 	puts("\naddition\n")
@@ -23,18 +36,18 @@ main :: proc () {
 	a += big
 	print_int(a)
 
-	small = 232
-	small += big
-	print_int(small)
+	byte = 232
+	byte += big
+	print_int(byte)
 
 	b := big
 	a = -382
 	b = b + a
 	print_int(b)
 
-	small = -122
+	byte_signed = -122
 	b = big
-	b += small
+	b += byte_signed
 	print_int(b)
 
 	puts("\nsubtration:\n")
@@ -43,50 +56,55 @@ main :: proc () {
 	a -= big
 	print_int(a)
 
-	small = 232
-	small -= big
-	print_int(small)
+	byte = 232
+	byte -= big
+	print_int(byte)
 
 	b = big
 	a = -382
 	b = b - a
 	print_int(b)
 
-	small = -122
+	byte_signed = -122
 	b = big
-	b -= small
+	b -= byte_signed
 	print_int(b)
 
 	puts("\nmultiplication:\n")
 
-	foo = 251
+	full = 251
 	a = -1234125
-	foo = foo * a
-	print_int(foo)
+	full = full * a
+	print_int(full)
 
 	a = 251
-	small = -113
-	a = a * small
+	byte = 143
+	a = a * byte
 	print_int(a)
 
-	small = 82
-	small = small * big
+	a = 251
+	byte_signed = -112
+	a = a * byte_signed
+	print_int(a)
+
+	byte = 82
+	byte = byte * big
 	// the result is funny because after the multiply there is
 	// junk in the upper half of the register. It will be fixed when we type check function call arguments
-	print_int(small)
+	print_int(byte)
 
 	puts("\ndivision:\n")
 
-	small = 29
+	byte = 29
 	b = 3
-	small = small / b
-	print_int(small)
+	byte = byte / b
+	print_int(byte)
 
 	a = 281924
     // 96 * 4 = 384 which is -128 in s8 with one extra bit. Testing sign extenion.
-	small = 96
-	small = small * 4
-	print_int(small)
-	a = a / small
+	byte_signed = 96
+	byte_signed = byte_signed * 4
+	print_int(byte_signed)
+	a = a / byte_signed
 	print_int(a)
 }
