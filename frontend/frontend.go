@@ -535,12 +535,16 @@ func Prune(block *OptBlock) {
 		}
 		if genesis.Type == ir.Assign {
 			changed = true
-			holes = append(holes, log.firstUseIdx)
+			usingAlias := false
 			ir.IterAndMutate(&block.Opts[log.secondUseIdx], func(vn *int) {
 				if *vn == genesis.Left() {
+					usingAlias = true
 					*vn = genesis.Right()
 				}
 			})
+			if usingAlias {
+				holes = append(holes, log.firstUseIdx)
+			}
 		}
 		if changed {
 			// DumpIr(*block)
