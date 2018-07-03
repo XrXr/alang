@@ -621,6 +621,7 @@ func (p *procGen) generate() {
 	}
 	varOffset := make([]int, p.block.NumberOfVars)
 	paramPassingRegOrder := [...]registerId{rdi, rsi, rdx, rcx, r8, r9}
+	preservedRegisters := [...]registerId{rbx, r15, r14, r13, r12}
 
 	{
 		paramOffset := -16
@@ -992,6 +993,9 @@ func (p *procGen) generate() {
 		case ir.StartProc:
 			fmt.Fprintf(p.out.buffer, "proc_%s:\n", opt.Extra.(string))
 			p.issueCommand("push rbp")
+			for _, reg := range preservedRegisters {
+				p.issueCommand(fmt.Sprintf("push %s", p.registers.all[reg].qwordName))
+			}
 			p.issueCommand("mov rbp, rsp")
 			if p.callerProvidesReturnSpace {
 				p.issueCommand("push rdi")
@@ -1002,13 +1006,17 @@ func (p *procGen) generate() {
 		case ir.EndProc:
 			fmt.Fprintln(p.out.buffer, ".end_of_proc:")
 			p.issueCommand("mov rsp, rbp")
+			for i := len(preservedRegisters) - 1; i >= 0; i-- {
+				reg := preservedRegisters[i]
+				p.issueCommand(fmt.Sprintf("pop %s", p.registers.all[reg].qwordName))
+			}
 			p.issueCommand("pop rbp")
 			p.issueCommand("ret")
 			framesize := p.currentFrameSize
-			if framesize%16 != 0 {
+			if effectiveFrameSize := framesize + 8*len(preservedRegisters); effectiveFrameSize%16 != 0 {
 				// align the stack for SystemV abi. Upon being called, we are 8 bytes misaligned.
 				// Since we push rbp in our prologue we align to 16 here
-				framesize += 16 - framesize%16
+				framesize += 16 - effectiveFrameSize%16
 			}
 			fmt.Fprintf(p.prologueBlock.buffer, "\tsub rsp, %d\n", framesize)
 		case ir.Compare:
