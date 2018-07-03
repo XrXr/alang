@@ -743,7 +743,7 @@ func (p *procGen) generate() {
 				mnemonic = "sub"
 			}
 			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
-			rRegIdx := p.ensureInRegister(opt.Right())
+			rRegId := p.ensureInRegister(opt.Right())
 			rReg := p.registerOf(opt.Right())
 
 			if leftIsPointer {
@@ -757,15 +757,15 @@ func (p *procGen) generate() {
 					tempReg, freeRegExists := p.registers.nextAvailable()
 					var tempRegTenant int
 					if !freeRegExists {
-						tempReg = rRegIdx
-						for tempReg == lRegIdx || tempReg == rRegIdx {
+						tempReg = rRegId
+						for tempReg == lRegIdx || tempReg == rRegId {
 							tempReg = (tempReg + 1) % numRegisters
 						}
 						tempRegTenant = p.registers.all[tempReg].occupiedBy
 						p.ensureStackOffsetValid(tempRegTenant)
 						p.memRegCommand("mov", tempRegTenant, tempRegTenant)
 					}
-					p.movRegReg(tempReg, rRegIdx)
+					p.movRegReg(tempReg, rRegId)
 					tempRegName := p.registers.all[tempReg].qwordName
 					p.issueCommand(fmt.Sprintf("imul %s, %d", tempRegName, pointedToSize))
 					p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.registerOf(opt.Left()).qwordName, tempRegName))
@@ -1280,6 +1280,7 @@ func (p *procGen) generate() {
 			}
 		}
 		ir.IterOverAllVars(opt, decommissionIfLastUse)
+		// p.trace(4)
 	}
 
 	for _, jump := range p.conditionalJumps {
@@ -1291,6 +1292,14 @@ func (p *procGen) generate() {
 		p.out = jump.out
 		p.fullVarState = jump.state
 		p.jump(p.block.Opts[jump.optIdx])
+	}
+}
+
+func (p *procGen) trace(vn int) {
+	if p.inRegister(vn) {
+		fmt.Fprintf(p.out.buffer, "\t\t\t; variable %d is in %s\n", vn, p.fittingRegisterName(vn))
+	} else {
+		fmt.Fprintf(p.out.buffer, "\t\t\t; variable %d is at rbp-%d\n", vn, p.varStorage[vn].rbpOffset)
 	}
 }
 

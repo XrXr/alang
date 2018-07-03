@@ -24,7 +24,7 @@ type procGen struct {
 	opts       []ir.Inst
 	nextVarNum int
 	rootScope  *scope
-	labelGen *LabelIdGen
+	labelGen   *LabelIdGen
 }
 
 func (p *procGen) addOpt(opts ...ir.Inst) {
@@ -83,6 +83,7 @@ func (s *scope) newVar() int {
 
 func (s *scope) newNamedVar(name parsing.IdName) int {
 	varNum := s.newVar()
+	println(string(name), "has vn", varNum)
 	s.varTable[name] = varNum
 	return varNum
 }
