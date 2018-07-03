@@ -18,31 +18,37 @@ import (
 // resolve all the type of members in structs and build the global environment
 func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*interface{}]*typing.StructRecord, workOrders []*frontend.ProcWorkOrder) error {
 	notDone := make(map[parsing.IdName][]*typing.TypeRecord)
+	addUnresolved := func(unresolvedRecord *typing.TypeRecord) {
+		unresolved := (*unresolvedRecord).(typing.Unresolved)
+		name := unresolved.Decl.Base
+		if name == "" {
+			name = unresolved.Decl.ArrayBase.Base
+			if name == "" {
+				panic("ice: nested array decl not parsed into proper format")
+			}
+		}
+		notDone[name] = append(notDone[name], unresolvedRecord)
+	}
 	for _, structRecord := range nodeToStruct {
 		for _, field := range structRecord.Members {
-			unresolved, isUnresolved := field.Type.(typing.Unresolved)
+			_, isUnresolved := field.Type.(typing.Unresolved)
 			if isUnresolved {
-				name := unresolved.Decl.Base
-				notDone[name] = append(notDone[name], &field.Type)
+				addUnresolved(&field.Type)
 			}
 		}
 	}
 	for _, order := range workOrders {
 		argRecords := make([]typing.TypeRecord, len(order.ProcDecl.Args))
 		returnType := typer.TypeRecordFromDecl(order.ProcDecl.Return)
-		if unresolved, returnIsUnresolved := returnType.(typing.Unresolved); returnIsUnresolved {
-			name := unresolved.Decl.Base
-			notDone[name] = append(notDone[name], &returnType)
+		if _, returnIsUnresolved := returnType.(typing.Unresolved); returnIsUnresolved {
+			addUnresolved(&returnType)
 		}
 
 		for i, argDecl := range order.ProcDecl.Args {
 			record := typer.TypeRecordFromDecl(argDecl.Type)
 			argRecords[i] = record
 			if _, recordIsUnresolved := record.(typing.Unresolved); recordIsUnresolved {
-				if argDecl.Type.ArrayBase != nil {
-					panic("Not implemented")
-				}
-				notDone[argDecl.Type.Base] = append(notDone[argDecl.Type.Base], &argRecords[i])
+				addUnresolved(&argRecords[i])
 			}
 		}
 		env.Procs[order.Name] = typing.ProcRecord{
@@ -58,18 +64,26 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		name := structNode.Name
 		for _, typeRecordPtr := range notDone[name] {
 			unresolved := (*typeRecordPtr).(typing.Unresolved)
-			*typeRecordPtr = typing.BuildRecordWithIndirection(structRecord, unresolved.Decl.LevelOfIndirection)
+			var record typing.TypeRecord
+			if unresolved.Decl.Base == "" {
+				record = typing.BuildRecordWithIndirection(structRecord, unresolved.Decl.ArrayBase.LevelOfIndirection)
+				record = typing.BuildArray(record, unresolved.Decl.ArraySizes)
+			} else {
+				record = structRecord
+			}
+			*typeRecordPtr = typing.BuildRecordWithIndirection(record, unresolved.Decl.LevelOfIndirection)
 		}
 		delete(notDone, name)
 		env.Types[structNode.Name] = structRecord
-	}
-	for _, structRecord := range nodeToStruct {
-		structRecord.ResolveSizeAndOffset()
 	}
 	if len(notDone) > 0 {
 		for typeName := range notDone {
 			return fmt.Errorf("%s does not name a type", typeName)
 		}
+	}
+	for _, structRecord := range nodeToStruct {
+		parsing.Dump(structRecord)
+		structRecord.ResolveSizeAndOffset()
 	}
 	return nil
 }

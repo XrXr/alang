@@ -31,8 +31,9 @@
  ✔ better typing for numbers. There is a hack in place for assigning an int to u8 atm @done (18-06-16 00:41)
  □ the whole Unresolved type situation
    ✔ procs that take parameters which reference structs -- they are left as unresolved type for now @done (18-06-11 20:25)
-   □ can't have array of structs/array of pointer to structs in your struct
-   ☐ can't do var foo *somestruct
+   ✔ can't have array of structs/array of pointer to structs in your struct @done (18-07-03 23:03)
+   ✔ can't do var foo *somestruct @done (18-07-03 23:03)
+   ☐ struct nesting
  ✔ better pruning @done (18-06-15 19:55)
  ☐ pruning2.al
  ☐ unsigned numbers
