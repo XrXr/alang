@@ -89,11 +89,23 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	case ir.AssignImm:
 		finalType := t.typeImmediate(opt.Extra)
 		if unresolved, isUnresolved := finalType.(Unresolved); isUnresolved {
-			structRecord, ok := env.Types[unresolved.Decl.Base]
-			if !ok {
-				panic(unresolved.Decl.Base + " does not name a type")
+			var declToResolve *parsing.TypeDecl
+			if unresolved.Decl.Base == "" {
+				declToResolve = unresolved.Decl.ArrayBase
+			} else {
+				declToResolve = &unresolved.Decl
+				if declToResolve.Base == "" {
+					panic("ArrayBase is an array decl. Nested arrays shouldn't parse like this")
+				}
 			}
-			finalType = BuildRecordWithIndirection(structRecord, unresolved.Decl.LevelOfIndirection)
+			structRecord, ok := env.Types[declToResolve.Base]
+			if !ok {
+				panic(string(declToResolve.Base + " does not name a type"))
+			}
+			finalType = BuildRecordWithIndirection(structRecord, declToResolve.LevelOfIndirection)
+			if unresolved.Decl.Base == "" {
+				finalType = BuildArray(finalType, unresolved.Decl.ArraySizes)
+			}
 		}
 		giveTypeOrVerify(opt.Out(), finalType)
 	case ir.TakeAddress:
@@ -388,6 +400,10 @@ func (t *Typer) TypeRecordFromDecl(decl parsing.TypeDecl) TypeRecord {
 	var base TypeRecord
 	if decl.ArrayBase != nil {
 		base = t.TypeRecordFromDecl(*decl.ArrayBase)
+		_, baseIsUnresolved := base.(Unresolved)
+		if baseIsUnresolved {
+			return Unresolved{Decl: decl}
+		}
 	} else {
 		base = t.mapToBuiltinType(decl.Base)
 	}
