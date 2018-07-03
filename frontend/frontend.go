@@ -422,9 +422,57 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 	return nil
 }
 
+func computePointer(scope *scope, node interface{}) int {
+	gen := scope.gen
+	switch n := node.(type) {
+	case parsing.ExprNode:
+		switch n.Op {
+		case parsing.ArrayAccess:
+			return computePointerRecursive(scope, node, nil)
+		case parsing.Dot:
+			left := computePointerRecursive(scope, n.Left, node)
+			result := scope.newVar()
+			fieldName := string(n.Right.(parsing.IdName))
+			gen.addOpt(ir.MakeBinaryInst(ir.StructMemberPtr, result, left, fieldName))
+			return result
+		}
+	}
+	panic("ice: computePointer given a node it doesn't know how to handle. Only ArrayAccess and Dot is supported")
+	return 0
+}
+
+func computePointerRecursive(scope *scope, node interface{}, parent interface{}) int {
+	gen := scope.gen
+	switch n := node.(type) {
+	case parsing.ExprNode:
+		switch n.Op {
+		case parsing.ArrayAccess:
+			left := computePointerRecursive(scope, n.Left, node)
+			position, err := genExpressionValue(scope, n.Right)
+			if err != nil {
+				panic(err)
+			}
+			arrayPointer := scope.newVar()
+			gen.addOpt(ir.MakeBinaryInst(ir.ArrayToPointer, arrayPointer, left, nil))
+			gen.addOpt(ir.MakeBinaryInst(ir.Add, arrayPointer, position, nil))
+			return arrayPointer
+		case parsing.Dot:
+			left := computePointerRecursive(scope, n.Left, node)
+			result := scope.newVar()
+			fieldName := string(n.Right.(parsing.IdName))
+			gen.addOpt(ir.MakeBinaryInst(ir.PeelStruct, result, left, fieldName))
+			return result
+		}
+	}
+	value, err := genExpressionValue(scope, node)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
 // return a var number which stores a pointer
 func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
-	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.ExprNode:
 		switch n.Op {
@@ -441,41 +489,8 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 				return 0, err
 			}
 			return pointerVar, nil
-		case parsing.ArrayAccess:
-			var array int
-			if left, leftIsExpr := n.Left.(parsing.ExprNode); leftIsExpr && left.Op == parsing.Dot {
-				array = scope.newVar()
-				// for example: foo.bar[324] = 234234
-				structBase, err := genExpressionValue(scope, left.Left)
-				if err != nil {
-					return 0, err
-				}
-				member := string(left.Right.(parsing.IdName))
-				gen.addOpt(ir.MakeBinaryInst(ir.StructMemberPtr, array, structBase, member))
-			} else {
-				var err error
-				array, err = genExpressionValue(scope, n.Left)
-				if err != nil {
-					return 0, err
-				}
-			}
-			position, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				return 0, err
-			}
-			dataPointer := scope.newVar()
-			gen.addOpt(ir.MakeBinaryInst(ir.ArrayToPointer, dataPointer, array, nil))
-			gen.addOpt(ir.MakeBinaryInst(ir.Add, dataPointer, position, nil))
-			return dataPointer, nil
-		case parsing.Dot:
-			structBase, err := genExpressionValue(scope, n.Left)
-			if err != nil {
-				return 0, err
-			}
-			member := string(n.Right.(parsing.IdName))
-			out := scope.newVar()
-			gen.addOpt(ir.MakeBinaryInst(ir.StructMemberPtr, out, structBase, member))
-			return out, nil
+		case parsing.ArrayAccess, parsing.Dot:
+			return computePointer(scope, node), nil
 		}
 	}
 	parsing.Dump(node)

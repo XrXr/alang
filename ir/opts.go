@@ -49,6 +49,7 @@ const (
 	IndirectLoad
 	StructMemberPtr
 	LoadStructMember
+	PeelStruct
 	Not
 	And
 	Or

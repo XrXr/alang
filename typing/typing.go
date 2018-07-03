@@ -114,6 +114,17 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			panic("type should be resolved at this point")
 		}
 		typeTable[opt.Out()] = Pointer{ToWhat: varType}
+	case ir.PeelStruct:
+		fieldName := opt.Extra.(string)
+		fieldType := checkAndFindStructMemberType(opt.In(), fieldName)
+		_, fieldIsPointer := fieldType.(Pointer)
+		var outType TypeRecord
+		if fieldIsPointer {
+			outType = fieldType
+		} else {
+			outType = Pointer{ToWhat: fieldType}
+		}
+		giveTypeOrVerify(opt.Out(), outType)
 	case ir.StructMemberPtr:
 		outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
 		outType = Pointer{ToWhat: outType}
@@ -235,15 +246,19 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			}
 		}
 		if !good {
-			return errors.New(" must be an array")
+			return errors.New("must be an array")
 		}
 	case ir.Add:
 		l, r := resolve(opt)
-		if _, lIsPointer := l.(Pointer); !(lIsPointer && r.IsNumber()) {
+		lPointer, lIsPointer := l.(Pointer)
+		if !(lIsPointer && r.IsNumber()) {
 			if !(l.IsNumber() && r.IsNumber()) {
 				fmt.Printf("%#v %#v\n", l, r)
 				return errors.New("add not available for these types")
 			}
+		}
+		if lIsPointer && isVoidPointer(lPointer) {
+			panic("Pointer arithmethic not allowed on void pointers")
 		}
 	case ir.Sub:
 		l, r := resolve(opt)

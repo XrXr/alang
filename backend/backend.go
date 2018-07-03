@@ -1174,6 +1174,37 @@ func (p *procGen) generate() {
 			default:
 				panic("Type checker didn't do its job")
 			}
+		case ir.PeelStruct:
+			// this instruction is an artifact of the fact that the frontend doesn't have type information when generating ir.
+			// every intermediate dot use this instruction to deal with both auto dereferencing and struct nesting.
+			in := opt.In()
+			out := opt.Out()
+			p.ensureInRegister(out)
+			outReg := p.registerOf(out)
+			baseType := p.typeTable[in]
+			fieldName := opt.Extra.(string)
+			switch baseType := baseType.(type) {
+			case typing.Pointer:
+				p.ensureInRegister(in)
+				inReg := p.registerOf(in)
+				record := baseType.ToWhat.(*typing.StructRecord)
+				memberOffset := record.Members[fieldName].Offset
+				_, memberIsPointer := record.Members[fieldName].Type.(typing.Pointer)
+				if memberIsPointer {
+					p.issueCommand(fmt.Sprintf("mov %s, qword [%s+%d]", outReg.qwordName, inReg.qwordName, memberOffset))
+				} else {
+					p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]", outReg.qwordName, inReg.qwordName, memberOffset))
+				}
+			case *typing.StructRecord:
+				memberOffset := baseType.Members[fieldName].Offset
+				_, memberIsPointer := baseType.Members[fieldName].Type.(typing.Pointer)
+				p.ensureStackOffsetValid(in)
+				if memberIsPointer {
+					p.issueCommand(fmt.Sprintf("mov %s, qword [rbp-%d+%d]", outReg.qwordName, p.varStorage[in].rbpOffset, memberOffset))
+				} else {
+					p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]", outReg.qwordName, p.varStorage[in].rbpOffset, memberOffset))
+				}
+			}
 		case ir.LoadStructMember:
 			in := opt.In()
 			out := opt.Out()
