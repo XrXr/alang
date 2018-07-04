@@ -48,7 +48,6 @@ const (
 	IndirectWrite
 	IndirectLoad
 	StructMemberPtr
-	LoadStructMember
 	PeelStruct
 	Not
 	And

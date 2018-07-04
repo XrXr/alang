@@ -132,9 +132,6 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			outType = Pointer{ToWhat: outType}
 			giveTypeOrVerify(opt.Out(), outType)
 		}
-	case ir.LoadStructMember:
-		outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
-		giveTypeOrVerify(opt.Out(), outType)
 	case ir.Call:
 		out := opt.Out()
 		extra := opt.Extra.(ir.CallExtra)
