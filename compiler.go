@@ -264,7 +264,7 @@ func main() {
 		ir := <-workOrder.Out
 		// frontend.DumpIr(ir)
 		frontend.Prune(&ir)
-		frontend.DumpIr(ir)
+		// frontend.DumpIr(ir)
 		// parsing.Dump(env)
 		procRecord := env.Procs[workOrder.Name]
 		typeTable, err := typer.InferAndCheck(env, &ir, procRecord)

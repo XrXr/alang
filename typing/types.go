@@ -101,6 +101,7 @@ type StructRecord struct {
 	MemberOrder            []*StructField
 	SizeAndOffsetsResolved bool
 	size                   int
+	alignment              int
 	normalType
 }
 
@@ -118,8 +119,16 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 	for i, field := range s.MemberOrder {
 		fieldSize := field.Type.Size()
 		alignment := fieldSize
-		if arrType, isArray := field.Type.(Array); isArray {
-			alignment = arrType.OfWhat.Size()
+		switch fieldType := field.Type.(type) {
+		case Array:
+			switch arrContentType := fieldType.OfWhat.(type) {
+			case *StructRecord:
+				alignment = arrContentType.alignment
+			default:
+				alignment = arrContentType.Size()
+			}
+		case *StructRecord:
+			alignment = fieldType.alignment
 		}
 		if i > 0 {
 			if (s.size % alignment) == 0 {
@@ -137,13 +146,14 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 	if (s.size % biggestAlignment) != 0 {
 		s.size = s.size - (s.size % biggestAlignment) + biggestAlignment
 	}
+	s.alignment = biggestAlignment
 
 	s.SizeAndOffsetsResolved = true
 	s.PrintLayout()
 }
 
 func (s *StructRecord) PrintLayout() {
-	fmt.Printf("struct \"%s\", size: %d\n", s.Name, s.size)
+	fmt.Printf("struct \"%s\", size: %d, alignment: %d\n", s.Name, s.size, s.alignment)
 	for _, field := range s.MemberOrder {
 		var name string
 		for _name, _field := range s.Members {
