@@ -407,11 +407,8 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 			}
 			gen.addOpt(ir.MakeBinaryInst(ir.TakeAddress, dest, vn, nil))
 		case parsing.Dot:
-			left, err := genExpressionValue(scope, n.Left)
-			if err != nil {
-				return err
-			}
-			gen.addOpt(ir.MakeBinaryInst(ir.LoadStructMember, dest, left, string(n.Right.(parsing.IdName))))
+			location := computePointer(scope, n)
+			gen.addOpt(ir.MakeBinaryInst(ir.IndirectLoad, dest, location, nil))
 		default:
 			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
 		}

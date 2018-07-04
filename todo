@@ -22,7 +22,7 @@
  ☐ be less barbaric about saving registers in proc prologue
  ☐ &structA.field
  ☐ &arr[409]
- ☐ arr[533].dkd = 300
+ ✔ arr[533].dkd = 300 @done (18-07-04 15:11)
  ☐ we need a print_signed_int
  ✔ proc argument type checking @done (18-06-23 20:51)
  ☐ proc overloading?

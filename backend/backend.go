@@ -1109,6 +1109,11 @@ func (p *procGen) generate() {
 			}
 		case ir.IndirectLoad, ir.IndirectWrite:
 			p.swapStackBoundVars()
+			_, isDataMemberOfString := p.typeTable[opt.In()].(typing.StringDataPointer)
+			if opt.Type == ir.IndirectLoad && isDataMemberOfString {
+				p.varVarCopy(opt.Out(), opt.In())
+				break
+			}
 			var ptr, data int
 			var commandTemplate string
 			if opt.Type == ir.IndirectLoad {
@@ -1155,10 +1160,24 @@ func (p *procGen) generate() {
 			fieldName := opt.Extra.(string)
 			switch baseType := baseType.(type) {
 			case typing.Pointer:
-				p.ensureInRegister(in)
-				record := baseType.ToWhat.(*typing.StructRecord)
-				p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]",
-					outReg.qwordName, p.registerOf(in).qwordName, record.Members[fieldName].Offset))
+				switch baseType.ToWhat.(type) {
+				case typing.String:
+					p.swapStackBoundVars()
+					p.ensureInRegister(out)
+					p.ensureInRegister(in)
+					switch fieldName {
+					case "data":
+						p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+						p.issueCommand(fmt.Sprintf("add %s, 8", outReg.qwordName))
+					case "length":
+						p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+					}
+				default:
+					p.ensureInRegister(in)
+					record := baseType.ToWhat.(*typing.StructRecord)
+					p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]",
+						outReg.qwordName, p.registerOf(in).qwordName, record.Members[fieldName].Offset))
+				}
 			case *typing.StructRecord:
 				p.ensureStackOffsetValid(in)
 				p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]",
@@ -1219,11 +1238,21 @@ func (p *procGen) generate() {
 				switch baseType := baseType.(type) {
 				case typing.Pointer:
 					p.ensureInRegister(in)
-					// p.ensureInRegister(in, out)
-					inReg := p.registerOf(in)
-					record := baseType.ToWhat.(*typing.StructRecord)
-					p.issueCommand(fmt.Sprintf("mov %s, %s [%s+%d]",
-						outReg.nameForSize(outSize), prefixForSize(outSize), inReg.qwordName, record.Members[fieldName].Offset))
+					switch baseType.ToWhat.(type) {
+					case typing.String:
+						switch fieldName {
+						case "data":
+							p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+							p.issueCommand(fmt.Sprintf("add %s, 8", outReg.qwordName))
+						case "length":
+							p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+						}
+					default:
+						inReg := p.registerOf(in)
+						record := baseType.ToWhat.(*typing.StructRecord)
+						p.issueCommand(fmt.Sprintf("mov %s, %s [%s+%d]",
+							outReg.nameForSize(outSize), prefixForSize(outSize), inReg.qwordName, record.Members[fieldName].Offset))
+					}
 				case *typing.StructRecord:
 					p.ensureStackOffsetValid(in)
 					structOffset := p.varStorage[in].rbpOffset
@@ -1365,7 +1394,7 @@ func findLastusage(block frontend.OptBlock) []int {
 		ir.IterOverAllVars(block.Opts[i], recordUsage)
 	}
 
-	// adjust for jumpbacks
+	// adjust for jumpbacks and indirect use of variable
 	labelToIdx := make(map[string]int)
 	for i, opt := range block.Opts {
 		if opt.Type == ir.Label {
@@ -1384,6 +1413,12 @@ func findLastusage(block frontend.OptBlock) []int {
 					}
 				})
 			}
+		}
+	}
+
+	for _, opt := range block.Opts {
+		if opt.Type == ir.TakeAddress {
+			lastUse[opt.In()] = lastUse[opt.Out()]
 		}
 	}
 

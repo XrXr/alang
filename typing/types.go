@@ -16,6 +16,12 @@ func (_ String) Size() int {
 	return 8
 }
 
+type StringDataPointer struct{ normalType }
+
+func (_ StringDataPointer) Size() int {
+	return 8
+}
+
 type Int struct{ integerType }
 
 func (_ Int) Size() int {

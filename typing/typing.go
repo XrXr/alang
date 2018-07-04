@@ -115,9 +115,23 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		}
 		giveTypeOrVerify(opt.Out(), outType)
 	case ir.StructMemberPtr:
-		outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
-		outType = Pointer{ToWhat: outType}
-		giveTypeOrVerify(opt.Out(), outType)
+		getDoublePtrToStringData := false
+		if opt.Extra.(string) == "data" {
+			switch inType := typeTable[opt.In()].(type) {
+			case Pointer:
+				_, ptrToString := inType.ToWhat.(String)
+				getDoublePtrToStringData = ptrToString
+			case String:
+				getDoublePtrToStringData = true
+			}
+		}
+		if getDoublePtrToStringData {
+			giveTypeOrVerify(opt.Out(), StringDataPointer{})
+		} else {
+			outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
+			outType = Pointer{ToWhat: outType}
+			giveTypeOrVerify(opt.Out(), outType)
+		}
 	case ir.LoadStructMember:
 		outType := checkAndFindStructMemberType(opt.In(), opt.Extra.(string))
 		giveTypeOrVerify(opt.Out(), outType)
@@ -207,14 +221,19 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if ptrType == nil {
 			panic("type should be resolved at this point")
 		}
-		pointer, isPointer := ptrType.(Pointer)
-		if !isPointer {
-			panic("Can't indirect a non pointer")
+		switch pointer := ptrType.(type) {
+		case StringDataPointer:
+			giveTypeOrVerify(opt.Out(), Pointer{ToWhat: t.Builtins[U8Idx]})
+		case Pointer:
+			pointer, isPointer := ptrType.(Pointer)
+			if !isPointer {
+				panic("Can't indirect a non pointer")
+			}
+			if isVoidPointer(pointer) {
+				panic("Can't indirect a void pointer")
+			}
+			giveTypeOrVerify(opt.Out(), pointer.ToWhat)
 		}
-		if isVoidPointer(pointer) {
-			panic("Can't indirect a void pointer")
-		}
-		giveTypeOrVerify(opt.Out(), pointer.ToWhat)
 	case ir.Assign:
 		_, r := resolve(opt)
 		if r == nil {

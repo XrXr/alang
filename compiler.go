@@ -91,11 +91,9 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 }
 
 func resolveStructSize(nodeToStruct map[*interface{}]*typing.StructRecord, embedGraph map[*typing.StructRecord]embedGraphNode) {
-	println(len(nodeToStruct))
 	for _, structRecord := range nodeToStruct {
 		_, embeds := embedGraph[structRecord]
 		if !embeds {
-			println("here we go")
 			structRecord.ResolveSizeAndOffset()
 		}
 	}
@@ -266,7 +264,7 @@ func main() {
 		ir := <-workOrder.Out
 		// frontend.DumpIr(ir)
 		frontend.Prune(&ir)
-		// frontend.DumpIr(ir)
+		frontend.DumpIr(ir)
 		// parsing.Dump(env)
 		procRecord := env.Procs[workOrder.Name]
 		typeTable, err := typer.InferAndCheck(env, &ir, procRecord)
