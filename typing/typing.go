@@ -89,18 +89,10 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	case ir.AssignImm:
 		finalType := t.typeImmediate(opt.Extra)
 		if unresolved, isUnresolved := finalType.(Unresolved); isUnresolved {
-			var declToResolve *parsing.TypeDecl
-			if unresolved.Decl.Base == "" {
-				declToResolve = unresolved.Decl.ArrayBase
-			} else {
-				declToResolve = &unresolved.Decl
-				if declToResolve.Base == "" {
-					panic("ArrayBase is an array decl. Nested arrays shouldn't parse like this")
-				}
-			}
-			structRecord, ok := env.Types[declToResolve.Base]
+			name := GrabUnresolvedName(unresolved)
+			structRecord, ok := env.Types[name]
 			if !ok {
-				panic(string(declToResolve.Base + " does not name a type"))
+				panic(string(name + " does not name a type"))
 			}
 			finalType = BuildRecordAccordingToUnresolved(structRecord, unresolved)
 		}
@@ -417,6 +409,17 @@ func BuildRecordAccordingToUnresolved(base TypeRecord, unresolved Unresolved) Ty
 		record = base
 	}
 	return BuildRecordWithIndirection(record, unresolved.Decl.LevelOfIndirection)
+}
+
+func GrabUnresolvedName(unresolved Unresolved) parsing.IdName {
+	name := unresolved.Decl.Base
+	if name == "" {
+		name = unresolved.Decl.ArrayBase.Base
+		if name == "" {
+			panic("ice: nested array decl not parsed into proper format")
+		}
+	}
+	return name
 }
 
 func (t *Typer) TypeRecordFromDecl(decl parsing.TypeDecl) TypeRecord {

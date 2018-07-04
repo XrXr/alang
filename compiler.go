@@ -15,25 +15,29 @@ import (
 	"os/exec"
 )
 
+type embedGraphNode struct {
+	visited  bool
+	embedees []*typing.StructRecord
+}
+
 // resolve all the type of members in structs and build the global environment
 func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*interface{}]*typing.StructRecord, workOrders []*frontend.ProcWorkOrder) error {
 	notDone := make(map[parsing.IdName][]*typing.TypeRecord)
 	addUnresolved := func(unresolvedRecord *typing.TypeRecord) {
 		unresolved := (*unresolvedRecord).(typing.Unresolved)
-		name := unresolved.Decl.Base
-		if name == "" {
-			name = unresolved.Decl.ArrayBase.Base
-			if name == "" {
-				panic("ice: nested array decl not parsed into proper format")
-			}
-		}
+		name := typing.GrabUnresolvedName(unresolved)
 		notDone[name] = append(notDone[name], unresolvedRecord)
 	}
+	embedGraphString := make(map[*typing.StructRecord][]parsing.IdName)
 	for _, structRecord := range nodeToStruct {
 		for _, field := range structRecord.Members {
-			_, isUnresolved := field.Type.(typing.Unresolved)
+			unresolved, isUnresolved := field.Type.(typing.Unresolved)
 			if isUnresolved {
 				addUnresolved(&field.Type)
+
+				if unresolved.Decl.LevelOfIndirection == 0 && (unresolved.Decl.ArrayBase == nil || unresolved.Decl.ArrayBase.LevelOfIndirection == 0) {
+					embedGraphString[structRecord] = append(embedGraphString[structRecord], typing.GrabUnresolvedName(unresolved))
+				}
 			}
 		}
 	}
@@ -74,11 +78,61 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 			return fmt.Errorf("%s does not name a type", typeName)
 		}
 	}
-	for _, structRecord := range nodeToStruct {
-		parsing.Dump(structRecord)
-		structRecord.ResolveSizeAndOffset()
+	embedGraph := make(map[*typing.StructRecord]embedGraphNode)
+	for record, stringEmbedees := range embedGraphString {
+		embedees := make([]*typing.StructRecord, len(stringEmbedees))
+		for i, name := range stringEmbedees {
+			embedees[i] = env.Types[name].(*typing.StructRecord)
+		}
+		embedGraph[record] = embedGraphNode{embedees: embedees}
 	}
+	resolveStructSize(nodeToStruct, embedGraph)
 	return nil
+}
+
+func resolveStructSize(nodeToStruct map[*interface{}]*typing.StructRecord, embedGraph map[*typing.StructRecord]embedGraphNode) {
+	println(len(nodeToStruct))
+	for _, structRecord := range nodeToStruct {
+		_, embeds := embedGraph[structRecord]
+		if !embeds {
+			println("here we go")
+			structRecord.ResolveSizeAndOffset()
+		}
+	}
+	if len(embedGraph) == 0 {
+		return
+	}
+	for {
+		done := true
+		for structRecord := range embedGraph {
+			if !structRecord.SizeAndOffsetsResolved {
+				done = false
+				for structRecord, node := range embedGraph {
+					node.visited = false
+					embedGraph[structRecord] = node
+				}
+				resolveStructSizeVisit(structRecord, embedGraph)
+				break
+			}
+		}
+		if done {
+			break
+		}
+	}
+}
+
+func resolveStructSizeVisit(structRecord *typing.StructRecord, embedGraph map[*typing.StructRecord]embedGraphNode) {
+	node := embedGraph[structRecord]
+	if node.visited {
+		panic("Embed cycle is not allowed")
+	}
+	node.visited = true
+	embedGraph[structRecord] = node
+	for _, embedee := range node.embedees {
+		resolveStructSizeVisit(embedee, embedGraph)
+	}
+
+	structRecord.ResolveSizeAndOffset()
 }
 
 func main() {
@@ -210,9 +264,9 @@ func main() {
 	var staticData []*bytes.Buffer
 	for _, workOrder := range workOrders {
 		ir := <-workOrder.Out
-		frontend.DumpIr(ir)
+		// frontend.DumpIr(ir)
 		frontend.Prune(&ir)
-		frontend.DumpIr(ir)
+		// frontend.DumpIr(ir)
 		// parsing.Dump(env)
 		procRecord := env.Procs[workOrder.Name]
 		typeTable, err := typer.InferAndCheck(env, &ir, procRecord)

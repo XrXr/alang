@@ -83,7 +83,7 @@ func (s *scope) newVar() int {
 
 func (s *scope) newNamedVar(name parsing.IdName) int {
 	varNum := s.newVar()
-	println(string(name), "has vn", varNum)
+	fmt.Println(string(name), "has vn", varNum)
 	s.varTable[name] = varNum
 	return varNum
 }

@@ -28,7 +28,6 @@ main :: proc () {
     print_int(arr[2].y)
 
     var room [2]shelf
-    roomPtr := &room
 
     room[0].id = 1
     room[1].id = 2
@@ -36,15 +35,16 @@ main :: proc () {
     room[0].foo[2].a = 79797979
     room[0].foo[2].c = 91919191
     room[0].foo[2].b.box[1].x = 565656
-    room[0].foo[2].b.back = roomPtr+1
-    puts("The id of room[1] is :")
+    room[0].foo[2].b.back = &room
+    room[0].foo[2].b.back += 1
+    puts("The id of room[1] is: ")
     print_int(room[0].foo[2].b.back.id)
-    puts("\n")
     // jump from shelf 0 to shelf 1 and then back again
-    room[0].foo[2].b.back.foo[1].b.back = roomPtr
-    room[0].foo[2].b.back.foo[1].b.back.foo[2].b.box[1].y = 726
+              room[0].foo[2].b.back.foo[1].b.back = &room
+              room[0].foo[2].b.back.foo[1].b.back.foo[2].b.box[1].y = 726
     print_int(room[0].foo[2].b.back.foo[1].b.back.foo[2].a)
     print_int(room[0].foo[2].b.back.foo[1].b.back.foo[2].c)
     print_int(room[0].foo[2].b.back.foo[1].b.back.foo[2].b.box[1].x)
+
     print_int(room[0].foo[2].b.box[1].y)
 }

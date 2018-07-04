@@ -90,10 +90,11 @@ type StructField struct {
 }
 
 type StructRecord struct {
-	Name        string
-	Members     map[string]*StructField
-	MemberOrder []*StructField
-	size        int
+	Name                   string
+	Members                map[string]*StructField
+	MemberOrder            []*StructField
+	SizeAndOffsetsResolved bool
+	size                   int
 	normalType
 }
 
@@ -102,6 +103,9 @@ func (s StructRecord) Size() int {
 }
 
 func (s *StructRecord) ResolveSizeAndOffset() {
+	if s.SizeAndOffsetsResolved {
+		return
+	}
 	s.MemberOrder[0].Offset = 0
 	s.size = 0
 	var biggestAlignment int
@@ -128,6 +132,7 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 		s.size = s.size - (s.size % biggestAlignment) + biggestAlignment
 	}
 
+	s.SizeAndOffsetsResolved = true
 	s.PrintLayout()
 }
 

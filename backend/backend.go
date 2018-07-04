@@ -351,6 +351,7 @@ func (p *procGen) swapStackBoundVars() {
 func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 	switch vnSize := p.sizeof(vn); {
 	case vnSize == 0:
+		panic("tried to put a zero-size var into a register")
 		return
 	case vnSize > 8:
 		panic("tried to put a var into a register when it doesn't fit")
@@ -412,9 +413,9 @@ func (p *procGen) ensureInRegister(vn int) registerId {
 	if reg = p.varStorage[vn].currentRegister; reg != invalidRegister {
 		return reg
 	}
-
 	reg, freeRegExists := p.registers.nextAvailable()
 	if freeRegExists {
+
 		p.loadRegisterWithVar(reg, vn)
 		return reg
 	} else {
@@ -655,7 +656,7 @@ func (p *procGen) generate() {
 		// Since we push rbp in our prologue we align to 16 here
 		framesize += 16 - framesize%16
 	}
-	backendDebug(framesize, p.typeTable, varOffset)
+	// backendDebug(framesize, p.typeTable, varOffset)
 	for optIdx, opt := range p.block.Opts {
 		addLine(fmt.Sprintf(".ir_line_%d:\n", optIdx))
 		for i := 0; i < len(p.dontSwap); i++ {
