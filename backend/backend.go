@@ -492,14 +492,7 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 func (p *procGen) signOrZeroExtendIfNeeded(extendee int, sizingVar int) string {
 	extendeeReg := p.registerOf(extendee)
 	if p.sizeof(sizingVar) > p.sizeof(extendee) {
-		tightFit := p.fittingRegisterName(extendee)
-		var mnemonic string
-		if p.typer.IsUnsigned(p.typeTable[extendee]) {
-			mnemonic = "movzx"
-		} else {
-			mnemonic = "movsx"
-		}
-		p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, extendeeReg.qwordName, tightFit))
+		p.signOrZeroExtendMov(extendee, extendee)
 	}
 	return extendeeReg.nameForSize(p.sizeof(sizingVar))
 }
@@ -552,26 +545,31 @@ func (p *procGen) perfectRegSize(vn int) bool {
 	return size == 8 || size == 4 || size == 2 || size == 1
 }
 
+func (p *procGen) signOrZeroExtendMov(dest int, source int) {
+	// caller is responsible for making sure that both vars are in register
+	destReg := p.registerOf(dest)
+	sourceTightFit := p.fittingRegisterName(source)
+	destRegName := destReg.qwordName
+	var mnemonic string
+	if p.typer.IsUnsigned(p.typeTable[source]) {
+		if p.sizeof(source) == 4 {
+			mnemonic = "mov" // upper 4 bytes are automatically zeroed
+			destRegName = destReg.nameForSize(4)
+		} else {
+			mnemonic = "movzx"
+		}
+	} else {
+		mnemonic = "movsx"
+	}
+	p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destRegName, sourceTightFit))
+}
+
 func (p *procGen) varVarCopy(dest int, source int) {
 	if p.fitsInRegister(source) {
 		p.ensureInRegister(source)
 		if p.inRegister(dest) {
 			if p.typeTable[dest].IsNumber() && p.typeTable[source].IsNumber() && p.sizeof(dest) > p.sizeof(source) {
-				destReg := p.registerOf(dest)
-				sourceTightFit := p.fittingRegisterName(source)
-				destRegName := destReg.qwordName
-				var mnemonic string
-				if p.typer.IsUnsigned(p.typeTable[source]) {
-					if p.sizeof(source) == 4 && p.sizeof(dest) == 8 {
-						mnemonic = "mov" // automatic in this case
-						destRegName = destReg.nameForSize(4)
-					} else {
-						mnemonic = "movzx"
-					}
-				} else {
-					mnemonic = "movsx"
-				}
-				p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destRegName, sourceTightFit))
+				p.signOrZeroExtendMov(dest, source)
 			} else {
 				p.regRegCommand("mov", dest, source)
 			}
