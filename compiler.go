@@ -58,7 +58,6 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		env.Procs[order.Name] = typing.ProcRecord{
 			&returnType,
 			argRecords,
-			typing.SystemV,
 			order.ProcDecl.IsForeign,
 		}
 	}
@@ -160,6 +159,9 @@ func main() {
 	var nodesForProc []*interface{}
 	env := typing.NewEnvRecord(typer)
 	structs := make(map[*interface{}]*typing.StructRecord)
+	if *libc {
+		addLibcExtrasToEnv(env, typer)
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -286,6 +288,9 @@ func main() {
 	}
 
 	io.WriteString(out, "; ---user code end---\n")
+	if *libc {
+		writeLibcExtras(out)
+	}
 	writeBuiltins(out)
 	writeDecimalTable(out)
 

@@ -956,7 +956,7 @@ func (p *procGen) generate() {
 				}
 
 				if procRecord.IsForeign {
-					p.issueCommand(fmt.Sprintf("call %s", extra.Name))
+					p.issueCommand(fmt.Sprintf("call %s  wrt ..plt", extra.Name))
 				} else {
 					p.issueCommand(fmt.Sprintf("call proc_%s", extra.Name))
 				}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/XrXr/alang/typing"
 	"io"
 )
 
@@ -16,13 +17,21 @@ _start:
 
 func writeLibcPrologue(out io.Writer) {
 	// sub rsp, 8 to align rsp
-	fmt.Fprintln(out, `global main
+	fmt.Fprintln(out, `DEFAULT REL
+global main
 	section .text
 main:
 	sub rsp, 8
 	call proc_main
 	xor rax, rax
 	add rsp, 8
+	ret`)
+}
+
+func writeLibcExtras(out io.Writer) {
+	fmt.Fprintln(out, `extern environ
+proc_environ:
+	mov rax, [rel environ]
 	ret`)
 }
 
@@ -206,4 +215,9 @@ _binToDecTable:
 proc_binToDecTable:
 	mov rax, _binToDecTable
 	ret`)
+}
+
+func addLibcExtrasToEnv(env *typing.EnvRecord, typer *typing.Typer) {
+	environReturn := typing.BuildRecordWithIndirection(typer.Builtins[typing.U8Idx], 2)
+	env.Procs["environ"] = typing.ProcRecord{Return: &environReturn}
 }

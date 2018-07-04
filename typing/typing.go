@@ -9,16 +9,10 @@ import (
 	"reflect"
 )
 
-const (
-	Cdecl int = iota + 1
-	SystemV
-)
-
 type ProcRecord struct {
-	Return            *TypeRecord
-	Args              []TypeRecord
-	CallingConvention int
-	IsForeign         bool
+	Return    *TypeRecord
+	Args      []TypeRecord
+	IsForeign bool
 }
 
 type EnvRecord struct {
@@ -53,11 +47,11 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			var ok bool
 			field, ok = baseStruct.Members[fieldName]
 			if !ok {
-				panic("--- is not a member of the struct")
+				panic(string(fieldName) + " is not a member of the struct")
 			}
 		} else if baseIsString {
 			if fieldName != "data" && fieldName != "length" {
-				panic("--- is not a member of the struct")
+				panic(string(fieldName) + " is not a member of the struct")
 			}
 		}
 		if baseIsStruct {
@@ -501,14 +495,13 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 	env := EnvRecord{
 		Types: make(map[parsing.IdName]TypeRecord),
 		Procs: map[parsing.IdName]ProcRecord{
-			"exit":      {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}, CallingConvention: SystemV},
-			"puts":      {Return: voidType, Args: []TypeRecord{typer.Builtins[StringIdx]}, CallingConvention: SystemV},
-			"writes":    {Return: voidType, Args: []TypeRecord{u8Ptr, typer.Builtins[IntIdx]}, CallingConvention: SystemV},
-			"print_int": {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}, CallingConvention: SystemV},
-			"testbit":   {Return: boolType, Args: []TypeRecord{typer.Builtins[U64Idx], typer.Builtins[IntIdx]}, CallingConvention: SystemV},
+			"exit":      {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}},
+			"puts":      {Return: voidType, Args: []TypeRecord{typer.Builtins[StringIdx]}},
+			"writes":    {Return: voidType, Args: []TypeRecord{u8Ptr, typer.Builtins[IntIdx]}},
+			"print_int": {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}},
+			"testbit":   {Return: boolType, Args: []TypeRecord{typer.Builtins[U64Idx], typer.Builtins[IntIdx]}},
 			"binToDecTable": {
-				Return:            &binTableReturn,
-				CallingConvention: SystemV,
+				Return: &binTableReturn,
 			},
 		},
 	}
