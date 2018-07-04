@@ -64,14 +64,7 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		name := structNode.Name
 		for _, typeRecordPtr := range notDone[name] {
 			unresolved := (*typeRecordPtr).(typing.Unresolved)
-			var record typing.TypeRecord
-			if unresolved.Decl.Base == "" {
-				record = typing.BuildRecordWithIndirection(structRecord, unresolved.Decl.ArrayBase.LevelOfIndirection)
-				record = typing.BuildArray(record, unresolved.Decl.ArraySizes)
-			} else {
-				record = structRecord
-			}
-			*typeRecordPtr = typing.BuildRecordWithIndirection(record, unresolved.Decl.LevelOfIndirection)
+			*typeRecordPtr = typing.BuildRecordAccordingToUnresolved(structRecord, unresolved)
 		}
 		delete(notDone, name)
 		env.Types[structNode.Name] = structRecord

@@ -102,10 +102,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			if !ok {
 				panic(string(declToResolve.Base + " does not name a type"))
 			}
-			finalType = BuildRecordWithIndirection(structRecord, declToResolve.LevelOfIndirection)
-			if unresolved.Decl.Base == "" {
-				finalType = BuildArray(finalType, unresolved.Decl.ArraySizes)
-			}
+			finalType = BuildRecordAccordingToUnresolved(structRecord, unresolved)
 		}
 		giveTypeOrVerify(opt.Out(), finalType)
 	case ir.TakeAddress:
@@ -409,6 +406,17 @@ func BuildRecordWithIndirection(base TypeRecord, level int) TypeRecord {
 		current = Pointer{ToWhat: current}
 	}
 	return current
+}
+
+func BuildRecordAccordingToUnresolved(base TypeRecord, unresolved Unresolved) TypeRecord {
+	var record TypeRecord
+	if unresolved.Decl.Base == "" {
+		record = BuildRecordWithIndirection(base, unresolved.Decl.ArrayBase.LevelOfIndirection)
+		record = BuildArray(record, unresolved.Decl.ArraySizes)
+	} else {
+		record = base
+	}
+	return BuildRecordWithIndirection(record, unresolved.Decl.LevelOfIndirection)
 }
 
 func (t *Typer) TypeRecordFromDecl(decl parsing.TypeDecl) TypeRecord {
