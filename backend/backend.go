@@ -43,6 +43,7 @@ const (
 
 const invalidVn int = -1
 const invalidRegister registerId = -1
+const zombieMessage string = "ice: trying to revive a decommissioned variable"
 
 type registerInfo struct {
 	qwordName  string // 64 bit
@@ -127,6 +128,7 @@ func (r *registerBucket) allInUse() bool {
 type varStorageInfo struct {
 	rbpOffset       int        // 0 if not on stack / unknown at this time
 	currentRegister registerId // invalidRegister if not in register
+	decommissioned  bool
 }
 
 type fullVarState struct {
@@ -349,10 +351,12 @@ func (p *procGen) swapStackBoundVars() {
 }
 
 func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
+	if p.varStorage[vn].decommissioned {
+		panic(zombieMessage)
+	}
 	switch vnSize := p.sizeof(vn); {
 	case vnSize == 0:
 		panic("tried to put a zero-size var into a register")
-		return
 	case vnSize > 8:
 		panic("tried to put a var into a register when it doesn't fit")
 	}
@@ -430,6 +434,9 @@ func (p *procGen) ensureInRegister(vn int) registerId {
 }
 
 func (p *procGen) ensureStackOffsetValid(vn int) {
+	if p.varStorage[vn].decommissioned {
+		panic(zombieMessage)
+	}
 	if p.varStorage[vn].rbpOffset != 0 {
 		return
 	}
@@ -1277,8 +1284,11 @@ func (p *procGen) generate() {
 
 		decommissionIfLastUse := func(vn int) {
 			reg := p.varStorage[vn].currentRegister
-			if reg != invalidRegister && p.lastUsage[vn] == optIdx {
-				p.releaseRegister(reg)
+			if p.lastUsage[vn] == optIdx {
+				if reg != invalidRegister {
+					p.releaseRegister(reg)
+				}
+				p.varStorage[vn].decommissioned = true
 			}
 		}
 		ir.IterOverAllVars(opt, decommissionIfLastUse)
