@@ -419,7 +419,6 @@ func (p *procGen) ensureInRegister(vn int) registerId {
 	}
 	reg, freeRegExists := p.registers.nextAvailable()
 	if freeRegExists {
-
 		p.loadRegisterWithVar(reg, vn)
 		return reg
 	} else {
@@ -446,23 +445,6 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 
 func (p *procGen) morphToState(targetState *fullVarState) {
 	backup := p.fullVarState.copyVarState()
-	// first pass, do register swaps and simple mov
-	for regId, reg := range targetState.registers.all {
-		ourOccupiedBy := p.registers.all[regId].occupiedBy
-		theirOccupiedBy := reg.occupiedBy
-		if theirOccupiedBy == ourOccupiedBy {
-			continue
-		}
-		if ourOccupiedBy == invalidVn && theirOccupiedBy != invalidVn {
-			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
-		}
-		if ourOccupiedBy != invalidVn && theirOccupiedBy != invalidVn &&
-			p.inRegister(ourOccupiedBy) && p.inRegister(theirOccupiedBy) {
-			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
-		}
-	}
-	// second pass, load from stack into register. We discard vars which don't have stack storage in the
-	// target state
 	p.noNewStackStorage = true
 	for regId, reg := range targetState.registers.all {
 		ourOccupiedBy := p.registers.all[regId].occupiedBy
@@ -470,20 +452,24 @@ func (p *procGen) morphToState(targetState *fullVarState) {
 		if theirOccupiedBy == ourOccupiedBy {
 			continue
 		}
-		if theirOccupiedBy == invalidVn && ourOccupiedBy != invalidVn {
-			if targetState.hasStackStorage(ourOccupiedBy) {
+		if ourOccupiedBy != invalidVn {
+			if targetState.varStorage[ourOccupiedBy].decommissioned {
+				// do nothing. It's fine to clobber the current value
+			} else if targetState.inRegister(ourOccupiedBy) {
+				// this issues a xchg
+				p.loadRegisterWithVar(targetState.varStorage[ourOccupiedBy].currentRegister, ourOccupiedBy)
+			} else if targetState.hasStackStorage(ourOccupiedBy) {
 				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
 				p.memRegCommand("mov", ourOccupiedBy, ourOccupiedBy)
 			}
-		}
-		if theirOccupiedBy != invalidVn && ourOccupiedBy != invalidVn {
-			if targetState.hasStackStorage(ourOccupiedBy) {
-				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
+			if p.registers.all[regId].occupiedBy != invalidVn {
+				p.releaseRegister(registerId(regId))
 			}
+		}
+		if theirOccupiedBy != invalidVn {
 			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
 		}
 	}
-
 	p.noNewStackStorage = false
 	p.fullVarState = backup
 }
@@ -1290,7 +1276,7 @@ func (p *procGen) generate() {
 			}
 		}
 		ir.IterOverAllVars(opt, decommissionIfLastUse)
-		// p.trace(4)
+		// p.trace(3)
 	}
 
 	for _, jump := range p.conditionalJumps {
@@ -1306,6 +1292,13 @@ func (p *procGen) generate() {
 }
 
 func (p *procGen) trace(vn int) {
+	if vn >= len(p.varStorage) {
+		return
+	}
+	if p.varStorage[vn].decommissioned {
+		fmt.Fprintf(p.out.buffer, "\t\t\t; variable %d is decommissioned\n", vn)
+		return
+	}
 	if p.inRegister(vn) {
 		fmt.Fprintf(p.out.buffer, "\t\t\t; variable %d is in %s\n", vn, p.fittingRegisterName(vn))
 	} else {
