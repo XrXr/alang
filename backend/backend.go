@@ -73,7 +73,38 @@ type registerBucket struct {
 	available []registerId
 }
 
-func initRegisterBucket(bucket *registerBucket) {
+func (r *registerBucket) nextAvailable() (registerId, bool) {
+	if len(r.available) == 0 {
+		return 0, false
+	}
+	return r.available[len(r.available)-1], true
+}
+
+func (r *registerBucket) allInUse() bool {
+	return len(r.available) == 0
+}
+
+type varStorageInfo struct {
+	rbpOffset       int        // 0 if not on stack / unknown at this time
+	currentRegister registerId // invalidRegister if not in register
+	decommissioned  bool
+}
+
+type fullVarState struct {
+	varStorage         []varStorageInfo
+	registers          registerBucket
+	dontSwap           [numRegisters]bool
+	nextRegToBeSwapped registerId
+}
+
+func newFullVarState(numVars int) *fullVarState {
+	var state fullVarState
+	state.varStorage = make([]varStorageInfo, numVars)
+	for i := 0; i < numVars; i++ {
+		state.varStorage[i].currentRegister = -1
+	}
+
+	bucket := &state.registers
 	baseNames := [...]string{"ax", "bx", "cx", "dx", "si", "di"}
 	for i, base := range baseNames {
 		bucket.all[i].qwordName = "r" + base
@@ -112,30 +143,7 @@ func initRegisterBucket(bucket *registerBucket) {
 		r13,
 		r12,
 	}
-}
-
-func (r *registerBucket) nextAvailable() (registerId, bool) {
-	if len(r.available) == 0 {
-		return 0, false
-	}
-	return r.available[len(r.available)-1], true
-}
-
-func (r *registerBucket) allInUse() bool {
-	return len(r.available) == 0
-}
-
-type varStorageInfo struct {
-	rbpOffset       int        // 0 if not on stack / unknown at this time
-	currentRegister registerId // invalidRegister if not in register
-	decommissioned  bool
-}
-
-type fullVarState struct {
-	varStorage         []varStorageInfo
-	registers          registerBucket
-	dontSwap           [numRegisters]bool
-	nextRegToBeSwapped registerId
+	return &state
 }
 
 func (f *fullVarState) copyVarState() *fullVarState {
@@ -145,6 +153,16 @@ func (f *fullVarState) copyVarState() *fullVarState {
 	newState.varStorage = make([]varStorageInfo, len(f.varStorage))
 	copy(newState.varStorage, f.varStorage)
 	return &newState
+}
+
+func (f *fullVarState) varInfoString(vn int) string {
+	if f.varStorage[vn].decommissioned {
+		return fmt.Sprintf("variable %d is decommissioned", vn)
+	} else if f.inRegister(vn) {
+		return fmt.Sprintf("variable %d is in %s", vn, f.registers.all[vn].qwordName)
+	} else {
+		return fmt.Sprintf("variable %d is at rbp-%d", vn, f.varStorage[vn].rbpOffset)
+	}
 }
 
 type preJumpState struct {
@@ -1300,15 +1318,7 @@ func (p *procGen) trace(vn int) {
 	if vn >= len(p.varStorage) {
 		return
 	}
-	if p.varStorage[vn].decommissioned {
-		fmt.Fprintf(p.out.buffer, "\t\t\t; variable %d is decommissioned\n", vn)
-		return
-	}
-	if p.inRegister(vn) {
-		fmt.Fprintf(p.out.buffer, "\t\t\t; variable %d is in %s\n", vn, p.fittingRegisterName(vn))
-	} else {
-		fmt.Fprintf(p.out.buffer, "\t\t\t; variable %d is at rbp-%d\n", vn, p.varStorage[vn].rbpOffset)
-	}
+	fmt.Fprintf(p.out.buffer, "\t\t\t;%s\n", p.varInfoString(vn))
 }
 
 func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
@@ -1364,12 +1374,23 @@ func findLastusage(block frontend.OptBlock) []int {
 	return lastUse
 }
 
+func collectOutput(firstBlock *outputBlock, out io.Writer) {
+	outBlock := firstBlock
+	for outBlock != nil {
+		_, err := outBlock.buffer.WriteTo(out)
+		if err != nil {
+			panic(err)
+		}
+		outBlock = outBlock.next
+	}
+}
+
 func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer, procRecord typing.ProcRecord) *bytes.Buffer {
 	firstOut := newOutputBlock()
 	var staticDataBuf bytes.Buffer
 	returnRecord := *procRecord.Return
 	gen := procGen{
-		fullVarState:              &fullVarState{},
+		fullVarState:              newFullVarState(block.NumberOfVars),
 		out:                       firstOut,
 		firstOutputBlock:          firstOut,
 		block:                     block,
@@ -1380,20 +1401,8 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		labelToState:              make(map[string]*fullVarState),
 		lastUsage:                 findLastusage(block),
 		callerProvidesReturnSpace: returnRecord.Size() > 16}
-	initRegisterBucket(&gen.registers)
-	gen.varStorage = make([]varStorageInfo, block.NumberOfVars)
-	for i := 0; i < block.NumberOfVars; i++ {
-		gen.varStorage[i].currentRegister = -1
-	}
 
 	gen.generate()
-	outBlock := gen.firstOutputBlock
-	for outBlock != nil {
-		_, err := outBlock.buffer.WriteTo(out)
-		if err != nil {
-			panic(err)
-		}
-		outBlock = outBlock.next
-	}
+	collectOutput(gen.firstOutputBlock, out)
 	return &staticDataBuf
 }

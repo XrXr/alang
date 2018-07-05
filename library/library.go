@@ -1,4 +1,4 @@
-package main
+package library
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-func writeAssemblyPrologue(out io.Writer) {
+func WriteAssemblyPrologue(out io.Writer) {
 	fmt.Fprintln(out, `global _start
 	section .text
 _start:
@@ -15,7 +15,7 @@ _start:
 	jmp proc_exit`)
 }
 
-func writeLibcPrologue(out io.Writer) {
+func WriteLibcPrologue(out io.Writer) {
 	// sub rsp, 8 to align rsp
 	fmt.Fprintln(out, `DEFAULT REL
 global main
@@ -28,14 +28,14 @@ main:
 	ret`)
 }
 
-func writeLibcExtras(out io.Writer) {
+func WriteLibcExtras(out io.Writer) {
 	fmt.Fprintln(out, `extern environ
 proc_environ:
 	mov rax, [rel environ]
 	ret`)
 }
 
-func writeBuiltins(out io.Writer) {
+func WriteBuiltins(out io.Writer) {
 	fmt.Fprintln(out, `proc_exit:
 	mov eax, 60
 	syscall
@@ -145,7 +145,7 @@ _intrinsic_memcpy:
 	ret`)
 }
 
-func writeDecimalTable(out io.Writer) {
+func WriteDecimalTable(out io.Writer) {
 	fmt.Fprintln(out, `
 _binToDecTable:
 	dq 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -217,7 +217,7 @@ proc_binToDecTable:
 	ret`)
 }
 
-func addLibcExtrasToEnv(env *typing.EnvRecord, typer *typing.Typer) {
+func AddLibcExtrasToEnv(env *typing.EnvRecord, typer *typing.Typer) {
 	environReturn := typing.BuildRecordWithIndirection(typer.Builtins[typing.U8Idx], 2)
 	env.Procs["environ"] = typing.ProcRecord{Return: &environReturn}
 }

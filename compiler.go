@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/XrXr/alang/backend"
 	"github.com/XrXr/alang/frontend"
+	"github.com/XrXr/alang/library"
 	"github.com/XrXr/alang/parsing"
 	"github.com/XrXr/alang/typing"
 	"io"
@@ -160,7 +161,7 @@ func main() {
 	env := typing.NewEnvRecord(typer)
 	structs := make(map[*interface{}]*typing.StructRecord)
 	if *libc {
-		addLibcExtrasToEnv(env, typer)
+		library.AddLibcExtrasToEnv(env, typer)
 	}
 
 	for scanner.Scan() {
@@ -250,9 +251,9 @@ func main() {
 	defer out.Close()
 
 	if *libc {
-		writeLibcPrologue(out)
+		library.WriteLibcPrologue(out)
 	} else {
-		writeAssemblyPrologue(out)
+		library.WriteAssemblyPrologue(out)
 	}
 
 	err = buildGlobalEnv(typer, env, structs, workOrders)
@@ -289,10 +290,10 @@ func main() {
 
 	io.WriteString(out, "; ---user code end---\n")
 	if *libc {
-		writeLibcExtras(out)
+		library.WriteLibcExtras(out)
 	}
-	writeBuiltins(out)
-	writeDecimalTable(out)
+	library.WriteBuiltins(out)
+	library.WriteDecimalTable(out)
 
 	io.WriteString(out, "; ---static data segment begin---\n")
 	io.WriteString(out, "section .data\n")
