@@ -148,6 +148,32 @@ func TestRegToStack(t *testing.T) {
 	test(t, currentState, targetState)
 }
 
+func TestStackToReg(t *testing.T) {
+	currentState := newFullVarState(int(numRegisters))
+	perm := rand.Perm(int(numRegisters))
+	offset := 8
+	for i := 0; i < 3; i++ {
+		vn := perm[i]
+		currentState.varStorage[vn].rbpOffset = offset
+		offset += 8
+	}
+
+	for i := 0; i < int(numRegisters); i++ {
+		if !currentState.hasStackStorage(i) {
+			currentState.allocateRegToVar(registerId(i), i)
+		}
+	}
+
+	perm = rand.Perm(int(numRegisters))
+	targetState := newFullVarState(int(numRegisters))
+	for i := 0; i < int(numRegisters); i++ {
+		targetState.allocateRegToVar(registerId(perm[i]), i)
+	}
+	logState(t, currentState)
+	logState(t, targetState)
+	test(t, currentState, targetState)
+}
+
 func TestMain(m *testing.M) {
 	rand.Seed(time.Now().UnixNano())
 	os.Exit(m.Run())

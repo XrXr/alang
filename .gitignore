@@ -1,5 +1,5 @@
 *.sublime-workspace
 a.asm
 a.o
-a.out
+*.out
 alang
