@@ -446,24 +446,29 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 func (p *procGen) morphToState(targetState *fullVarState) {
 	backup := p.fullVarState.copyVarState()
 	p.noNewStackStorage = true
+morph:
 	for regId, reg := range targetState.registers.all {
-		ourOccupiedBy := p.registers.all[regId].occupiedBy
 		theirOccupiedBy := reg.occupiedBy
-		if theirOccupiedBy == ourOccupiedBy {
-			continue
-		}
-		if ourOccupiedBy != invalidVn {
-			if targetState.varStorage[ourOccupiedBy].decommissioned {
-				// do nothing. It's fine to clobber the current value
+		for {
+			ourOccupiedBy := p.registers.all[regId].occupiedBy
+			if theirOccupiedBy == ourOccupiedBy {
+				continue morph
+			}
+			if ourOccupiedBy == invalidVn {
+				break
+			}
+
+			if targetState.varStorage[ourOccupiedBy].decommissioned || (!targetState.inRegister(ourOccupiedBy) && !targetState.hasStackStorage(ourOccupiedBy)) {
+				// code in the target state doesn't care about the value of var ourOccupiedBy
+				p.releaseRegister(registerId(regId))
 			} else if targetState.inRegister(ourOccupiedBy) {
-				// this issues a xchg
 				p.loadRegisterWithVar(targetState.varStorage[ourOccupiedBy].currentRegister, ourOccupiedBy)
 			} else if targetState.hasStackStorage(ourOccupiedBy) {
 				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
 				p.memRegCommand("mov", ourOccupiedBy, ourOccupiedBy)
-			}
-			if p.registers.all[regId].occupiedBy != invalidVn {
 				p.releaseRegister(registerId(regId))
+			} else {
+				panic("this should be exhaustive")
 			}
 		}
 		if theirOccupiedBy != invalidVn {
