@@ -281,7 +281,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		_, inIsPtr := inT.(Pointer)
 		_, inIsBool := inT.(Boolean)
 		if !inIsBool && !inIsPtr {
-			return errors.New("The not operator works booleans and pointers")
+			return errors.New("The not operator works with booleans and pointers only")
 		}
 		giveTypeOrVerify(opt.Out(), t.Builtins[BoolIdx])
 	case ir.Div:

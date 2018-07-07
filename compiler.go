@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 )
 
 type embedGraphNode struct {
@@ -80,14 +81,35 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 	}
 	embedGraph := make(map[*typing.StructRecord]embedGraphNode)
 	for record, stringEmbedees := range embedGraphString {
+		sort.Slice(stringEmbedees, func(i, j int) bool {
+			return stringEmbedees[i] < stringEmbedees[j]
+		})
+		stringEmbedees = dedupSorted(stringEmbedees)
 		embedees := make([]*typing.StructRecord, len(stringEmbedees))
 		for i, name := range stringEmbedees {
 			embedees[i] = env.Types[name].(*typing.StructRecord)
 		}
 		embedGraph[record] = embedGraphNode{embedees: embedees}
 	}
+	for record, names := range embedGraphString {
+		fmt.Printf("%s: %v\n", string(record.Name), names)
+	}
 	resolveStructSize(nodeToStruct, embedGraph)
 	return nil
+}
+
+func dedupSorted(slice []parsing.IdName) []parsing.IdName {
+	pushDist := 0
+	for i := 1; i < len(slice); i++ {
+		if slice[i] == slice[i-1] {
+			pushDist++
+			continue
+		}
+		if pushDist > 0 {
+			slice[i-pushDist] = slice[i]
+		}
+	}
+	return slice[0 : len(slice)-pushDist]
 }
 
 func resolveStructSize(nodeToStruct map[*interface{}]*typing.StructRecord, embedGraph map[*typing.StructRecord]embedGraphNode) {

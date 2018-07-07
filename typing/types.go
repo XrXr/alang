@@ -113,8 +113,12 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 	if s.SizeAndOffsetsResolved {
 		return
 	}
-	s.MemberOrder[0].Offset = 0
 	s.size = 0
+	if len(s.MemberOrder) == 0 {
+		s.SizeAndOffsetsResolved = true
+		return
+	}
+	s.MemberOrder[0].Offset = 0
 	var biggestAlignment int
 	for i, field := range s.MemberOrder {
 		fieldSize := field.Type.Size()
