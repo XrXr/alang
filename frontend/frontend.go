@@ -399,13 +399,20 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 				gen.addOpt(ir.MakeBinaryInst(ir.IndirectLoad, dest, dataPointer, nil))
 			}
 		case parsing.AddressOf:
-			// TODO: incomplete: &(someStruct.foo.sdfsd)
-			right := n.Right.(parsing.IdName)
-			vn, found := scope.resolve(right)
-			if !found {
-				return errors.New("undefined var")
+			switch right := n.Right.(type) {
+			case parsing.IdName:
+				vn, found := scope.resolve(right)
+				if !found {
+					return errors.New("undefined var")
+				}
+				gen.addOpt(ir.MakeBinaryInst(ir.TakeAddress, dest, vn, nil))
+			default:
+				//:structinreg we rely on ir.TakeAddress to know that some vars can't be in registers when
+				// doing indirections. We don't issue ir.TakeAddress in this case currently because array/structs
+				// are always on the stack.
+				address := computePointer(scope, n.Right)
+				gen.addOpt(ir.MakeBinaryInst(ir.Assign, dest, address, nil))
 			}
-			gen.addOpt(ir.MakeBinaryInst(ir.TakeAddress, dest, vn, nil))
 		case parsing.Dot:
 			location := computePointer(scope, n)
 			gen.addOpt(ir.MakeBinaryInst(ir.IndirectLoad, dest, location, nil))
