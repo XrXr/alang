@@ -1269,27 +1269,29 @@ func (p *procGen) generate() {
 			returnType := *p.procRecord.Return
 
 			returnExtra := opt.Extra.(ir.ReturnExtra)
-			retVar := returnExtra.Values[0]
-			if p.perfectRegSize(retVar) {
-				p.loadRegisterWithVar(rax, retVar)
-				if returnType.Size() > p.sizeof(retVar) {
-					p.signOrZeroExtendMov(retVar, retVar)
+			if len(returnExtra.Values) > 0 {
+				retVar := returnExtra.Values[0]
+				if p.perfectRegSize(retVar) {
+					p.loadRegisterWithVar(rax, retVar)
+					if returnType.Size() > p.sizeof(retVar) {
+						p.signOrZeroExtendMov(retVar, retVar)
+					}
+				} else if p.callerProvidesReturnSpace {
+					if returnType.Size() != p.sizeof(retVar) {
+						panic("ice: returning a big var that doesn't match the size of the declared return type. Typechecker should've caught it")
+					}
+					if p.inRegister(retVar) {
+						panic("ice: a var this big shouldn't be in register")
+					}
+					p.ensureStackOffsetValid(retVar)
+					p.freeUpRegisters(false, rsi, rdi, rcx)
+					p.issueCommand("mov rdi, qword [rbp-8]")
+					p.loadVarOffsetIntoReg(retVar, rsi)
+					p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
+					p.issueCommand("call _intrinsic_memcpy")
+				} else {
+					panic("Can't handle return where the data doesn't exactly fit a register or 8 < size <= 16 yet")
 				}
-			} else if p.callerProvidesReturnSpace {
-				if returnType.Size() != p.sizeof(retVar) {
-					panic("ice: returning a big var that doesn't match the size of the declared return type. Typechecker should've caught it")
-				}
-				if p.inRegister(retVar) {
-					panic("ice: a var this big shouldn't be in register")
-				}
-				p.ensureStackOffsetValid(retVar)
-				p.freeUpRegisters(false, rsi, rdi, rcx)
-				p.issueCommand("mov rdi, qword [rbp-8]")
-				p.loadVarOffsetIntoReg(retVar, rsi)
-				p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
-				p.issueCommand("call _intrinsic_memcpy")
-			} else {
-				panic("Can't handle return where the data doesn't exactly fit a register or 8 < size <= 16 yet")
 			}
 			p.issueCommand("jmp .end_of_proc")
 		default:

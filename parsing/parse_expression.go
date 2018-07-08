@@ -82,6 +82,9 @@ func ParseExpr(tokens []string) (interface{}, error) {
 			Condition: parsed,
 		}, nil
 	} else if tokens[0] == "return" {
+		if len(tokens) == 1 {
+			return ReturnNode{}, nil
+		}
 		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens))
 		if err != nil {
 			return nil, err

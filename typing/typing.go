@@ -245,7 +245,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			}
 		}
 		if !good {
-			return errors.New("must be an array")
+			return errors.New("must be an array or a pointer to an array")
 		}
 	case ir.Add:
 		l, r := resolve(opt)
