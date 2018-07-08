@@ -38,6 +38,7 @@ var fixture = map[string][]string{
 	"iffifodif":                   {"iffifodif"},
 	"nformats":                    {"nformats"},
 	"return cats":                 {"return", "cats"},
+	"return cats.dogs":            {"return", "cats", ".", "dogs"},
 	` "progress 3/4" `:            {`"progress 3/4"`},
 	` "progress 3+4" `:            {`"progress 3+4"`},
 	` "progress" + 3 `:            {`"progress"`, `+`, `3`},

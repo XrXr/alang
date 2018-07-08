@@ -121,7 +121,9 @@ func Tokenize(in string) []string {
 					if i == j {
 						result = append(result, ".")
 					} else {
-						result = append(result, strings.TrimSpace(in[i:j]), ".")
+						tokensBeforeDot := strings.Split(strings.TrimSpace(in[i:j]), " ")
+						result = append(result, tokensBeforeDot...)
+						result = append(result, ".")
 					}
 					i = j + 1
 				}
