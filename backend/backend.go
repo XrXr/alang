@@ -634,6 +634,7 @@ func (p *procGen) generate() {
 	addLine := func(line string) {
 		io.WriteString(p.out.buffer, line)
 	}
+
 	varOffset := make([]int, p.block.NumberOfVars)
 	paramPassingRegOrder := [...]registerId{rdi, rsi, rdx, rcx, r8, r9}
 	preservedRegisters := [...]registerId{rbx, r15, r14, r13, r12}
@@ -1265,18 +1266,23 @@ func (p *procGen) generate() {
 			}
 			p.issueCommand(fmt.Sprintf("or %s, %s", p.varOperand(l), p.varOperand(r)))
 		case ir.Return:
+			returnType := *p.procRecord.Return
+
 			returnExtra := opt.Extra.(ir.ReturnExtra)
 			retVar := returnExtra.Values[0]
 			if p.perfectRegSize(retVar) {
-				p.issueCommand(fmt.Sprintf("mov %s, %s",
-					p.registers.all[rax].nameForSize(p.sizeof(retVar)), p.varOperand(retVar)))
-			} else if p.sizeof(retVar) > 16 {
-				if !p.callerProvidesReturnSpace {
-					panic("big var to return but space is not provided")
+				p.loadRegisterWithVar(rax, retVar)
+				if returnType.Size() > p.sizeof(retVar) {
+					p.signOrZeroExtendMov(retVar, retVar)
+				}
+			} else if p.callerProvidesReturnSpace {
+				if returnType.Size() != p.sizeof(retVar) {
+					panic("ice: returning a big var that doesn't match the size of the declared return type. Typechecker should've caught it")
 				}
 				if p.inRegister(retVar) {
-					panic("a var this big shouldn't be in register")
+					panic("ice: a var this big shouldn't be in register")
 				}
+				p.ensureStackOffsetValid(retVar)
 				p.freeUpRegisters(false, rsi, rdi, rcx)
 				p.issueCommand("mov rdi, qword [rbp-8]")
 				p.loadVarOffsetIntoReg(retVar, rsi)
@@ -1389,7 +1395,6 @@ func collectOutput(firstBlock *outputBlock, out io.Writer) {
 func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.TypeRecord, globalEnv *typing.EnvRecord, typer *typing.Typer, procRecord typing.ProcRecord) *bytes.Buffer {
 	firstOut := newOutputBlock()
 	var staticDataBuf bytes.Buffer
-	returnRecord := *procRecord.Return
 	gen := procGen{
 		fullVarState:              newFullVarState(block.NumberOfVars),
 		out:                       firstOut,
@@ -1401,8 +1406,9 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		staticDataBuf:             &staticDataBuf,
 		labelToState:              make(map[string]*fullVarState),
 		lastUsage:                 findLastusage(block),
-		callerProvidesReturnSpace: returnRecord.Size() > 16}
-
+		procRecord:                procRecord,
+		callerProvidesReturnSpace: (*(procRecord.Return)).Size() > 16,
+	}
 	gen.generate()
 	collectOutput(gen.firstOutputBlock, out)
 	return &staticDataBuf
