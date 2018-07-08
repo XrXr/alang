@@ -1141,6 +1141,7 @@ func (p *procGen) generate() {
 			}
 			pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
 			p.ensureInRegister(ptr)
+
 			if p.fitsInRegister(data) {
 				p.ensureInRegister(data)
 				dataRegName := p.registerOf(data).nameForSize(pointedToSize)
@@ -1155,7 +1156,7 @@ func (p *procGen) generate() {
 					p.freeUpRegisters(true, rsi, rdi, rcx)
 					p.ensureStackOffsetValid(data)
 					p.loadVarOffsetIntoReg(data, dataDest)
-					p.movRegReg(ptrDest, p.varStorage[ptr].currentRegister)
+					p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[ptrDest].qwordName, p.varOperand(ptr)))
 					p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
 					p.issueCommand("call _intrinsic_memcpy")
 				}
