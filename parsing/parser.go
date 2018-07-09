@@ -52,7 +52,8 @@ func (p *Parser) processLine(line string) error {
 		parent = getParent()
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
-	tokens := Tokenize(line)
+	tokens, indices := Tokenize(line)
+	_ = indices
 	if len(tokens) == 0 {
 		return nil
 	}

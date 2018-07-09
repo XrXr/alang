@@ -5,6 +5,7 @@ import (
 	"unicode"
 )
 
+// since the match happens from top to bottom, longer ones should come first
 var bounderies = [...]string{
 	"//",
 	"[]",
@@ -17,13 +18,17 @@ var bounderies = [...]string{
 	"<",
 	">=",
 	"!=",
+	"&&",
+	"||",
+	":=",
+	"::",
+	"..",
+	".",
 	">",
 	"-",
 	"*",
 	"/",
 	"#",
-	"&&",
-	"||",
 	"&",
 	"^",
 	"%",
@@ -32,120 +37,102 @@ var bounderies = [...]string{
 	"@",
 	"(",
 	")",
-	"..",
 	",",
-	":=",
 	"=",
 	"!",
-	"::",
 	"[",
 	"]",
 	"{",
 	"}",
 }
 
-func Tokenize(in string) []string {
-	var result []string
-	var lastFoundIdx int
-	i := iAfterWs(in, 0)
-	for i < len(in) {
-		found := false
-	outter:
-		for j := i; j < len(in); j++ {
-			if in[j] == '-' && isDigit(safeCharAt(in, j+1)) &&
-				(j == 0 || isSpace(safeCharAt(in, j-1))) {
-				numLitEnd := iAfterNumLiteral(in, j+1)
-				result = append(result, in[j:numLitEnd])
-				i = iAfterWs(in, numLitEnd)
-				found = true
-				break outter
+func Tokenize(in string) ([]string, []int) {
+	if in[len(in)-1] != '\n' {
+		in = in + "\n"
+	}
+	var tokenList []string
+	var indexList []int
+	i := 0
+	var tokenStart int
+	startNewToken := true
+	addToken := func(start int, end int) {
+		tokenList = append(tokenList, in[start:end])
+		indexList = append(indexList, start)
+		startNewToken = true
+		i = end
+	}
+tokenize:
+	for {
+		if startNewToken {
+			i = iAfterWs(in, i)
+			tokenStart = i
+			startNewToken = false
+		}
+		if i >= len(in) {
+			break
+		}
+		char := in[i]
+		if char == '\n' {
+			addToken(tokenStart, i)
+			break
+		}
+		if unicode.IsSpace(rune(char)) {
+			addToken(tokenStart, i)
+			continue
+		}
+		if i == tokenStart {
+			if char == '-' && isDigit(safeCharAt(in, i+1)) {
+				numLitEnd := iAfterNumLiteral(in, i+1)
+				addToken(tokenStart, numLitEnd)
+				continue tokenize
 			}
-			if in[j] == '\n' {
-				result = append(result, in[i:j])
-				i = j + 1
-				found = true
-				break outter
-			}
-			if in[j] == '"' {
-				k := j + 1
+			if char == '"' {
+				k := i + 1
 				for k < len(in) {
 					this := in[k]
 					if this == '\\' {
-						//TODO: escape sequence
+						//TODO: multi-character escape sequence
 						k += 2
 						continue
 					}
 					if this == '"' {
-						found = true
-						i = iAfterWs(in, k+1)
-						result = append(result, in[j:k+1])
-						break outter
+						addToken(tokenStart, k+1)
+						continue tokenize
 					}
 					k++
 				}
 				panic("unmatched \" in user program")
 			}
-			for _, bound := range bounderies {
-				if strings.HasPrefix(in[j:], bound) {
-					if i == j {
-						result = append(result, bound)
-					} else {
-						tokensBeforeBound := strings.Split(strings.TrimSpace(in[i:j]), " ")
-						result = append(result, tokensBeforeBound...)
-						result = append(result, bound)
-					}
-					i = iAfterWs(in, j+len(bound))
-					found = true
-					break outter
+		}
+		if char == '.' && isDigit(safeCharAt(in, i+1)) {
+			for j := tokenStart; j < i; j++ {
+				if !isDigit(in[j]) {
+					panic("No struct member name can begin with a number")
 				}
 			}
-			if j+3 <= len(in) && in[j:j+3] == "if " && (j == 0 || isSpace(in[j-1])) {
-				result = append(result, "if")
-				i = iAfterWs(in, j+3)
-				found = true
-				break outter
+			k := i + 1
+			for ; k < len(in); k++ {
+				if !unicode.IsDigit(rune(in[k])) {
+					break
+				}
 			}
-			if in[j] == '.' {
-				found = true
-				if isDigit(safeCharAt(in, j+1)) {
-					// TODO this function should return error for "asd.123"
-					k := j + 1
-					for ; k < len(in); k++ {
-						if !unicode.IsDigit(rune(in[k])) {
-							break
-						}
-					}
-					result = append(result, in[i:k])
-					i = iAfterWs(in, k)
+			addToken(tokenStart, k)
+			continue tokenize
+		}
+		for _, bound := range bounderies {
+			if strings.HasPrefix(in[i:], bound) {
+				if i == tokenStart {
+					addToken(tokenStart, tokenStart+len(bound))
 				} else {
-					if i == j {
-						result = append(result, ".")
-					} else {
-						tokensBeforeDot := strings.Split(strings.TrimSpace(in[i:j]), " ")
-						result = append(result, tokensBeforeDot...)
-						result = append(result, ".")
-					}
-					i = j + 1
+					addToken(tokenStart, i)
+					addToken(i, i+len(bound))
 				}
-				break outter
+				continue tokenize
 			}
 		}
-		if found {
-			lastFoundIdx = i
-		} else {
-			i++
-		}
+		i++
 	}
-	endTok := strings.TrimSpace(in[lastFoundIdx:])
-	if len(endTok) > 0 {
-		spacedOut := strings.Split(endTok, " ")
-		if spacedOut[0][0] != '"' {
-			result = append(result, spacedOut...)
-		} else {
-			result = append(result, endTok)
-		}
-	}
-	return result
+	return tokenList, indexList
 }
 
 func safeCharAt(s string, i int) byte {

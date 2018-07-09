@@ -11,8 +11,7 @@ var fixture = map[string][]string{
 	"(some + brackets)":           {"(", "some", "+", "brackets", ")"},
 	"((willful)*saturation)":      {"(", "(", "willful", ")", "*", "saturation", ")"},
 	"minus-5":                     {"minus", "-", "5"},
-	"minus+-5":                    {"minus", "+", "-", "5"},
-	"minus*+5":                    {"minus", "*", "+", "5"},
+	"minus+-5":                    {"minus", "+", "-5"},
 	"engage.jolly.cooperation":    {"engage", ".", "jolly", ".", "cooperation"},
 	"minus.food.cat * pop":        {"minus", ".", "food", ".", "cat", "*", "pop"},
 	"34..65":                      {"34", "..", "65"},
@@ -47,9 +46,22 @@ var fixture = map[string][]string{
 
 func TestTokenizer(t *testing.T) {
 	for in, expect := range fixture {
-		result := Tokenize(in)
-		if !reflect.DeepEqual(result, expect) {
-			t.Errorf("Failed to tokenize %v. Got %#v", in, result)
+		tokens, indices := Tokenize(in)
+		for i, token := range tokens {
+
+			var tokenValueFromIdx string
+
+			if idx := indices[i]; idx < len(in) && idx+len(token) <= len(in) {
+				tokenValueFromIdx = in[idx : idx+len(token)]
+			} else {
+				tokenValueFromIdx = "##!!index out of bound!!##"
+			}
+			if tokenValueFromIdx != token {
+				t.Errorf("Bad index for token %v. Value from that index is %#v instead of the claimed %#v", token, tokenValueFromIdx, token)
+			}
+		}
+		if !reflect.DeepEqual(tokens, expect) {
+			t.Errorf("Failed to tokenize [%v]. Got %#v", in, tokens)
 		}
 	}
 }
