@@ -1,9 +1,9 @@
 struct a {
 	_Bool hoho;
-	int faker; 
-	_Bool wrench; 
-	long long jojo; 
-	_Bool another; 
+	int faker;
+	_Bool wrench;
+	long long jojo;
+	_Bool another;
 	int fun;
 };
 
@@ -15,4 +15,3 @@ void fillStruct(struct a *out) {
 	out->another = 1;
 	out->fun = 8388193;
 }
-

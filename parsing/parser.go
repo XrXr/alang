@@ -1,6 +1,9 @@
 package parsing
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/XrXr/alang/errors"
+)
 
 var _ = fmt.Printf
 
@@ -23,10 +26,14 @@ type statement struct {
 	Parent     *interface{}
 }
 
-func (p *Parser) FeedLine(line string) (int, error) {
+func (p *Parser) FeedLine(line string, lineNumber int) (int, error) {
 	before := len(p.OutBuffer)
 	err := p.processLine(line)
 	if err != nil {
+		if userError, isUserError := err.(*errors.UserError); isUserError {
+			userError.Line = lineNumber
+			return 0, userError
+		}
 		return 0, err
 	}
 	return len(p.OutBuffer) - before, nil
@@ -52,7 +59,10 @@ func (p *Parser) processLine(line string) error {
 		parent = getParent()
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
-	tokens, indices := Tokenize(line)
+	tokens, indices, err := Tokenize(line)
+	if err != nil {
+		return err
+	}
 	_ = indices
 	if len(tokens) == 0 {
 		return nil
@@ -62,7 +72,6 @@ func (p *Parser) processLine(line string) error {
 	}
 	// fmt.Printf("%#v\n", tokens) // Dump(tokens)
 	var n interface{}
-	var err error
 	if p.currentContext() == structContext {
 		n, err = parseStructMembers(tokens)
 	} else {
@@ -70,6 +79,9 @@ func (p *Parser) processLine(line string) error {
 	}
 	// Dump(n)
 	if err != nil {
+		userError := err.(*errors.UserError)
+		userError.StartColumn = indices[userError.StartColumn]
+		userError.EndColumn = indices[userError.EndColumn] + len(tokens[userError.EndColumn]) - 1
 		return err
 	}
 	switch t := n.(type) {
@@ -90,7 +102,7 @@ func (p *Parser) processLine(line string) error {
 		if tokens[0] == "}" {
 			l := len(p.incompleteStack)
 			if l == 0 {
-				return &ParseError{0, 0, "Unmatched closing brace"}
+				return errors.MakeError(0, 0, "Unmatched closing brace")
 			}
 			top := p.incompleteStack[l-1]
 			p.incompleteStack = p.incompleteStack[:l-1]
@@ -110,7 +122,7 @@ func (p *Parser) processLine(line string) error {
 	case BlockEnd:
 		l := len(p.incompleteStack)
 		if l == 0 {
-			return &ParseError{0, 0, "Unmatched closing brace"}
+			return errors.MakeError(0, 0, "Unmatched closing brace")
 		}
 		top := p.incompleteStack[l-1]
 		p.incompleteStack = p.incompleteStack[:l-1]

@@ -1,9 +1,5 @@
 package parsing
 
-import (
-	"fmt"
-)
-
 type IdName string
 
 // Either Base is set or ArraySizes and ArrayBase is set.
@@ -95,12 +91,6 @@ type StructDeclare struct {
 	Name IdName
 }
 
-type ParseError struct {
-	Line    int
-	Column  int
-	Message string
-}
-
 type IfNode struct {
 	Condition interface{}
 }
@@ -120,7 +110,3 @@ type ContinueNode struct{}
 type BreakNode struct{}
 
 type BlockEnd int
-
-func (e *ParseError) Error() string {
-	return fmt.Sprintf("%d:%d %s", e.Line, e.Column, e.Message)
-}

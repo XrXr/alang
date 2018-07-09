@@ -54,5 +54,6 @@ var precedence = map[Operator]int{
 
 var isUnary = map[Operator]bool{
 	Dereference: true,
+	AddressOf:   true,
 	LogicalNot:  true,
 }

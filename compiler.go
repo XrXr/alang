@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/XrXr/alang/backend"
+	"github.com/XrXr/alang/errors"
 	"github.com/XrXr/alang/frontend"
 	"github.com/XrXr/alang/library"
 	"github.com/XrXr/alang/parsing"
@@ -155,25 +156,7 @@ func resolveStructSizeVisit(structRecord *typing.StructRecord, embedGraph map[*t
 	structRecord.ResolveSizeAndOffset()
 }
 
-func main() {
-	outputPath := flag.String("o", "a.out", "path to the binary")
-	stopAfterAssembly := flag.Bool("c", false, "generate object file only")
-	libc := flag.Bool("libc", false, "generate main instead of _start for ues with libc")
-	flag.Parse()
-	args := flag.Args()
-	if len(args) < 1 {
-		log.Fatal("No input file specified")
-	}
-	sourcePath := args[0]
-
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		fmt.Printf("Could not open \"%s\"\n", sourcePath)
-		os.Exit(1)
-	}
-	defer source.Close()
-
-	scanner := bufio.NewScanner(source)
+func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 	var workOrders []*frontend.ProcWorkOrder
 	var labelGen frontend.LabelIdGen
 	parser := parsing.NewParser()
@@ -182,21 +165,27 @@ func main() {
 	var nodesForProc []*interface{}
 	env := typing.NewEnvRecord(typer)
 	structs := make(map[*interface{}]*typing.StructRecord)
-	if *libc {
+	if libc {
 		library.AddLibcExtrasToEnv(env, typer)
 	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	parseFailed := false
+	for lineNumber, line := range sourceLines {
 		if len(line) == 0 {
 			continue
 		}
-		numNewEntries, err := parser.FeedLine(line)
+		numNewEntries, err := parser.FeedLine(line, lineNumber)
 		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(1)
+			parseFailed = true
+			if userError, isUserError := err.(*errors.UserError); isUserError {
+				displayError(sourceLines, userError)
+			}
 		}
-		if numNewEntries == 0 {
+		// fmt.Println("Line ", line)
+		// fmt.Println("Gave: ")
+		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
+
+		if numNewEntries == 0 || parseFailed {
 			continue
 		}
 
@@ -261,24 +250,18 @@ func main() {
 				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
-		// fmt.Println("Line ", line)
-		// fmt.Println("Gave: ")
-		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
 	}
-	out, err := os.Create("a.asm")
-	if err != nil {
-		fmt.Printf("Could not create temporary asm file\n")
+	if parseFailed {
 		os.Exit(1)
 	}
-	defer out.Close()
 
-	if *libc {
-		library.WriteLibcPrologue(out)
+	if libc {
+		library.WriteLibcPrologue(asmOut)
 	} else {
-		library.WriteAssemblyPrologue(out)
+		library.WriteAssemblyPrologue(asmOut)
 	}
 
-	err = buildGlobalEnv(typer, env, structs, workOrders)
+	err := buildGlobalEnv(typer, env, structs, workOrders)
 	if err != nil {
 		panic(err)
 	}
@@ -303,26 +286,96 @@ func main() {
 			}
 		}
 		if workOrder.ProcDecl.IsForeign {
-			fmt.Fprintf(out, "extern %s\n", workOrder.Name)
+			fmt.Fprintf(asmOut, "extern %s\n", workOrder.Name)
 			continue
 		}
-		static := backend.X86ForBlock(out, ir, typeTable, env, typer, procRecord)
+		static := backend.X86ForBlock(asmOut, ir, typeTable, env, typer, procRecord)
 		staticData = append(staticData, static)
 	}
 
-	io.WriteString(out, "; ---user code end---\n")
-	if *libc {
-		library.WriteLibcExtras(out)
+	io.WriteString(asmOut, "; ---user code end---\n")
+	if libc {
+		library.WriteLibcExtras(asmOut)
 	}
-	library.WriteBuiltins(out)
-	library.WriteDecimalTable(out)
+	library.WriteBuiltins(asmOut)
+	library.WriteDecimalTable(asmOut)
 
-	io.WriteString(out, "; ---static data segment begin---\n")
-	io.WriteString(out, "section .data\n")
+	io.WriteString(asmOut, "; ---static data segment begin---\n")
+	io.WriteString(asmOut, "section .data\n")
 	for _, static := range staticData {
-		static.WriteTo(out)
+		static.WriteTo(asmOut)
 	}
+}
 
+func displayError(sourceLines []string, err *errors.UserError) {
+	fmt.Fprintln(os.Stderr, err.Error())
+	line := sourceLines[err.Line]
+	lineLength := len(line)
+	if line[lineLength-1] == '\n' {
+		line = line[:lineLength]
+	}
+	fmt.Fprintln(os.Stderr, line)
+
+	for i := 0; i < lineLength; i++ {
+		if i < err.StartColumn {
+			charToPrint := " "
+			if line[i] == '\t' {
+				charToPrint = "\t"
+			}
+			fmt.Fprint(os.Stderr, charToPrint)
+		} else if i <= err.EndColumn {
+			fmt.Fprint(os.Stderr, "^")
+		}
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+func compile(sourceLines []string, libc bool, asmOut io.Writer) {
+	defer func() {
+		err := recover()
+		if err != nil {
+			switch err := err.(type) {
+			case *errors.UserError:
+				displayError(sourceLines, err)
+			default:
+				panic(err)
+			}
+		}
+	}()
+	doCompile(sourceLines, libc, asmOut)
+}
+
+func main() {
+	outputPath := flag.String("o", "a.out", "path to the binary")
+	stopAfterAssembly := flag.Bool("c", false, "generate object file only")
+	libc := flag.Bool("libc", false, "generate main instead of _start for ues with libc")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) < 1 {
+		log.Fatal("No input file specified")
+	}
+	sourcePath := args[0]
+
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		fmt.Printf("Could not open \"%s\"\n", sourcePath)
+		os.Exit(1)
+	}
+	defer source.Close()
+
+	asmOut, err := os.Create("a.asm")
+	if err != nil {
+		fmt.Printf("Could not create temporary asm file\n")
+		os.Exit(1)
+	}
+	defer asmOut.Close()
+
+	scanner := bufio.NewScanner(source)
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	compile(lines, *libc, asmOut)
 	cmd := exec.Command("nasm", "-felf64", "a.asm")
 	err = cmd.Start()
 	if err != nil {

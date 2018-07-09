@@ -1,6 +1,7 @@
 package parsing
 
 import (
+	"github.com/XrXr/alang/errors"
 	"strings"
 	"unicode"
 )
@@ -46,7 +47,7 @@ var bounderies = [...]string{
 	"}",
 }
 
-func Tokenize(in string) ([]string, []int) {
+func Tokenize(in string) ([]string, []int, error) {
 	if in[len(in)-1] != '\n' {
 		in = in + "\n"
 	}
@@ -101,13 +102,13 @@ tokenize:
 					}
 					k++
 				}
-				panic("unmatched \" in user program")
+				return nil, nil, errors.MakeError(i, i, "unmatched \"")
 			}
 		}
 		if char == '.' && isDigit(safeCharAt(in, i+1)) {
 			for j := tokenStart; j < i; j++ {
 				if !isDigit(in[j]) {
-					panic("No struct member name can begin with a number")
+					return nil, nil, errors.MakeError(i+1, i+1, "No struct member name can begin with a number")
 				}
 			}
 			k := i + 1
@@ -132,7 +133,7 @@ tokenize:
 		}
 		i++
 	}
-	return tokenList, indexList
+	return tokenList, indexList, nil
 }
 
 func safeCharAt(s string, i int) byte {

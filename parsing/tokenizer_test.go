@@ -46,7 +46,11 @@ var fixture = map[string][]string{
 
 func TestTokenizer(t *testing.T) {
 	for in, expect := range fixture {
-		tokens, indices := Tokenize(in)
+		tokens, indices, err := Tokenize(in)
+		if err != nil {
+			t.Errorf("Failed to tokenize %#v", in)
+			continue
+		}
 		for i, token := range tokens {
 
 			var tokenValueFromIdx string
