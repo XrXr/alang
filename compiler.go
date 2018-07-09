@@ -181,10 +181,6 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 				displayError(sourceLines, userError)
 			}
 		}
-		// fmt.Println("Line ", line)
-		// fmt.Println("Gave: ")
-		// parsing.Dump(parser.OutBuffer[len(parser.OutBuffer)-numNewEntries:])
-
 		if numNewEntries == 0 || parseFailed {
 			continue
 		}

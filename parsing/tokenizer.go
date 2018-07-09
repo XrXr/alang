@@ -9,7 +9,6 @@ import (
 // since the match happens from top to bottom, longer ones should come first
 var bounderies = [...]string{
 	"//",
-	"[]",
 	"->",
 	"+=",
 	"-=",

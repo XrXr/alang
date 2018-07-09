@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"github.com/XrXr/alang/errors"
 	"strconv"
-	"strings"
 	"unicode"
 )
 
 var _ = fmt.Printf // for debugging. remove when done
+const invalidDeclNameMessage = "Invalid name"
 
 type parsedNode struct {
 	node     interface{}
@@ -71,10 +71,10 @@ func ParseExpr(tokens []string) (interface{}, error) {
 	parsed := make(map[int]parsedNode)
 	if tokens[0] == "if" {
 		if tokens[len(tokens)-1] != "{" {
-			return nil, errors.MakeError(0, 0, "if statement must end in {")
+			return nil, errors.MakeError(0, 0, "if statement must end in \"{\"")
 		}
 		if len(tokens) < 3 {
-			return nil, errors.MakeError(0, 0, "Missing conditonal for if statement")
+			return nil, errors.MakeError(0, 0, "if statements need to have an expression")
 		}
 		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens)-1)
 		if err != nil {
@@ -96,7 +96,7 @@ func ParseExpr(tokens []string) (interface{}, error) {
 		}, nil
 	} else if tokens[0] == "for" {
 		if tokens[len(tokens)-1] != "{" {
-			return nil, errors.MakeError(0, 0, "loop header must end in {")
+			return nil, errors.MakeError(0, 0, "loop header must end in \"{\"")
 		}
 		if len(tokens) == 2 {
 			// "for {"
@@ -115,7 +115,10 @@ func ParseExpr(tokens []string) (interface{}, error) {
 	} else if tokens[0] == "struct" && len(tokens) == 3 && tokens[2] == "{" {
 		return StructDeclare{Name: IdName(tokens[1])}, nil
 	} else if tokens[0] == "var" {
-		return parseDecl(tokens[1:])
+		if len(tokens) < 3 {
+			return nil, errors.MakeError(0, len(tokens)-1, "Incomplete declaration")
+		}
+		return parseDecl(tokens, 1, len(tokens))
 	} else if tokens[0] == "break" && len(tokens) == 1 {
 		return BreakNode{}, nil
 	} else if tokens[0] == "continue" && len(tokens) == 1 {
@@ -148,61 +151,70 @@ func checkLeftRight(node *ExprNode, opTokIdx int) error {
 		return errors.MakeError(opTokIdx, opTokIdx, "This operator needs an operand to the right")
 	}
 	if !isUnary[node.Op] && node.Left == nil {
-		println(node.Op.String())
 		return errors.MakeError(opTokIdx, opTokIdx, "This operator needs an operand to the left")
 	}
 	return nil
 }
 
-func parseDecl(tokens []string) (interface{}, error) {
-	typeDecl, err := parseTypeDecl(tokens[1:])
+func parseDecl(tokens []string, start, end int) (interface{}, error) {
+	typeDecl, err := parseTypeDecl(tokens, start+1, end)
 	if err != nil {
 		return nil, err
 	}
-	return Declaration{Name: IdName(tokens[0]), Type: typeDecl}, nil
+	if !tokenIsId(tokens[start]) {
+		return nil, errors.MakeError(start, start, invalidDeclNameMessage)
+	}
+	return Declaration{Name: IdName(tokens[start]), Type: typeDecl}, nil
 }
 
 func parseStructMembers(tokens []string) (interface{}, error) {
 	if len(tokens) == 1 && tokens[0] == "}" {
 		return BlockEnd(0), nil
 	}
-	if len(tokens) >= 2 {
-		return parseDecl(tokens)
-	}
-	return nil, errors.MakeError(0, 0, "Malformed type declaration. Expected a name and a type")
+	return parseDecl(tokens, 0, len(tokens))
 }
 
-func parseTypeDecl(tokens []string) (TypeDecl, error) {
+func parseTypeDecl(tokens []string, start int, end int) (TypeDecl, error) {
 	indirect := 0
-	var base string
-	for i, tok := range tokens {
+	var sizes []int
+	i := start
+	for i < end {
+		tok := tokens[i]
 		if tok == "*" {
 			indirect++
 		} else {
-			if i+2 < len(tokens)-1 && tok == "[" && tokens[i+2] == "]" {
+			if i+2 < end && tok == "[" && tokens[i+2] == "]" {
 				arraySize, err := strconv.Atoi(tokens[i+1])
 				if err != nil {
-					return TypeDecl{}, errors.MakeError(0, 0, "Not a valid array size. Must be an integer")
+					return TypeDecl{}, errors.MakeError(i, i+2, "Array size must be an integer literal")
 				}
-				containedSegment := tokens[i+3:]
-				if len(containedSegment) == 0 {
-					return TypeDecl{}, errors.MakeError(0, 0, "Arrays must contain some type")
+				// three because that's the number of tokens [323] parses to
+				if i+3 >= end {
+					return TypeDecl{}, errors.MakeError(i, end-1, "Arrays must contain some type")
 				}
-				containedType, err := parseTypeDecl(containedSegment)
+				sizes = append(sizes, arraySize)
+				if tokens[i+3] == "[" {
+					i = i + 3
+					continue
+				}
+				containedType, err := parseTypeDecl(tokens, i+3, end)
 				if err != nil {
 					return TypeDecl{}, err
 				}
 				return TypeDecl{
 					LevelOfIndirection: indirect,
-					ArraySizes:         []int{arraySize},
+					ArraySizes:         sizes,
 					ArrayBase:          &containedType,
 				}, nil
-			} else if i != len(tokens)-1 {
-				return TypeDecl{}, errors.MakeError(0, 0, "Junk after the pointed-to type name")
-			} else {
-				base = tok
+			} else if i != end-1 {
+				return TypeDecl{}, errors.MakeError(start, end-1, "This needs to be a type declaration")
 			}
 		}
+		i++
+	}
+	base := tokens[end-1]
+	if !tokenIsId(base) {
+		return TypeDecl{}, errors.MakeError(end-1, end-1, invalidDeclNameMessage)
 	}
 	return TypeDecl{LevelOfIndirection: indirect, Base: IdName(base)}, nil
 }
@@ -236,7 +248,7 @@ func genParenInfo(tokens []string, start int, end int) ([]bracketInfo, error) {
 		i++
 	}
 	if len(openStack) != 0 {
-		return nil, errors.MakeError(openStack[0], openStack[0], `unclosed "("`)
+		return nil, errors.MakeError(openStack[0], openStack[0], `unclosed bracket`)
 	}
 	return parenInfo, nil
 }
@@ -250,7 +262,7 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	for _, paren := range parenInfo {
 		if paren.kind == square {
 			if paren.open == start {
-				return nil, errors.MakeError(0, 0, `this bracket doesn't make sense here`)
+				panic("ice: asked to parse an expression that starts with [. What?")
 			}
 			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
 			if err != nil {
@@ -340,15 +352,6 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 		}
 	}
 
-	if len(ops) == 0 {
-		parsed, found := parsed[start]
-		if !found || parsed.otherEnd < end-1 {
-			return nil, errors.MakeError(start, start, "Expected an operator")
-		}
-		return parsed.node, nil
-	}
-
-	var finalNode ExprNode
 	for len(ops) > 0 {
 		opTok := heap.Pop(&ops).(opToken)
 		leftI := opTok.index - 1
@@ -395,15 +398,14 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 			return nil, err
 		}
 
-		finalNode = newNode
-
 		parsed[leftI] = parsedNode{newNode, rightI}
 		parsed[rightI] = parsedNode{newNode, leftI}
 	}
 	orphanOperandMessage := "This operand isn't consumed by any operator"
 	if info, startIsParsed := parsed[start]; startIsParsed {
-		println(info.otherEnd, end-1)
-		if info.otherEnd != end-1 {
+		if info.otherEnd == end-1 {
+			return info.node, nil
+		} else {
 			for i := start; i < end; i++ {
 				_, parsed := parsed[i]
 				if !parsed {
@@ -412,7 +414,6 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 			}
 			panic(fmt.Sprintf("ice: inconsistency in parsed map: whole range isn't covered but a node that isn't parsed can't be found in the map"))
 		}
-		return finalNode, nil
 	} else {
 		return nil, errors.MakeError(start, start, orphanOperandMessage)
 	}
@@ -443,10 +444,8 @@ func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 			args = append(args, node)
 		}
 	}
-	idNode, good := parseToken(tokens[paren.open-1]).(IdName)
-	if !good {
-		return nil, errors.MakeError(0, 0, `expected an identifier`)
-	}
+	// caller needs to make sure that this works
+	idNode := parseToken(tokens[paren.open-1]).(IdName)
 
 	return &ProcCall{Callee: idNode, Args: args}, nil
 }
@@ -461,7 +460,7 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 			}
 		}
 		if blockStart == -1 {
-			return nil, 0, errors.MakeError(0, 0, "Proc expressions must have a block")
+			return nil, 0, errors.MakeError(paren.open-1, paren.end, "Proc expressions must have a body")
 		}
 	} else {
 		blockStart = len(tokens)
@@ -479,17 +478,9 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 		if tokIsComma || j == paren.end {
 			var decl Declaration
 			if j-leftBoundary == 1 {
-				last := tokens[j-1]
-				spaceIdx := strings.IndexRune(last, ' ')
-				if spaceIdx == -1 {
-					return nil, 0, errors.MakeError(0, 0, `expected a type declaration`)
-				}
-				decl = Declaration{
-					Type: TypeDecl{Base: IdName(last[spaceIdx+1:])},
-					Name: IdName(last[:spaceIdx]),
-				}
+				return nil, 0, errors.MakeError(j-1, j-1, `This should be a type declaration`)
 			} else {
-				parsed, err := parseDecl(tokens[leftBoundary:j])
+				parsed, err := parseDecl(tokens, leftBoundary, j)
 				if err != nil {
 					return nil, 0, err
 				}
@@ -503,11 +494,11 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 	}
 	returnType := TypeDecl{Base: IdName("void")}
 	if paren.end+1 < len(tokens) && tokens[paren.end+1] == "->" {
-		if paren.end+2 >= len(tokens) {
-			return nil, 0, errors.MakeError(0, 0, "Expected a type")
+		if paren.end+2 >= len(tokens) || tokens[paren.end+2] == "{" {
+			return nil, 0, errors.MakeError(paren.end+1, paren.end+1, "A return type should come after this")
 		}
 		var err error
-		returnType, err = parseTypeDecl(tokens[paren.end+2 : blockStart])
+		returnType, err = parseTypeDecl(tokens, paren.end+2, blockStart)
 		if err != nil {
 			return nil, 0, err
 		}

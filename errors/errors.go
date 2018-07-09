@@ -10,7 +10,7 @@ type UserError struct {
 }
 
 func (e *UserError) Error() string {
-	return fmt.Sprintf("%d:%d %s", e.Line, e.StartColumn, e.Message)
+	return fmt.Sprintf("%d:%d %s", e.Line+1, e.StartColumn, e.Message)
 }
 
 func MakeError(start, end int, message string) error {

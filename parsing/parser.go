@@ -63,6 +63,7 @@ func (p *Parser) processLine(line string) error {
 	if err != nil {
 		return err
 	}
+	// fmt.Printf("%#v\n", tokens) // Dump(tokens)
 	_ = indices
 	if len(tokens) == 0 {
 		return nil
@@ -70,20 +71,20 @@ func (p *Parser) processLine(line string) error {
 	if tokens[0] == "//" {
 		return nil
 	}
-	// fmt.Printf("%#v\n", tokens) // Dump(tokens)
 	var n interface{}
 	if p.currentContext() == structContext {
 		n, err = parseStructMembers(tokens)
 	} else {
 		n, err = ParseExpr(tokens)
 	}
-	// Dump(n)
 	if err != nil {
 		userError := err.(*errors.UserError)
 		userError.StartColumn = indices[userError.StartColumn]
 		userError.EndColumn = indices[userError.EndColumn] + len(tokens[userError.EndColumn]) - 1
 		return err
 	}
+	// fmt.Printf("Line \"%s\" gave:\n", line)
+	// Dump(n)
 	switch t := n.(type) {
 	case ExprNode:
 		if t.Op == ConstDeclare {
