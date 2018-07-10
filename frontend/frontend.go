@@ -13,7 +13,7 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	var gen procGen
 	gen.rootScope = &scope{
 		gen:         &gen,
-		varTable:    make(map[parsing.IdName]int),
+		varTable:    make(map[string]int),
 		parentScope: nil,
 	}
 	gen.labelGen = labelGen
@@ -21,11 +21,11 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	// fmt.Printf("frontend: generating for %s\n", order.Name)
 	for i, arg := range order.ProcDecl.Args {
 		_ = i
-		gen.rootScope.newNamedVar(arg.Name)
+		gen.rootScope.newNamedVar(arg.Name.Name)
 		// fmt.Printf("arg %d is named %s\n", i, arg.Name)
 	}
 
-	gen.addOpt(ir.Inst{Type: ir.StartProc, Extra: string(order.Name)})
+	gen.addOpt(ir.Inst{Type: ir.StartProc, Extra: order.Name})
 	ret := genForProcSubSection(labelGen, order, gen.rootScope, 0)
 	gen.addOpt(ir.Inst{Type: ir.EndProc})
 	if ret != len(order.In) {
@@ -49,16 +49,16 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		switch node := (*nodePtr).(type) {
 		case parsing.Declaration:
 			// these are declaration without values i.e. not foo := 3
-			newVar := scope.newNamedVar(node.Name)
+			newVar := scope.newNamedVar(node.Name.Name)
 			gen.addOpt(ir.MakeMutateOnlyInst(ir.AssignImm, newVar, node.Type))
 		case parsing.ExprNode:
 			switch node.Op {
 			case parsing.Declare:
-				varName := node.Left.(parsing.IdName)
+				varName := node.Left.(parsing.IdName).Name
 				if _, alreadyExist := scope.resolve(varName); alreadyExist {
 					_, existsInCurrentScope := scope.varTable[varName]
 					if existsInCurrentScope {
-						panic("redeclaration of variable " + string(varName))
+						panic("redeclaration of variable " + varName)
 					}
 					rhsResult, err := genExpressionValue(scope, node.Right)
 					if err != nil {
@@ -75,10 +75,10 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				}
 			case parsing.Assign, parsing.PlusEqual, parsing.MinusEqual:
 				leftAsIdent, leftIsIdent := node.Left.(parsing.IdName)
-				if leftIsIdent {
-					leftVarNum, varFound := scope.resolve(leftAsIdent)
+				if leftIdent := leftAsIdent.Name; leftIsIdent {
+					leftVarNum, varFound := scope.resolve(leftIdent)
 					if !varFound {
-						panic(fmt.Sprintf("bug in user program! assign to undefined variable \"%s\"", leftAsIdent))
+						panic(fmt.Sprintf("bug in user program! assign to undefined variable \"%s\"", leftIdent))
 					}
 					rightResult, err := genExpressionValue(scope, node.Right)
 					if err != nil {
@@ -157,7 +157,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 					// parser gurantee
 					usingRangeExpr = true
 					rangeExpr = loopExpr.Right.(parsing.ExprNode)
-					iterationVar = loopScope.newNamedVar(loopExpr.Left.(parsing.IdName))
+					iterationVar = loopScope.newNamedVar(loopExpr.Left.(parsing.IdName).Name)
 					varUsed = true
 					fallthrough
 				case parsing.Range:
@@ -248,7 +248,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 func genExpressionValue(scope *scope, node interface{}) (int, error) {
 	switch n := node.(type) {
 	case parsing.IdName:
-		vn, found := scope.resolve(n)
+		vn, found := scope.resolve(n.Name)
 		if !found {
 			panic(fmt.Errorf("undefined var %s", n))
 		}
@@ -269,7 +269,7 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 	labelGen := gen.labelGen
 	switch n := node.(type) {
 	case parsing.IdName:
-		vn, found := scope.resolve(n)
+		vn, found := scope.resolve(n.Name)
 		if !found {
 			panic(fmt.Errorf("undefined var %s", n))
 		}
@@ -305,7 +305,7 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 			argVars = append(argVars, argEval)
 		}
 		gen.addOpt(ir.MakeMutateOnlyInst(ir.Call, dest, ir.CallExtra{
-			Name:    string(n.Callee),
+			Name:    n.Callee.Name,
 			ArgVars: argVars,
 		}))
 	case parsing.ExprNode:
@@ -401,7 +401,7 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 		case parsing.AddressOf:
 			switch right := n.Right.(type) {
 			case parsing.IdName:
-				vn, found := scope.resolve(right)
+				vn, found := scope.resolve(right.Name)
 				if !found {
 					return errors.New("undefined var")
 				}
@@ -436,7 +436,7 @@ func computePointer(scope *scope, node interface{}) int {
 		case parsing.Dot:
 			left := computePointerRecursive(scope, n.Left, node)
 			result := scope.newVar()
-			fieldName := string(n.Right.(parsing.IdName))
+			fieldName := n.Right.(parsing.IdName).Name
 			gen.addOpt(ir.MakeBinaryInst(ir.StructMemberPtr, result, left, fieldName))
 			return result
 		}
@@ -463,7 +463,7 @@ func computePointerRecursive(scope *scope, node interface{}, parent interface{})
 		case parsing.Dot:
 			left := computePointerRecursive(scope, n.Left, node)
 			result := scope.newVar()
-			fieldName := string(n.Right.(parsing.IdName))
+			fieldName := n.Right.(parsing.IdName).Name
 			gen.addOpt(ir.MakeBinaryInst(ir.PeelStruct, result, left, fieldName))
 			return result
 		}
@@ -482,7 +482,7 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 		switch n.Op {
 		case parsing.Dereference:
 			if ident, bareDeref := n.Right.(parsing.IdName); bareDeref {
-				vn, found := scope.resolve(ident)
+				vn, found := scope.resolve(ident.Name)
 				if !found {
 					return 0, errors.New("undefined var")
 				}

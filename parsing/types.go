@@ -1,10 +1,38 @@
 package parsing
 
-type IdName string
+type ASTNode interface {
+	GetLineNumber() int
+	GetStartColumn() int
+	GetEndColumn() int
+}
+
+type sourceLocation struct {
+	line        int
+	startColumn int
+	endColumn   int
+}
+
+func (s sourceLocation) GetLineNumber() int {
+	return s.line
+}
+
+func (s sourceLocation) GetStartColumn() int {
+	return s.startColumn
+}
+
+func (s sourceLocation) GetEndColumn() int {
+	return s.endColumn
+}
+
+type IdName struct {
+	sourceLocation
+	Name string
+}
 
 // Either Base is set or ArraySizes and ArrayBase is set.
 // Indirection always happens before the base/array
 type TypeDecl struct {
+	sourceLocation
 	Base               IdName
 	ArraySizes         []int
 	ArrayBase          *TypeDecl
@@ -12,25 +40,22 @@ type TypeDecl struct {
 }
 
 type Declaration struct {
+	sourceLocation
 	Type TypeDecl
 	Name IdName
 }
 
 type ProcDecl struct {
+	sourceLocation
 	Args      []Declaration
 	Return    TypeDecl
 	IsForeign bool
 }
 
-type Block []interface{}
-
-type ProcNode struct {
-	ProcDecl
-}
-
 type ProcCall struct {
+	sourceLocation
 	Callee IdName
-	Args   []interface{}
+	Args   []ASTNode
 }
 
 const Invalid = 0
@@ -77,36 +102,50 @@ const (
 )
 
 type Literal struct {
+	sourceLocation
 	Type  LiteralType
 	Value string
 }
 
 type ExprNode struct {
+	sourceLocation
 	Op    Operator
-	Left  interface{} // either a ExprNode or a Literal or a IdName
-	Right interface{}
+	Left  ASTNode
+	Right ASTNode
 }
 
 type StructDeclare struct {
+	sourceLocation
 	Name IdName
 }
 
 type IfNode struct {
-	Condition interface{}
+	sourceLocation
+	Condition ASTNode
 }
 
 type Loop struct {
-	Expression interface{}
+	sourceLocation
+	Expression ASTNode
 }
 
 type ReturnNode struct {
-	Values []interface{}
+	sourceLocation
+	Values []ASTNode
 }
 
-type ElseNode struct{}
+type ElseNode struct {
+	sourceLocation
+}
 
-type ContinueNode struct{}
+type ContinueNode struct {
+	sourceLocation
+}
 
-type BreakNode struct{}
+type BreakNode struct {
+	sourceLocation
+}
 
-type BlockEnd int
+type BlockEnd struct {
+	sourceLocation
+}

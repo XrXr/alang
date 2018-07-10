@@ -9,8 +9,8 @@ import (
 
 type ProcWorkOrder struct {
 	Out      chan OptBlock
-	In       []*interface{}
-	Name     parsing.IdName
+	In       []*parsing.ASTNode
+	Name     string
 	ProcDecl parsing.ProcDecl
 }
 
@@ -47,7 +47,7 @@ func (g *LabelIdGen) GenLabel(template string) (ret string) {
 type scope struct {
 	gen         *procGen
 	parentScope *scope
-	varTable    map[parsing.IdName]int
+	varTable    map[string]int
 	loopLabel   string
 }
 
@@ -55,14 +55,14 @@ func (s *scope) inherit() *scope {
 	sub := scope{
 		gen:         s.gen,
 		parentScope: s,
-		varTable:    make(map[parsing.IdName]int),
+		varTable:    make(map[string]int),
 		loopLabel:   s.loopLabel,
 	}
 	// #speed
 	return &sub
 }
 
-func (s *scope) resolve(name parsing.IdName) (int, bool) {
+func (s *scope) resolve(name string) (int, bool) {
 	cur := s
 	for cur != nil {
 		varNum, found := cur.varTable[name]
@@ -81,9 +81,9 @@ func (s *scope) newVar() int {
 	return current
 }
 
-func (s *scope) newNamedVar(name parsing.IdName) int {
+func (s *scope) newNamedVar(name string) int {
 	varNum := s.newVar()
-	fmt.Println(string(name), "has vn", varNum)
+	fmt.Println(name, "has vn", varNum)
 	s.varTable[name] = varNum
 	return varNum
 }

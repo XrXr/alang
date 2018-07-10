@@ -24,14 +24,14 @@ type embedGraphNode struct {
 }
 
 // resolve all the type of members in structs and build the global environment
-func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*interface{}]*typing.StructRecord, workOrders []*frontend.ProcWorkOrder) error {
-	notDone := make(map[parsing.IdName][]*typing.TypeRecord)
+func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map[*parsing.ASTNode]*typing.StructRecord, workOrders []*frontend.ProcWorkOrder) error {
+	notDone := make(map[string][]*typing.TypeRecord)
 	addUnresolved := func(unresolvedRecord *typing.TypeRecord) {
 		unresolved := (*unresolvedRecord).(typing.Unresolved)
 		name := typing.GrabUnresolvedName(unresolved)
 		notDone[name] = append(notDone[name], unresolvedRecord)
 	}
-	embedGraphString := make(map[*typing.StructRecord][]parsing.IdName)
+	embedGraphString := make(map[*typing.StructRecord][]string)
 	for _, structRecord := range nodeToStruct {
 		for _, field := range structRecord.Members {
 			unresolved, isUnresolved := field.Type.(typing.Unresolved)
@@ -67,13 +67,13 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 
 	for node, structRecord := range nodeToStruct {
 		structNode := (*node).(parsing.StructDeclare)
-		name := structNode.Name
+		name := structNode.Name.Name
 		for _, typeRecordPtr := range notDone[name] {
 			unresolved := (*typeRecordPtr).(typing.Unresolved)
 			*typeRecordPtr = typing.BuildRecordAccordingToUnresolved(structRecord, unresolved)
 		}
 		delete(notDone, name)
-		env.Types[structNode.Name] = structRecord
+		env.Types[structNode.Name.Name] = structRecord
 	}
 	if len(notDone) > 0 {
 		for typeName := range notDone {
@@ -99,7 +99,7 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 	return nil
 }
 
-func dedupSorted(slice []parsing.IdName) []parsing.IdName {
+func dedupSorted(slice []string) []string {
 	pushDist := 0
 	for i := 1; i < len(slice); i++ {
 		if slice[i] == slice[i-1] {
@@ -113,7 +113,7 @@ func dedupSorted(slice []parsing.IdName) []parsing.IdName {
 	return slice[0 : len(slice)-pushDist]
 }
 
-func resolveStructSize(nodeToStruct map[*interface{}]*typing.StructRecord, embedGraph map[*typing.StructRecord]embedGraphNode) {
+func resolveStructSize(nodeToStruct map[*parsing.ASTNode]*typing.StructRecord, embedGraph map[*typing.StructRecord]embedGraphNode) {
 	for _, structRecord := range nodeToStruct {
 		_, embeds := embedGraph[structRecord]
 		if !embeds {
@@ -161,10 +161,10 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 	var labelGen frontend.LabelIdGen
 	parser := parsing.NewParser()
 	typer := typing.NewTyper()
-	var currentProc *interface{}
-	var nodesForProc []*interface{}
+	var currentProc *parsing.ASTNode
+	var nodesForProc []*parsing.ASTNode
 	env := typing.NewEnvRecord(typer)
-	structs := make(map[*interface{}]*typing.StructRecord)
+	structs := make(map[*parsing.ASTNode]*typing.StructRecord)
 	if libc {
 		library.AddLibcExtrasToEnv(env, typer)
 	}
@@ -193,10 +193,10 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 
 		exprNode, isExpr := (*node).(parsing.ExprNode)
 		if !isComplete && isExpr && exprNode.Op == parsing.ConstDeclare {
-			procNode, isProc := exprNode.Right.(parsing.ProcNode)
+			procDecl, isProc := exprNode.Right.(parsing.ProcDecl)
 			if isProc {
 				currentProc = node
-				if procNode.ProcDecl.IsForeign {
+				if procDecl.IsForeign {
 					isForeignProc = true
 				} else {
 					continue
@@ -208,13 +208,13 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 
 		if _, isEnd := (*node).(parsing.BlockEnd); isForeignProc || (isEnd && parent == currentProc) {
 			procDeclare := (*currentProc).(parsing.ExprNode)
-			procNode := procDeclare.Right.(parsing.ProcNode)
-			procName := procDeclare.Left.(parsing.IdName)
+			procDecl := procDeclare.Right.(parsing.ProcDecl)
+			procName := procDeclare.Left.(parsing.IdName).Name
 			order := frontend.ProcWorkOrder{
 				Out:      make(chan frontend.OptBlock),
 				In:       nodesForProc,
 				Name:     procName,
-				ProcDecl: procNode.ProcDecl,
+				ProcDecl: procDecl,
 			}
 			workOrders = append(workOrders, &order)
 			go frontend.GenForProc(&labelGen, &order)
@@ -225,7 +225,7 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 
 		if structDeclare, isStructDeclare := (*node).(parsing.StructDeclare); isStructDeclare {
 			newStruct := typing.StructRecord{
-				Name:    string(structDeclare.Name),
+				Name:    string(structDeclare.Name.Name),
 				Members: make(map[string]*typing.StructField),
 			}
 			structs[node] = &newStruct
@@ -238,7 +238,7 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 					Type: typer.TypeRecordFromDecl(typeDeclare.Type),
 				}
 				parentStruct.MemberOrder = append(parentStruct.MemberOrder, newField)
-				parentStruct.Members[string(typeDeclare.Name)] = newField
+				parentStruct.Members[typeDeclare.Name.Name] = newField
 			}
 		}
 		if currentProc != nil {

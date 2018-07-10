@@ -16,8 +16,8 @@ type ProcRecord struct {
 }
 
 type EnvRecord struct {
-	Procs map[parsing.IdName]ProcRecord
-	Types map[parsing.IdName]TypeRecord
+	Procs map[string]ProcRecord
+	Types map[string]TypeRecord
 }
 
 type Typer struct {
@@ -129,7 +129,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	case ir.Call:
 		out := opt.Out()
 		extra := opt.Extra.(ir.CallExtra)
-		callee := parsing.IdName(extra.Name)
+		callee := extra.Name
 		typeRecord, callToType := env.Types[callee]
 		if callToType {
 			switch record := typeRecord.(type) {
@@ -342,7 +342,7 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	return nil
 }
 
-var builtinTypes map[parsing.IdName]int = map[parsing.IdName]int{
+var builtinTypes map[string]int = map[string]int{
 	"void":   VoidIdx,
 	"string": StringIdx,
 	"int":    IntIdx,
@@ -357,7 +357,7 @@ var builtinTypes map[parsing.IdName]int = map[parsing.IdName]int{
 	"s64":    S64Idx,
 }
 
-func (t *Typer) mapToBuiltinType(name parsing.IdName) TypeRecord {
+func (t *Typer) mapToBuiltinType(name string) TypeRecord {
 	idx, ok := builtinTypes[name]
 	if ok {
 		return t.Builtins[idx]
@@ -412,7 +412,7 @@ func BuildRecordWithIndirection(base TypeRecord, level int) TypeRecord {
 
 func BuildRecordAccordingToUnresolved(base TypeRecord, unresolved Unresolved) TypeRecord {
 	var record TypeRecord
-	if unresolved.Decl.Base == "" {
+	if unresolved.Decl.Base.Name == "" {
 		record = BuildRecordWithIndirection(base, unresolved.Decl.ArrayBase.LevelOfIndirection)
 		record = BuildArray(record, unresolved.Decl.ArraySizes)
 	} else {
@@ -421,10 +421,10 @@ func BuildRecordAccordingToUnresolved(base TypeRecord, unresolved Unresolved) Ty
 	return BuildRecordWithIndirection(record, unresolved.Decl.LevelOfIndirection)
 }
 
-func GrabUnresolvedName(unresolved Unresolved) parsing.IdName {
-	name := unresolved.Decl.Base
+func GrabUnresolvedName(unresolved Unresolved) string {
+	name := unresolved.Decl.Base.Name
 	if name == "" {
-		name = unresolved.Decl.ArrayBase.Base
+		name = unresolved.Decl.ArrayBase.Base.Name
 		if name == "" {
 			panic("ice: nested array decl not parsed into proper format")
 		}
@@ -441,7 +441,7 @@ func (t *Typer) TypeRecordFromDecl(decl parsing.TypeDecl) TypeRecord {
 			return Unresolved{Decl: decl}
 		}
 	} else {
-		base = t.mapToBuiltinType(decl.Base)
+		base = t.mapToBuiltinType(decl.Base.Name)
 	}
 	if base == nil {
 		return Unresolved{Decl: decl}
@@ -493,8 +493,8 @@ func NewEnvRecord(typer *Typer) *EnvRecord {
 	binTableReturn := BuildRecordWithIndirection(typer.Builtins[IntIdx], 1)
 	u8Ptr := BuildRecordWithIndirection(typer.Builtins[U8Idx], 1)
 	env := EnvRecord{
-		Types: make(map[parsing.IdName]TypeRecord),
-		Procs: map[parsing.IdName]ProcRecord{
+		Types: make(map[string]TypeRecord),
+		Procs: map[string]ProcRecord{
 			"exit":      {Return: voidType, Args: []TypeRecord{typer.Builtins[IntIdx]}},
 			"puts":      {Return: voidType, Args: []TypeRecord{typer.Builtins[StringIdx]}},
 			"writes":    {Return: voidType, Args: []TypeRecord{u8Ptr, typer.Builtins[IntIdx]}},

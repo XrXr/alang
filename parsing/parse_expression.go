@@ -12,7 +12,7 @@ var _ = fmt.Printf // for debugging. remove when done
 const invalidDeclNameMessage = "Invalid name"
 
 type parsedNode struct {
-	node     interface{}
+	node     ASTNode
 	otherEnd int
 }
 
@@ -66,115 +66,171 @@ func (o *OpHeap) Pop() interface{} {
 	return x
 }
 
+type lineParse struct {
+	tokens     []string
+	indices    []int
+	lineNumber int
+}
+
+// source location helpers
+func (l *lineParse) makeLoc() sourceLocation {
+	return sourceLocation{line: l.lineNumber}
+}
+
+func (l *lineParse) startOfTok(tokIdx int) int {
+	return l.indices[tokIdx]
+}
+
+func (l *lineParse) endOfTok(tokIdx int) int {
+	return l.indices[tokIdx] + len(l.tokens[tokIdx]) - 1
+}
+
+func (l *lineParse) singleTokSourceLocation(tokIdx int) sourceLocation {
+	info := l.makeLoc()
+	info.startColumn = l.startOfTok(tokIdx)
+	info.endColumn = l.endOfTok(tokIdx)
+	return info
+}
+
+func (l *lineParse) singleTokError(idx int, message string) error {
+	return errors.MakeError(l.startOfTok(1), l.endOfTok(1), message)
+}
+
+func (l *lineParse) makeIdent(idx int) IdName {
+	return IdName{l.singleTokSourceLocation(idx), l.tokens[idx]}
+}
+
 // Errors from here are all based token index. The caller is responsible for translating the indices to source column numbers
-func ParseExpr(tokens []string) (interface{}, error) {
+func (l *lineParse) parseInStatementContext() (ASTNode, error) {
 	parsed := make(map[int]parsedNode)
-	if tokens[0] == "if" {
-		if tokens[len(tokens)-1] != "{" {
-			return nil, errors.MakeError(0, 0, "if statement must end in \"{\"")
+	tokens := l.tokens
+	firstToken := tokens[0] // caller makes sure that there is at least one token
+	nTokens := len(tokens)
+	switch {
+	case firstToken == "if":
+		if l.tokens[nTokens-1] != "{" {
+			return nil, l.singleTokError(0, "if statement must end in \"{\"")
 		}
-		if len(tokens) < 3 {
-			return nil, errors.MakeError(0, 0, "if statements need to have an expression")
+		if nTokens < 3 {
+			return nil, l.singleTokError(0, "if statements need to have an expression")
 		}
-		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens)-1)
+		parsed, err := l.parseExprWithParen(parsed, 1, nTokens-1)
 		if err != nil {
 			return nil, err
 		}
 		return IfNode{
 			Condition: parsed,
 		}, nil
-	} else if tokens[0] == "return" {
-		if len(tokens) == 1 {
-			return ReturnNode{}, nil
+	case firstToken == "return":
+		if nTokens == 1 {
+			return ReturnNode{sourceLocation: l.singleTokSourceLocation(0)}, nil
 		}
-		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens))
+		parsed, err := l.parseExprWithParen(parsed, 1, nTokens)
 		if err != nil {
 			return nil, err
 		}
 		return ReturnNode{
-			Values: []interface{}{parsed},
+			Values: []ASTNode{parsed},
 		}, nil
-	} else if tokens[0] == "for" {
-		if tokens[len(tokens)-1] != "{" {
-			return nil, errors.MakeError(0, 0, "loop header must end in \"{\"")
+	case firstToken == "for":
+		if tokens[nTokens-1] != "{" {
+			return nil, l.singleTokError(0, "Loop header must end in \"{\"")
 		}
-		if len(tokens) == 2 {
+		if nTokens == 2 {
 			// "for {"
 			return Loop{}, nil
 		}
-		parsed, err := parseExprWithParen(parsed, tokens, 1, len(tokens)-1)
+		parsed, err := l.parseExprWithParen(parsed, 1, nTokens-1)
 		if err != nil {
 			return nil, err
 		}
 		return Loop{
 			Expression: parsed,
 		}, nil
-	} else if (tokens[0] == "else" && len(tokens) == 2 && tokens[1] == "{") ||
-		(tokens[0] == "}" && len(tokens) == 3 && tokens[1] == "else" && tokens[2] == "{") {
+	case (firstToken == "else" && nTokens == 2 && tokens[1] == "{") ||
+		(firstToken == "}" && nTokens == 3 && tokens[1] == "else" && tokens[2] == "{"):
 		return ElseNode{}, nil
-	} else if tokens[0] == "struct" && len(tokens) == 3 && tokens[2] == "{" {
-		return StructDeclare{Name: IdName(tokens[1])}, nil
-	} else if tokens[0] == "var" {
-		if len(tokens) < 3 {
-			return nil, errors.MakeError(0, len(tokens)-1, "Incomplete declaration")
+	case firstToken == "struct" && nTokens == 3 && tokens[2] == "{":
+		if tokenIsId(tokens[1]) {
+			loc := l.makeLoc()
+			loc.startColumn = l.startOfTok(0)
+			loc.endColumn = l.endOfTok(2)
+			return StructDeclare{sourceLocation: loc, Name: l.makeIdent(1)}, nil
+		} else {
+			return nil, l.singleTokError(1, invalidDeclNameMessage)
 		}
-		return parseDecl(tokens, 1, len(tokens))
-	} else if tokens[0] == "break" && len(tokens) == 1 {
-		return BreakNode{}, nil
-	} else if tokens[0] == "continue" && len(tokens) == 1 {
-		return ContinueNode{}, nil
+	case firstToken == "var":
+		if nTokens < 3 {
+			return nil, errors.MakeError(0, nTokens-1, "Incomplete declaration")
+		}
+		return l.parseDecl(1, nTokens)
+	case firstToken == "break" && nTokens == 1:
+		return BreakNode{l.singleTokSourceLocation(0)}, nil
+	case firstToken == "continue" && nTokens == 1:
+		return ContinueNode{l.singleTokSourceLocation(0)}, nil
+	case firstToken == "}" && nTokens == 1:
+		return BlockEnd{l.singleTokSourceLocation(0)}, nil
 	}
 	for index, tok := range tokens {
 		op := tokToOp[tok]
 		if op == Declare || op == ConstDeclare || op == Assign || op == PlusEqual || op == MinusEqual {
-			left, err := parseExprWithParen(parsed, tokens, 0, index)
+			left, err := l.parseExprWithParen(parsed, 0, index)
 			if err != nil {
 				return nil, err
 			}
-			right, err := parseExprWithParen(parsed, tokens, index+1, len(tokens))
+			right, err := l.parseExprWithParen(parsed, index+1, nTokens)
 			if err != nil {
 				return nil, err
 			}
 			node := ExprNode{Op: op, Left: left, Right: right}
-			err = checkLeftRight(&node, index)
+			err = finishExprNode(&node, index)
 			if err != nil {
 				return nil, err
 			}
 			return node, nil
 		}
 	}
-	return parseExprWithParen(parsed, tokens, 0, len(tokens))
+	return l.parseExprWithParen(parsed, 0, nTokens)
 }
 
-func checkLeftRight(node *ExprNode, opTokIdx int) error {
+func finishExprNode(node *ExprNode, opTokIdx int) error {
 	if node.Right == nil {
 		return errors.MakeError(opTokIdx, opTokIdx, "This operator needs an operand to the right")
 	}
-	if !isUnary[node.Op] && node.Left == nil {
+	unary := isUnary[node.Op]
+	if !unary && node.Left == nil {
 		return errors.MakeError(opTokIdx, opTokIdx, "This operator needs an operand to the left")
 	}
+	if !unary {
+		// caller sets it in this case
+		node.startColumn = node.Left.GetStartColumn()
+	}
+	node.endColumn = node.Right.GetEndColumn()
 	return nil
 }
 
-func parseDecl(tokens []string, start, end int) (interface{}, error) {
-	typeDecl, err := parseTypeDecl(tokens, start+1, end)
+func (l *lineParse) parseDecl(start, end int) (ASTNode, error) {
+	tokens := l.tokens
+	typeDecl, err := l.parseTypeDecl(start+1, end)
 	if err != nil {
 		return nil, err
 	}
 	if !tokenIsId(tokens[start]) {
 		return nil, errors.MakeError(start, start, invalidDeclNameMessage)
 	}
-	return Declaration{Name: IdName(tokens[start]), Type: typeDecl}, nil
+	return Declaration{Name: l.makeIdent(start), Type: typeDecl}, nil
 }
 
-func parseStructMembers(tokens []string) (interface{}, error) {
+func (l *lineParse) parseInStructDeclContext() (ASTNode, error) {
+	tokens := l.tokens
 	if len(tokens) == 1 && tokens[0] == "}" {
-		return BlockEnd(0), nil
+		return BlockEnd{l.singleTokSourceLocation(0)}, nil
 	}
-	return parseDecl(tokens, 0, len(tokens))
+	return l.parseDecl(0, len(tokens))
 }
 
-func parseTypeDecl(tokens []string, start int, end int) (TypeDecl, error) {
+func (l *lineParse) parseTypeDecl(start, end int) (TypeDecl, error) {
+	tokens := l.tokens
 	indirect := 0
 	var sizes []int
 	i := start
@@ -197,7 +253,7 @@ func parseTypeDecl(tokens []string, start int, end int) (TypeDecl, error) {
 					i = i + 3
 					continue
 				}
-				containedType, err := parseTypeDecl(tokens, i+3, end)
+				containedType, err := l.parseTypeDecl(i+3, end)
 				if err != nil {
 					return TypeDecl{}, err
 				}
@@ -214,12 +270,13 @@ func parseTypeDecl(tokens []string, start int, end int) (TypeDecl, error) {
 	}
 	base := tokens[end-1]
 	if !tokenIsId(base) {
-		return TypeDecl{}, errors.MakeError(end-1, end-1, invalidDeclNameMessage)
+		return TypeDecl{}, l.singleTokError(end-1, invalidDeclNameMessage)
 	}
-	return TypeDecl{LevelOfIndirection: indirect, Base: IdName(base)}, nil
+	return TypeDecl{LevelOfIndirection: indirect, Base: l.makeIdent(end - 1)}, nil
 }
 
-func genParenInfo(tokens []string, start int, end int) ([]bracketInfo, error) {
+func (l *lineParse) genParenInfo(start int, end int) ([]bracketInfo, error) {
+	tokens := l.tokens
 	parenInfo := make([]bracketInfo, 0)
 	openStack := make([]int, 0)
 	i := start
@@ -230,13 +287,13 @@ func genParenInfo(tokens []string, start int, end int) ([]bracketInfo, error) {
 			openStack = append(openStack, i)
 		case ")", "]":
 			if len(openStack) == 0 {
-				return nil, errors.MakeError(0, 0, fmt.Sprintf(`unmatched "%s"`, tok))
+				return nil, errors.MakeError(i, i, fmt.Sprintf(`unmatched "%s"`, tok))
 			}
 			if tok == ")" && tokens[openStack[len(openStack)-1]] != "(" {
-				return nil, errors.MakeError(0, 0, `unmatched ")"`)
+				return nil, errors.MakeError(i, i, `unmatched ")"`)
 			}
 			if tok == "]" && tokens[openStack[len(openStack)-1]] != "[" {
-				return nil, errors.MakeError(0, 0, `unmatched "]"`)
+				return nil, errors.MakeError(i, i, `unmatched "]"`)
 			}
 			kind := round
 			if tok == "]" {
@@ -253,8 +310,9 @@ func genParenInfo(tokens []string, start int, end int) ([]bracketInfo, error) {
 	return parenInfo, nil
 }
 
-func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
-	parenInfo, err := genParenInfo(tokens, start, end)
+func (l *lineParse) parseExprWithParen(parsed map[int]parsedNode, start, end int) (ASTNode, error) {
+	tokens := l.tokens
+	parenInfo, err := l.genParenInfo(start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +322,7 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			if paren.open == start {
 				panic("ice: asked to parse an expression that starts with [. What?")
 			}
-			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
+			node, err := l.parseExprUnit(parsed, paren.open+1, paren.end)
 			if err != nil {
 				return nil, err
 			}
@@ -272,13 +330,13 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			parsed[paren.end] = parsedNode{node, paren.open}
 		} else if paren.kind == round && paren.open-1 >= start && tokenIsId(tokens[paren.open-1]) {
 			// it's a call or a proc expression
-			var node interface{}
+			var node ASTNode
 			var isForeignProc bool
 			parsedStart := paren.open - 1
 			parsedEnd := paren.end
 			if tokens[paren.open-1] == "proc" {
 				isForeignProc = paren.open-2 >= start && tokens[paren.open-2] == "foreign"
-				proc, endOfProcExpr, err := parseProcExpr(tokens, parsed, paren, !isForeignProc)
+				proc, endOfProcExpr, err := l.parseProcExpr(parsed, paren, !isForeignProc)
 				if err != nil {
 					return nil, err
 				}
@@ -286,7 +344,7 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 				node = *proc
 				parsedEnd = endOfProcExpr
 			} else {
-				call, err := parseCallList(tokens, parsed, paren)
+				call, err := l.parseCallList(parsed, paren)
 				if err != nil {
 					return nil, err
 				}
@@ -294,13 +352,11 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 			}
 			if isForeignProc {
 				parsedStart = paren.open - 2
-				println(parsedStart == start, parsedEnd == end-1, parsedEnd, end-1)
-
 			}
 			parsed[parsedStart] = parsedNode{node, parsedEnd}
 			parsed[parsedEnd] = parsedNode{node, paren.open - 1}
 		} else {
-			node, err := parseExprUnit(parsed, tokens, paren.open+1, paren.end)
+			node, err := l.parseExprUnit(parsed, paren.open+1, paren.end)
 			if err != nil {
 				return nil, err
 			}
@@ -312,17 +368,19 @@ func parseExprWithParen(parsed map[int]parsedNode, tokens []string, start int, e
 	if found && outterMost.otherEnd == end-1 {
 		return outterMost.node, nil
 	}
-	return parseExprUnit(parsed, tokens, start, end)
+	return l.parseExprUnit(parsed, start, end)
 }
 
 // A unit does not contain unparsed parentheses
-func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end int) (interface{}, error) {
+func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int) (ASTNode, error) {
+	tokens := l.tokens
 	if start == end {
 		return nil, nil
 	}
 	if end-start == 1 {
-		return parseToken(tokens[start]), nil
+		return l.parseToken(start), nil
 	}
+
 	var ops OpHeap
 	heap.Init(&ops)
 
@@ -375,7 +433,7 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 				newNode.Left = parsed.node
 				leftI = parsed.otherEnd
 			} else {
-				newNode.Left = parseToken(tokens[leftI])
+				newNode.Left = l.parseToken(leftI)
 			}
 		}
 		if oneToRightValid {
@@ -391,11 +449,11 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 				newNode.Right = parsed.node
 				rightI = parsed.otherEnd
 			} else {
-				newNode.Right = parseToken(tokens[opTok.index+1])
+				newNode.Right = l.parseToken(opTok.index + 1)
 			}
 		}
 
-		err := checkLeftRight(&newNode, opTok.index)
+		err := finishExprNode(&newNode, opTok.index)
 		if err != nil {
 			return nil, err
 		}
@@ -421,10 +479,11 @@ func parseExprUnit(parsed map[int]parsedNode, tokens []string, start int, end in
 	}
 }
 
-func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo) (*ProcCall, error) {
+func (l *lineParse) parseCallList(parsed map[int]parsedNode, paren bracketInfo) (*ProcCall, error) {
+	tokens := l.tokens
 	i := paren.open + 1
 
-	args := make([]interface{}, 0)
+	args := make([]ASTNode, 0)
 	for j := i; j <= paren.end; j++ {
 		if paren.open+1 == paren.end { // call with no arguments
 			break
@@ -438,7 +497,7 @@ func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 		}
 		tok := tokens[j]
 		if tok == "," || j == paren.end {
-			node, err := parseExprWithParen(parsed, tokens, i, j)
+			node, err := l.parseExprWithParen(parsed, i, j)
 			if err != nil {
 				return nil, err
 			}
@@ -446,13 +505,17 @@ func parseCallList(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 			args = append(args, node)
 		}
 	}
-	// caller needs to make sure that this works
-	idNode := parseToken(tokens[paren.open-1]).(IdName)
+	// caller checks whether this is valid ident
+	idNode := l.makeIdent(paren.open - 1)
+	loc := l.makeLoc()
+	loc.startColumn = l.startOfTok(paren.open - 1)
+	loc.endColumn = l.endOfTok(paren.end)
 
 	return &ProcCall{Callee: idNode, Args: args}, nil
 }
 
-func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo, requireBlock bool) (*ProcNode, int, error) {
+func (l *lineParse) parseProcExpr(parsed map[int]parsedNode, paren bracketInfo, requireBlock bool) (*ProcDecl, int, error) {
+	tokens := l.tokens
 	declEnd := -1
 	if requireBlock {
 		for i := paren.end + 1; i < len(tokens); i++ {
@@ -480,9 +543,9 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 		if tokIsComma || j == paren.end {
 			var decl Declaration
 			if j-leftBoundary == 1 {
-				return nil, 0, errors.MakeError(j-1, j-1, `This should be a type declaration`)
+				return nil, 0, l.singleTokError(j-1, `This should be a type declaration`)
 			} else {
-				parsed, err := parseDecl(tokens, leftBoundary, j)
+				parsed, err := l.parseDecl(leftBoundary, j)
 				if err != nil {
 					return nil, 0, err
 				}
@@ -494,13 +557,13 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 			leftBoundary = j + 1
 		}
 	}
-	returnType := TypeDecl{Base: IdName("void")}
+	returnType := TypeDecl{Base: IdName{Name: "void"}}
 	if paren.end+1 < len(tokens) && tokens[paren.end+1] == "->" {
 		if paren.end+2 >= len(tokens) || tokens[paren.end+2] == "{" {
 			return nil, 0, errors.MakeError(paren.end+1, paren.end+1, "A return type should come after this")
 		}
 		var err error
-		returnType, err = parseTypeDecl(tokens, paren.end+2, declEnd)
+		returnType, err = l.parseTypeDecl(paren.end+2, declEnd)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -508,26 +571,24 @@ func parseProcExpr(tokens []string, parsed map[int]parsedNode, paren bracketInfo
 	if !requireBlock {
 		declEnd = len(tokens) - 1
 	}
-	return &ProcNode{
-		ProcDecl: ProcDecl{Return: returnType, Args: args}}, declEnd, nil
+	return &ProcDecl{Return: returnType, Args: args}, declEnd, nil
 }
 
-func parseToken(s string) interface{} {
-	if tokenIsOperator(s) {
-		return nil
-	} else if s == "}" {
-		return BlockEnd(0)
-	} else if unicode.IsDigit(rune(s[0])) || s[0] == '-' {
-		return Literal{Number, s}
-	} else if s == "true" || s == "false" {
-		return Literal{Boolean, s}
-	} else if s[0] == '"' {
-		return Literal{String, s[1 : len(s)-1]}
-	} else if s == "nil" {
-		return Literal{Type: NilPtr}
-	} else {
-		return IdName(s)
+func (l *lineParse) parseToken(tokIdx int) ASTNode {
+	token := l.tokens[tokIdx]
+	switch {
+	case unicode.IsDigit(rune(token[0])) || token[0] == '-':
+		return Literal{l.singleTokSourceLocation(tokIdx), Number, token}
+	case token == "true" || token == "false":
+		return Literal{l.singleTokSourceLocation(tokIdx), Boolean, token}
+	case token[0] == '"':
+		return Literal{l.singleTokSourceLocation(tokIdx), String, token[1 : len(token)-1]}
+	case token == "nil":
+		return Literal{sourceLocation: l.singleTokSourceLocation(tokIdx), Type: NilPtr}
+	case tokenIsId(token):
+		return l.makeIdent(tokIdx)
 	}
+	return nil
 }
 
 func tokenIsOperator(token string) bool {

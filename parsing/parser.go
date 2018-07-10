@@ -11,7 +11,7 @@ type parsingContext int
 
 type Parser struct {
 	OutBuffer       []statement
-	incompleteStack []*interface{}
+	incompleteStack []*ASTNode
 	contextStack    []parsingContext
 }
 
@@ -22,13 +22,13 @@ const (
 
 type statement struct {
 	IsComplete bool
-	Node       *interface{}
-	Parent     *interface{}
+	Node       *ASTNode
+	Parent     *ASTNode
 }
 
 func (p *Parser) FeedLine(line string, lineNumber int) (int, error) {
 	before := len(p.OutBuffer)
-	err := p.processLine(line)
+	err := p.processLine(line, lineNumber)
 	if err != nil {
 		if userError, isUserError := err.(*errors.UserError); isUserError {
 			userError.Line = lineNumber
@@ -43,19 +43,19 @@ func (p *Parser) currentContext() parsingContext {
 	return p.contextStack[len(p.contextStack)-1]
 }
 
-func (p *Parser) processLine(line string) error {
-	var parent *interface{}
-	getParent := func() *interface{} {
+func (p *Parser) processLine(line string, lineNumber int) error {
+	var parent *ASTNode
+	getParent := func() *ASTNode {
 		l := len(p.incompleteStack)
 		if l >= 1 {
 			return p.incompleteStack[l-1]
 		}
 		return nil
 	}
-	addOne := func(isComplete bool, nodePtr *interface{}, parent *interface{}) {
+	addOne := func(isComplete bool, nodePtr *ASTNode, parent *ASTNode) {
 		p.OutBuffer = append(p.OutBuffer, statement{isComplete, nodePtr, parent})
 	}
-	startNewBlock := func(node *interface{}) {
+	startNewBlock := func(node *ASTNode) {
 		parent = getParent()
 		p.incompleteStack = append(p.incompleteStack, node)
 	}
@@ -64,18 +64,22 @@ func (p *Parser) processLine(line string) error {
 		return err
 	}
 	// fmt.Printf("%#v\n", tokens) // Dump(tokens)
-	_ = indices
 	if len(tokens) == 0 {
 		return nil
 	}
 	if tokens[0] == "//" {
 		return nil
 	}
-	var n interface{}
+	lp := lineParse{
+		tokens:     tokens,
+		indices:    indices,
+		lineNumber: lineNumber,
+	}
+	var n ASTNode
 	if p.currentContext() == structContext {
-		n, err = parseStructMembers(tokens)
+		n, err = lp.parseInStructDeclContext()
 	} else {
-		n, err = ParseExpr(tokens)
+		n, err = lp.parseInStatementContext()
 	}
 	if err != nil {
 		userError := err.(*errors.UserError)
@@ -88,7 +92,7 @@ func (p *Parser) processLine(line string) error {
 	switch t := n.(type) {
 	case ExprNode:
 		if t.Op == ConstDeclare {
-			_, good := t.Right.(ProcNode)
+			_, good := t.Right.(ProcDecl)
 			if good {
 				startNewBlock(&n)
 				addOne(false, &n, parent)
@@ -107,8 +111,8 @@ func (p *Parser) processLine(line string) error {
 			}
 			top := p.incompleteStack[l-1]
 			p.incompleteStack = p.incompleteStack[:l-1]
-			var end interface{}
-			end = BlockEnd(0)
+			var end ASTNode
+			end = BlockEnd{lp.singleTokSourceLocation(0)}
 			addOne(true, &end, top)
 		}
 		startNewBlock(&n)

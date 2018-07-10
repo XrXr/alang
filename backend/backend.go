@@ -883,7 +883,7 @@ func (p *procGen) generate() {
 		case ir.Call:
 			p.swapStackBoundVars()
 			extra := opt.Extra.(ir.CallExtra)
-			if typeRecord, callToType := p.env.Types[parsing.IdName(extra.Name)]; callToType {
+			if typeRecord, callToType := p.env.Types[extra.Name]; callToType {
 				switch typeRecord.(type) {
 				case *typing.StructRecord:
 					// making a struct. We never put structs in registers even if they fit
@@ -902,7 +902,7 @@ func (p *procGen) generate() {
 					numArgs += 1
 				}
 
-				procRecord := p.env.Procs[parsing.IdName(extra.Name)]
+				procRecord := p.env.Procs[extra.Name]
 				realArgsPassedInReg := 0
 				for i, arg := range extra.ArgVars {
 					if provideReturnStorage {
