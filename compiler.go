@@ -217,7 +217,10 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 				ProcDecl: procDecl,
 			}
 			workOrders = append(workOrders, &order)
-			go frontend.GenForProc(&labelGen, &order)
+			go func() {
+				defer catchUserError(sourceLines)
+				frontend.GenForProc(&labelGen, &order)
+			}()
 			nodesForProc = nil
 			currentProc = nil
 			continue
@@ -326,18 +329,21 @@ func displayError(sourceLines []string, err *errors.UserError) {
 	fmt.Fprintln(os.Stderr)
 }
 
-func compile(sourceLines []string, libc bool, asmOut io.Writer) {
-	defer func() {
-		err := recover()
-		if err != nil {
-			switch err := err.(type) {
-			case *errors.UserError:
-				displayError(sourceLines, err)
-			default:
-				panic(err)
-			}
+func catchUserError(sourceLines []string) {
+	err := recover()
+	if err != nil {
+		switch err := err.(type) {
+		case *errors.UserError:
+			displayError(sourceLines, err)
+			os.Exit(1)
+		default:
+			panic(err)
 		}
-	}()
+	}
+}
+
+func compile(sourceLines []string, libc bool, asmOut io.Writer) {
+	defer catchUserError(sourceLines)
 	doCompile(sourceLines, libc, asmOut)
 }
 

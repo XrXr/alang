@@ -1,0 +1,3 @@
+main :: proc () {
+	a := &foo
+}

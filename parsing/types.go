@@ -1,9 +1,15 @@
 package parsing
 
+import "github.com/XrXr/alang/errors"
+
 type ASTNode interface {
 	GetLineNumber() int
 	GetStartColumn() int
 	GetEndColumn() int
+}
+
+func ErrorFromNode(node ASTNode, message string) *errors.UserError {
+	return &errors.UserError{Line: node.GetLineNumber(), StartColumn: node.GetStartColumn(), EndColumn: node.GetEndColumn(), Message: message}
 }
 
 type sourceLocation struct {

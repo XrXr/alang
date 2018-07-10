@@ -1,13 +1,13 @@
 package frontend
 
 import (
-	"errors"
-	"fmt"
 	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
 	"sort"
 	"strconv"
 )
+
+const undefinedMessage = "Undefined name"
 
 func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	var gen procGen
@@ -18,11 +18,9 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	}
 	gen.labelGen = labelGen
 
-	// fmt.Printf("frontend: generating for %s\n", order.Name)
 	for i, arg := range order.ProcDecl.Args {
 		_ = i
 		gen.rootScope.newNamedVar(arg.Name.Name)
-		// fmt.Printf("arg %d is named %s\n", i, arg.Name)
 	}
 
 	gen.addOpt(ir.Inst{Type: ir.StartProc, Extra: order.Name})
@@ -30,7 +28,7 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 	gen.addOpt(ir.Inst{Type: ir.EndProc})
 	if ret != len(order.In) {
 		parsing.Dump(order.In)
-		panic("gen didn't process whole proc")
+		panic("ice: gen didn't process whole proc")
 	}
 	order.Out <- OptBlock{NumberOfVars: gen.nextVarNum, NumberOfArgs: len(order.ProcDecl.Args), Opts: gen.opts}
 	close(order.Out)
@@ -58,32 +56,23 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				if _, alreadyExist := scope.resolve(varName); alreadyExist {
 					_, existsInCurrentScope := scope.varTable[varName]
 					if existsInCurrentScope {
-						panic("redeclaration of variable " + varName)
+						panic(parsing.ErrorFromNode(node.Left, "Redeclaration of variable"))
 					}
-					rhsResult, err := genExpressionValue(scope, node.Right)
-					if err != nil {
-						panic(err)
-					}
+					rhsResult := genExpressionValue(scope, node.Right)
 					vnForNewVar := scope.newNamedVar(varName)
 					gen.addOpt(ir.MakeBinaryInst(ir.Assign, vnForNewVar, rhsResult, nil))
 				} else {
 					varNum := scope.newNamedVar(varName)
-					err := genExpressionValueToVar(scope, varNum, node.Right)
-					if err != nil {
-						panic(err)
-					}
+					genExpressionValueToVar(scope, varNum, node.Right)
 				}
 			case parsing.Assign, parsing.PlusEqual, parsing.MinusEqual:
 				leftAsIdent, leftIsIdent := node.Left.(parsing.IdName)
 				if leftIdent := leftAsIdent.Name; leftIsIdent {
 					leftVarNum, varFound := scope.resolve(leftIdent)
 					if !varFound {
-						panic(fmt.Sprintf("bug in user program! assign to undefined variable \"%s\"", leftIdent))
+						panic(parsing.ErrorFromNode(node.Left, undefinedMessage))
 					}
-					rightResult, err := genExpressionValue(scope, node.Right)
-					if err != nil {
-						panic(err)
-					}
+					rightResult := genExpressionValue(scope, node.Right)
 					switch node.Op {
 					case parsing.PlusEqual:
 						gen.addOpt(ir.MakeBinaryInst(ir.Add, leftVarNum, rightResult, nil))
@@ -93,14 +82,8 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 						gen.addOpt(ir.MakeBinaryInst(ir.Assign, leftVarNum, rightResult, nil))
 					}
 				} else {
-					assignmentPtr, err := genAssignmentTarget(scope, node.Left)
-					if err != nil {
-						panic(err)
-					}
-					rightResult, err := genExpressionValue(scope, node.Right)
-					if err != nil {
-						panic(err)
-					}
+					assignmentPtr := genAssignmentTarget(scope, node.Left)
+					rightResult := genExpressionValue(scope, node.Right)
 					var leftTmp int
 					if node.Op == parsing.PlusEqual || node.Op == parsing.MinusEqual {
 						leftTmp = scope.newVar()
@@ -122,10 +105,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			}
 		case parsing.IfNode:
 			sawIf = true
-			condVar, err := genExpressionValue(scope, node.Condition)
-			if err != nil {
-				panic(err)
-			}
+			condVar := genExpressionValue(scope, node.Condition)
 			labelForIf := labelGen.GenLabel("cond_not_met_%d")
 			gen.addOpt(ir.MakeReadOnlyInst(ir.JumpIfFalse, condVar, labelForIf))
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
@@ -172,14 +152,8 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 					if rangeExpr.Op != parsing.Range {
 						panic("parser bug")
 					}
-					endVar, err := genExpressionValue(loopScope, rangeExpr.Right)
-					if err != nil {
-						panic(err)
-					}
-					err = genExpressionValueToVar(loopScope, iterationVar, rangeExpr.Left)
-					if err != nil {
-						panic(err)
-					}
+					endVar := genExpressionValue(loopScope, rangeExpr.Right)
+					genExpressionValueToVar(loopScope, iterationVar, rangeExpr.Left)
 					condVar := loopScope.newVar()
 					gen.addOpt(labelInst(loopStart))
 					gen.addOpt(ir.MakeReadOnlyInst(ir.Compare, iterationVar,
@@ -194,10 +168,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			if !usingRangeExpr {
 				gen.addOpt(labelInst(loopStart))
 				condVar := loopScope.newVar()
-				err := genExpressionValueToVar(loopScope, condVar, node.Expression)
-				if err != nil {
-					panic(err)
-				}
+				genExpressionValueToVar(loopScope, condVar, node.Expression)
 				gen.addOpt(ir.MakeReadOnlyInst(ir.JumpIfFalse, condVar, loopEnd))
 			}
 
@@ -216,62 +187,53 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			return i
 		case parsing.ContinueNode:
 			if scope.loopLabel == "" {
-				panic("continue outside of a loop")
+				panic(parsing.ErrorFromNode(node, "Use of continue outside of a loop"))
 			}
 			gen.addOpt(ir.MakePlainInst(ir.Jump, scope.loopLabel+"_loopContinue"))
 		case parsing.BreakNode:
 			if scope.loopLabel == "" {
-				panic("break outside of a loop")
+				panic(parsing.ErrorFromNode(node, "Use of break outside of a loop"))
 			}
 			gen.addOpt(ir.MakePlainInst(ir.Jump, scope.loopLabel+"_loopEnd"))
 		case parsing.ReturnNode:
 			var returnValues []int
 			for _, valueExpr := range node.Values {
-				retVar, err := genExpressionValue(scope, valueExpr)
-				if err != nil {
-					panic(err)
-				}
+				retVar := genExpressionValue(scope, valueExpr)
 				returnValues = append(returnValues, retVar)
 			}
 			gen.addOpt(ir.Inst{Type: ir.Return, Extra: ir.ReturnExtra{returnValues}})
 		default:
-			_, err := genExpressionValue(scope, node)
-			if err != nil {
-				panic(err)
-			}
+			genExpressionValue(scope, node)
 		}
 	}
 	return i
 }
 
 // given an ast node, generate ir that computes its value. Returns the variable number which holds said value.
-func genExpressionValue(scope *scope, node interface{}) (int, error) {
+func genExpressionValue(scope *scope, node parsing.ASTNode) int {
 	switch n := node.(type) {
 	case parsing.IdName:
 		vn, found := scope.resolve(n.Name)
 		if !found {
-			panic(fmt.Errorf("undefined var %s", n))
+			panic(parsing.ErrorFromNode(n, undefinedMessage))
 		}
-		return vn, nil
+		return vn
 	default:
 		vn := scope.newVar()
-		err := genExpressionValueToVar(scope, vn, node)
-		if err != nil {
-			return 0, err
-		}
-		return vn, nil
+		genExpressionValueToVar(scope, vn, node)
+		return vn
 	}
 }
 
 // same as genExpressionValue except the caller decides where the value goes
-func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
+func genExpressionValueToVar(scope *scope, dest int, node parsing.ASTNode) {
 	gen := scope.gen
 	labelGen := gen.labelGen
 	switch n := node.(type) {
 	case parsing.IdName:
 		vn, found := scope.resolve(n.Name)
 		if !found {
-			panic(fmt.Errorf("undefined var %s", n))
+			panic(parsing.ErrorFromNode(n, undefinedMessage))
 		}
 		gen.addOpt(ir.MakeBinaryInst(ir.Assign, dest, vn, nil))
 	case parsing.Literal:
@@ -283,9 +245,6 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 				value = v
 			} else {
 				value, err = strconv.ParseUint(n.Value, 10, 64)
-				if err != nil {
-					panic(err)
-				}
 			}
 		case parsing.Boolean:
 			value = boolStrToBool(n.Value)
@@ -298,10 +257,7 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 	case parsing.ProcCall:
 		var argVars []int
 		for _, argNode := range n.Args {
-			argEval, err := genExpressionValue(scope, argNode)
-			if err != nil {
-				panic(err)
-			}
+			argEval := genExpressionValue(scope, argNode)
 			argVars = append(argVars, argEval)
 		}
 		gen.addOpt(ir.MakeMutateOnlyInst(ir.Call, dest, ir.CallExtra{
@@ -314,59 +270,34 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 			if n.Left != nil {
 				panic("parser bug")
 			}
-			rightDest, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				return err
-			}
+			rightDest := genExpressionValue(scope, n.Right)
 			gen.addOpt(ir.MakeBinaryInst(ir.IndirectLoad, dest, rightDest, nil))
-			return nil
 		case parsing.LogicalNot:
 			if n.Left != nil {
 				panic("parser bug")
 			}
-			rightDest, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				return err
-			}
+			rightDest := genExpressionValue(scope, n.Right)
 			gen.addOpt(ir.MakeBinaryInst(ir.Not, dest, rightDest, nil))
 		case parsing.LogicalAnd:
-			err := genExpressionValueToVar(scope, dest, n.Left)
-			if err != nil {
-				return err
-			}
+			genExpressionValueToVar(scope, dest, n.Left)
 			end := labelGen.GenLabel("andEnd_%d")
 			gen.addOpt(ir.MakeReadOnlyInst(ir.JumpIfFalse, dest, end))
-			rightDest, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				return err
-			}
+			rightDest := genExpressionValue(scope, n.Right)
 			gen.addOpt(ir.MakeBinaryInst(ir.And, dest, rightDest, nil))
 			gen.addOpt(labelInst(end))
 		case parsing.LogicalOr:
-			err := genExpressionValueToVar(scope, dest, n.Left)
-			if err != nil {
-				return err
-			}
+			genExpressionValueToVar(scope, dest, n.Left)
 			end := labelGen.GenLabel("orEnd_%d")
 			gen.addOpt(ir.MakeReadOnlyInst(ir.JumpIfTrue, dest, end))
-			rightDest, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				return err
-			}
+			rightDest := genExpressionValue(scope, n.Right)
 			gen.addOpt(ir.MakeBinaryInst(ir.Or, dest, rightDest, nil))
 			gen.addOpt(labelInst(end))
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
 			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
 			parsing.LesserEqual, parsing.DoubleEqual, parsing.BangEqual, parsing.ArrayAccess:
 			leftDest := scope.newVar()
-			err := genExpressionValueToVar(scope, leftDest, n.Left)
-			if err != nil {
-				return err
-			}
-			rightDest, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				return err
-			}
+			genExpressionValueToVar(scope, leftDest, n.Left)
+			rightDest := genExpressionValue(scope, n.Right)
 			switch n.Op {
 			case parsing.Star:
 				gen.addOpt(ir.MakeBinaryInst(ir.Mult, leftDest, rightDest, nil))
@@ -403,7 +334,7 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 			case parsing.IdName:
 				vn, found := scope.resolve(right.Name)
 				if !found {
-					return errors.New("undefined var")
+					panic(parsing.ErrorFromNode(n.Right, undefinedMessage))
 				}
 				gen.addOpt(ir.MakeBinaryInst(ir.TakeAddress, dest, vn, nil))
 			default:
@@ -417,16 +348,14 @@ func genExpressionValueToVar(scope *scope, dest int, node interface{}) error {
 			location := computePointer(scope, n)
 			gen.addOpt(ir.MakeBinaryInst(ir.IndirectLoad, dest, location, nil))
 		default:
-			return errors.New(fmt.Sprintf("Unsupported value expression type %v", n.Op))
+			panic(parsing.ErrorFromNode(node, "This expession must generate a value"))
 		}
 	default:
-		parsing.Dump(n)
-		panic("unknown type of node")
+		panic(parsing.ErrorFromNode(node, "This expession must generate a value"))
 	}
-	return nil
 }
 
-func computePointer(scope *scope, node interface{}) int {
+func computePointer(scope *scope, node parsing.ASTNode) int {
 	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.ExprNode:
@@ -445,17 +374,14 @@ func computePointer(scope *scope, node interface{}) int {
 	return 0
 }
 
-func computePointerRecursive(scope *scope, node interface{}, parent interface{}) int {
+func computePointerRecursive(scope *scope, node parsing.ASTNode, parent interface{}) int {
 	gen := scope.gen
 	switch n := node.(type) {
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.ArrayAccess:
 			left := computePointerRecursive(scope, n.Left, node)
-			position, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				panic(err)
-			}
+			position := genExpressionValue(scope, n.Right)
 			arrayPointer := scope.newVar()
 			gen.addOpt(ir.MakeBinaryInst(ir.ArrayToPointer, arrayPointer, left, nil))
 			gen.addOpt(ir.MakeBinaryInst(ir.Add, arrayPointer, position, nil))
@@ -468,15 +394,11 @@ func computePointerRecursive(scope *scope, node interface{}, parent interface{})
 			return result
 		}
 	}
-	value, err := genExpressionValue(scope, node)
-	if err != nil {
-		panic(err)
-	}
-	return value
+	return genExpressionValue(scope, node)
 }
 
 // return a var number which stores a pointer
-func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
+func genAssignmentTarget(scope *scope, node parsing.ASTNode) int {
 	switch n := node.(type) {
 	case parsing.ExprNode:
 		switch n.Op {
@@ -484,21 +406,16 @@ func genAssignmentTarget(scope *scope, node interface{}) (int, error) {
 			if ident, bareDeref := n.Right.(parsing.IdName); bareDeref {
 				vn, found := scope.resolve(ident.Name)
 				if !found {
-					return 0, errors.New("undefined var")
+					panic(parsing.ErrorFromNode(ident, undefinedMessage))
 				}
-				return vn, nil
+				return vn
 			}
-			pointerVar, err := genExpressionValue(scope, n.Right)
-			if err != nil {
-				return 0, err
-			}
-			return pointerVar, nil
+			return genExpressionValue(scope, n.Right)
 		case parsing.ArrayAccess, parsing.Dot:
-			return computePointer(scope, node), nil
+			return computePointer(scope, node)
 		}
 	}
-	parsing.Dump(node)
-	return 0, errors.New("Can't assign to that")
+	panic(parsing.ErrorFromNode(node, "Not a valid assignment target"))
 }
 
 func boolStrToBool(s string) bool {
