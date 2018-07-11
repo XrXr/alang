@@ -93,9 +93,6 @@ func buildGlobalEnv(typer *typing.Typer, env *typing.EnvRecord, nodeToStruct map
 		}
 		embedGraph[record] = embedGraphNode{embedees: embedees}
 	}
-	for record, names := range embedGraphString {
-		fmt.Printf("%s: %v\n", string(record.Name), names)
-	}
 	resolveStructSize(nodeToStruct, embedGraph)
 	return nil
 }
@@ -276,6 +273,7 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 			continue
 		}
 		out := <-workOrder.Out
+		_ = ir.Dump
 		// ir.Dump(out.Opts)
 		frontend.Prune(&out)
 		// ir.Dump(out.Opts)

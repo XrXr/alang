@@ -195,7 +195,7 @@ func (s *StructRecord) ResolveSizeAndOffset() {
 	s.alignment = biggestAlignment
 
 	s.SizeAndOffsetsResolved = true
-	s.PrintLayout()
+	// s.PrintLayout()
 }
 
 func (s *StructRecord) PrintLayout() {
