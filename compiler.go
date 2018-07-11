@@ -8,6 +8,7 @@ import (
 	"github.com/XrXr/alang/backend"
 	"github.com/XrXr/alang/errors"
 	"github.com/XrXr/alang/frontend"
+	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/library"
 	"github.com/XrXr/alang/parsing"
 	"github.com/XrXr/alang/typing"
@@ -274,13 +275,13 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 			fmt.Fprintf(asmOut, "extern %s\n", workOrder.Name)
 			continue
 		}
-		ir := <-workOrder.Out
-		// frontend.DumpIr(ir)
-		frontend.Prune(&ir)
-		frontend.DumpIr(ir)
+		out := <-workOrder.Out
+		// ir.Dump(out.Opts)
+		frontend.Prune(&out)
+		// ir.Dump(out.Opts)
 		// parsing.Dump(env)
 		procRecord := env.Procs[workOrder.Name]
-		typeTable, err := typer.InferAndCheck(env, &ir, procRecord)
+		typeTable, err := typer.InferAndCheck(env, &out, procRecord)
 		if err != nil {
 			panic(err)
 		}
@@ -290,7 +291,7 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 				panic("Bug in typer -- not all vars have types!")
 			}
 		}
-		static := backend.X86ForBlock(asmOut, ir, typeTable, env, typer, procRecord)
+		static := backend.X86ForBlock(asmOut, out, typeTable, env, typer, procRecord)
 		staticData = append(staticData, static)
 	}
 

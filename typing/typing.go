@@ -49,7 +49,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 	}
 	mustBeAssignable := func(target, value TypeRecord) {
 		if !t.Assignable(target, value) {
-			bail(fmt.Sprintf("Type mismatch: writing to a location with type %s using a value of type %s"))
+			bail(fmt.Sprintf("Type mismatch: writing to a location with type %s using a value of type %s", target.Rep(), value.Rep()))
 		}
 	}
 	checkAndFindStructMemberType := func(baseVn int, fieldName string) TypeRecord {
@@ -203,8 +203,8 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		}
 	case ir.Compare:
 		extra := opt.Extra.(ir.CompareExtra)
-		l := typeTable[opt.In()]
-		r := typeTable[extra.Right]
+		l := mustHaveType(opt.In())
+		r := mustHaveType(extra.Right)
 		if !(l.IsNumber() && r.IsNumber()) {
 			good := false
 			if extra.How == ir.AreEqual || extra.How == ir.NotEqual {
@@ -216,7 +216,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				good = good || (lIsPointer && rIsPointer)
 			}
 			if !good {
-				bail(fmt.Sprintf("Cannot copmare %s with %s"))
+				bail(fmt.Sprintf("Can't copmare %s with %s", l.Rep(), r.Rep()))
 			}
 		}
 		typeTable[extra.Out] = t.Builtins[BoolIdx]
@@ -271,7 +271,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		lPointer, lIsPointer := l.(Pointer)
 		if !(lIsPointer && r.IsNumber()) {
 			if !(l.IsNumber() && r.IsNumber()) {
-				bail(fmt.Sprintf("Can't add to %s with %s"))
+				bail(fmt.Sprintf("Can't add to %s with %s", l.Rep(), r.Rep()))
 			}
 		}
 		if lIsPointer && isVoidPointer(lPointer) {

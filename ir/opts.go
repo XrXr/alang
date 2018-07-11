@@ -1,5 +1,6 @@
 package ir
 
+import "fmt"
 import "github.com/XrXr/alang/parsing"
 
 type Inst struct {
@@ -80,6 +81,34 @@ func (i *Inst) Swap(original int, newVar int) {
 	if i.ReadOperand == original {
 		i.ReadOperand = newVar
 	}
+}
+
+type CallExtra struct {
+	Name     string
+	ArgVars  []int
+	ReturnTo []int
+}
+
+type ReturnExtra struct {
+	Values []int
+}
+
+//go:generate $GOPATH/bin/stringer -type=ComparisonMethod
+type ComparisonMethod int
+
+const (
+	Lesser ComparisonMethod = iota
+	Greater
+	GreaterOrEqual
+	LesserOrEqual
+	AreEqual
+	NotEqual
+)
+
+type CompareExtra struct {
+	How   ComparisonMethod
+	Right int
+	Out   int
 }
 
 func MakePlainInst(instType InstType, extra interface{}) Inst {
@@ -171,30 +200,34 @@ func IterAndMutate(opt *Inst, cb func(vn *int)) {
 	}
 }
 
-type CallExtra struct {
-	Name     string
-	ArgVars  []int
-	ReturnTo []int
-}
-
-type ReturnExtra struct {
-	Values []int
-}
-
-//go:generate $GOPATH/bin/stringer -type=ComparisonMethod
-type ComparisonMethod int
-
-const (
-	Lesser ComparisonMethod = iota
-	Greater
-	GreaterOrEqual
-	LesserOrEqual
-	AreEqual
-	NotEqual
-)
-
-type CompareExtra struct {
-	How   ComparisonMethod
-	Right int
-	Out   int
+func Dump(insts []Inst) {
+	fmt.Println("IR Dump:")
+	for i, opt := range insts {
+		fmt.Printf("%d {%s", i, opt.Type.String())
+		if opt.Type == Compare {
+			extra := opt.Extra.(CompareExtra)
+			fmt.Printf(" %d", extra.Out)
+		}
+		if opt.Type > MutateOnlyInstructions && opt.Type < ReadOnlyInstructions {
+			fmt.Printf(" %d", opt.MutateOperand)
+		} else if opt.Type > ReadOnlyInstructions && opt.Type < ReadAndMutateInstructions {
+			fmt.Printf(" %d", opt.ReadOperand)
+		} else if opt.Type > ReadAndMutateInstructions {
+			fmt.Printf(" %d %d", opt.MutateOperand, opt.ReadOperand)
+		}
+		switch opt.Type {
+		case Compare:
+			extra := opt.Extra.(CompareExtra)
+			fmt.Printf(" %d", extra.Right)
+		case Return:
+			extra := opt.Extra.(ReturnExtra)
+			fmt.Printf(" %v", extra.Values)
+		case Call:
+			extra := opt.Extra.(CallExtra)
+			fmt.Printf(" %v", extra.ArgVars)
+		case Label, Jump, JumpIfTrue, JumpIfFalse:
+			fmt.Printf(" %s", opt.Extra)
+		}
+		fmt.Println("}")
+	}
 }
