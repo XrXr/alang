@@ -20,8 +20,8 @@
  ✔ factor out signExtendToMatchSize @done (18-06-19 20:07)
  ✘ do some reserach about signedModulous -- how do we do s32 *= s64? what if on the right side the sign bit is set? @cancelled (18-07-03 19:11)
  ☐ be less barbaric about saving registers in proc prologue
- ☐ &structA.field
- ☐ &arr[409]
+ ✔ &structA.field @done (18-07-11 21:22)
+ ✔ &arr[409] @done (18-07-11 21:22)
  ✔ arr[533].dkd = 300 @done (18-07-04 15:11)
  ☐ we need a print_signed_int
  ✔ proc argument type checking @done (18-06-23 20:51)
@@ -29,14 +29,15 @@
  ✔ complex expressions like if (rettrue() && retfalse() == false) @done (18-06-11 20:24)
  □ increment/decrement
  ✔ better typing for numbers. There is a hack in place for assigning an int to u8 atm @done (18-06-16 00:41)
- □ the whole Unresolved type situation
+ ✔ the whole Unresolved type situation @done (18-07-11 21:22)
    ✔ procs that take parameters which reference structs -- they are left as unresolved type for now @done (18-06-11 20:25)
    ✔ can't have array of structs/array of pointer to structs in your struct @done (18-07-03 23:03)
    ✔ can't do var foo *somestruct @done (18-07-03 23:03)
-   ☐ struct nesting
+   ✔ struct nesting @done (18-07-11 21:22)
  ✔ better pruning @done (18-06-15 19:55)
- ☐ pruning2.al
- ☐ unsigned numbers
- □ error reporting
-   □ parse errors: binary operators missing operands ("i++" parses atm)
- □ type casting
+ ☐ pruning2.al. We can get better ir by analysing read-only use of vars
+ ☐ unsigned mult, div
+ ✔ error reporting @done (18-07-11 21:23)
+   ✔ parse errors: binary operators missing operands ("i++" parses atm) @done (18-07-11 21:23)
+ □ better type casting. Can't cast to a pointer type atm
+

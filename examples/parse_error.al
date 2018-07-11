@@ -4,6 +4,7 @@ main :: proc() {
 	hello =
 	today :=
 	23432 := 23
+	a++
 	// using unary operator as binary operator
 	a := using @ unary
 	second(@sdfsdf food)

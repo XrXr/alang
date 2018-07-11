@@ -221,10 +221,12 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 				ProcDecl: procDecl,
 			}
 			workOrders = append(workOrders, &order)
-			go func() {
-				defer catchUserError(sourceLines)
-				frontend.GenForProc(&labelGen, &order)
-			}()
+			if !isForeignProc {
+				go func() {
+					defer catchUserError(sourceLines)
+					frontend.GenForProc(&labelGen, &order)
+				}()
+			}
 			nodesForProc = nil
 			currentProc = nil
 			continue
@@ -268,6 +270,10 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 
 	var staticData []*bytes.Buffer
 	for _, workOrder := range workOrders {
+		if workOrder.ProcDecl.IsForeign {
+			fmt.Fprintf(asmOut, "extern %s\n", workOrder.Name)
+			continue
+		}
 		ir := <-workOrder.Out
 		// frontend.DumpIr(ir)
 		frontend.Prune(&ir)
@@ -283,10 +289,6 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 				println(i)
 				panic("Bug in typer -- not all vars have types!")
 			}
-		}
-		if workOrder.ProcDecl.IsForeign {
-			fmt.Fprintf(asmOut, "extern %s\n", workOrder.Name)
-			continue
 		}
 		static := backend.X86ForBlock(asmOut, ir, typeTable, env, typer, procRecord)
 		staticData = append(staticData, static)
