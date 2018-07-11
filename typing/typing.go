@@ -170,10 +170,12 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			for _, vn := range extra.ArgVars {
 				mustHaveType(vn)
 			}
-			for i, vn := range extra.ArgVars {
-				if !t.Assignable(typeTable[vn], procRecord.Args[i]) {
-					failed = true
-					message = "Argument type mismatch"
+			if !failed {
+				for i, vn := range extra.ArgVars {
+					if !t.Assignable(typeTable[vn], procRecord.Args[i]) {
+						failed = true
+						message = "Argument type mismatch"
+					}
 				}
 			}
 			if failed {
@@ -181,10 +183,18 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				for _, vn := range extra.ArgVars {
 					passed = append(passed, typeTable[vn])
 				}
-				message += "\nwant "
-				message += RepForListOfTypes(procRecord.Args)
-				message += "\nhave "
-				message += RepForListOfTypes(passed)
+				widths := make([]int, 0, len(extra.ArgVars))
+				for i := 0; i < len(procRecord.Args) && i < len(passed); i++ {
+					max := len(passed[i].Rep())
+					if other := len(procRecord.Args[i].Rep()); other > max {
+						max = other
+					}
+					widths = append(widths, max)
+				}
+				message += "\n    want "
+				message += RepForListOfTypes(procRecord.Args, widths)
+				message += "\n    have "
+				message += RepForListOfTypes(passed, widths)
 				bail(message)
 			}
 
@@ -367,12 +377,19 @@ func pointerArrayConsistent(a Pointer, b Pointer) bool {
 	return aPointsToArray && aArray.OfWhat == b.ToWhat
 }
 
-func RepForListOfTypes(types []TypeRecord) string {
+func RepForListOfTypes(types []TypeRecord, widths []int) string {
 	result := "("
 	length := len(types)
-	for j := 0; j < length; j++ {
-		result += "-notyet-" // procRecord.Args[j].Rep()
-		if j < length-1 {
+	for i, record := range types {
+		rep := record.Rep()
+		result += rep
+		if i < length-1 {
+			if i < len(widths) {
+				width := widths[i]
+				for j := 0; j < width-len(rep); j++ {
+					result += " "
+				}
+			}
 			result += ", "
 		}
 	}

@@ -8,6 +8,7 @@ import (
 type TypeRecord interface {
 	IsNumber() bool
 	Size() int
+	Rep() string
 }
 
 type String struct{ normalType }
@@ -16,10 +17,17 @@ func (_ String) Size() int {
 	return 8
 }
 
+func (_ String) Rep() string {
+	return "string"
+}
+
 type StringDataPointer struct{ normalType }
 
 func (_ StringDataPointer) Size() int {
 	return 8
+}
+func (_ StringDataPointer) Rep() string {
+	return "pointer-to-string-data"
 }
 
 type Int struct{ integerType }
@@ -27,22 +35,25 @@ type Int struct{ integerType }
 func (_ Int) Size() int {
 	return 8
 }
+func (_ Int) Rep() string {
+	return "int"
+}
 
 type Void struct{ normalType }
 
 func (_ Void) Size() int {
 	return 0
 }
+func (_ Void) Rep() string {
+	return "void"
+}
 
 type Boolean struct{ normalType }
 
-func (_ Boolean) Size() int {
-	return 1
+func (_ Boolean) Rep() string {
+	return "boolean"
 }
-
-type S8 struct{ integerType }
-
-func (_ S8) Size() int {
+func (_ Boolean) Size() int {
 	return 1
 }
 
@@ -51,17 +62,17 @@ type U8 struct{ integerType }
 func (_ U8) Size() int {
 	return 1
 }
-
-type S32 struct{ integerType }
-
-func (_ S32) Size() int {
-	return 4
+func (_ U8) Rep() string {
+	return "u8"
 }
 
-type S16 struct{ integerType }
+type S8 struct{ integerType }
 
-func (_ S16) Size() int {
-	return 2
+func (_ S8) Rep() string {
+	return "s8"
+}
+func (_ S8) Size() int {
+	return 1
 }
 
 type U16 struct{ integerType }
@@ -69,17 +80,17 @@ type U16 struct{ integerType }
 func (_ U16) Size() int {
 	return 2
 }
-
-type S64 struct{ integerType }
-
-func (_ S64) Size() int {
-	return 8
+func (_ U16) Rep() string {
+	return "u16"
 }
 
-type U64 struct{ integerType }
+type S16 struct{ integerType }
 
-func (_ U64) Size() int {
-	return 8
+func (_ S16) Size() int {
+	return 2
+}
+func (_ S16) Rep() string {
+	return "s16"
 }
 
 type U32 struct{ integerType }
@@ -87,8 +98,36 @@ type U32 struct{ integerType }
 func (_ U32) Size() int {
 	return 4
 }
+func (_ U32) Rep() string {
+	return "u32"
+}
 
-// type U16 struct{ integerType }
+type S32 struct{ integerType }
+
+func (_ S32) Size() int {
+	return 4
+}
+func (_ S32) Rep() string {
+	return "s32"
+}
+
+type U64 struct{ integerType }
+
+func (_ U64) Size() int {
+	return 8
+}
+func (_ U64) Rep() string {
+	return "u64"
+}
+
+type S64 struct{ integerType }
+
+func (_ S64) Size() int {
+	return 8
+}
+func (_ S64) Rep() string {
+	return "s64"
+}
 
 type StructField struct {
 	Type   TypeRecord
@@ -107,6 +146,9 @@ type StructRecord struct {
 
 func (s StructRecord) Size() int {
 	return s.size
+}
+func (s StructRecord) Rep() string {
+	return s.Name
 }
 
 func (s *StructRecord) ResolveSizeAndOffset() {
@@ -178,6 +220,10 @@ func (_ Unresolved) Size() int {
 	return -999999999999
 }
 
+func (u Unresolved) Rep() string {
+	return fmt.Sprintf("(Unresolved %#v)", u.Decl)
+}
+
 type Pointer struct {
 	normalType
 	ToWhat TypeRecord
@@ -185,6 +231,10 @@ type Pointer struct {
 
 func (_ Pointer) Size() int {
 	return 8
+}
+
+func (p Pointer) Rep() string {
+	return "*" + p.ToWhat.Rep()
 }
 
 type Array struct {
@@ -201,6 +251,10 @@ func (a Array) Size() int {
 	return product * a.OfWhat.Size()
 }
 
+func (a Array) Rep() string {
+	return fmt.Sprintf("[%d]%s", a.Nesting[0], a.OfWhat.Rep())
+}
+
 type normalType struct{}
 
 func (_ normalType) IsNumber() bool {
@@ -212,19 +266,3 @@ type integerType struct{}
 func (_ integerType) IsNumber() bool {
 	return true
 }
-
-// func BuiltinTypes() map[TypeName]bool {
-// 	return map[TypeName]bool{
-// 		"string": true,
-// 		"void":   true,
-// 		"int":    true,
-// 		"s64":    true,
-// 		"s32":    true,
-// 		"s16":    true,
-// 		"s8":     true,
-// 		"u64":    true,
-// 		"u32":    true,
-// 		"u16":    true,
-// 		"u8":     true,
-// 	}
-// }
