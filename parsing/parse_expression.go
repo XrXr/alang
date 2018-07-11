@@ -183,7 +183,7 @@ func (l *lineParse) parseInStatementContext() (ASTNode, error) {
 				return nil, err
 			}
 			node := ExprNode{Op: op, Left: left, Right: right}
-			err = finishExprNode(&node, index)
+			err = l.finishExprNode(&node, index)
 			if err != nil {
 				return nil, err
 			}
@@ -193,7 +193,7 @@ func (l *lineParse) parseInStatementContext() (ASTNode, error) {
 	return l.parseExprWithParen(parsed, 0, nTokens)
 }
 
-func finishExprNode(node *ExprNode, opTokIdx int) error {
+func (l *lineParse) finishExprNode(node *ExprNode, opTokIdx int) error {
 	if node.Right == nil {
 		return errors.MakeError(opTokIdx, opTokIdx, "This operator needs an operand to the right")
 	}
@@ -206,6 +206,7 @@ func finishExprNode(node *ExprNode, opTokIdx int) error {
 		node.startColumn = node.Left.GetStartColumn()
 	}
 	node.endColumn = node.Right.GetEndColumn()
+	node.line = l.lineNumber
 	return nil
 }
 
@@ -453,7 +454,7 @@ func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int) (AS
 			}
 		}
 
-		err := finishExprNode(&newNode, opTok.index)
+		err := l.finishExprNode(&newNode, opTok.index)
 		if err != nil {
 			return nil, err
 		}

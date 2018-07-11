@@ -194,15 +194,19 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 		exprNode, isExpr := (*node).(parsing.ExprNode)
 		if !isComplete && isExpr && exprNode.Op == parsing.ConstDeclare {
 			procDecl, isProc := exprNode.Right.(parsing.ProcDecl)
-			if isProc {
-				currentProc = node
-				if procDecl.IsForeign {
-					isForeignProc = true
-				} else {
-					continue
-				}
-			} else {
+			if !isProc {
 				continue
+			}
+			currentProc = node
+			if !procDecl.IsForeign {
+				continue
+			}
+			isForeignProc = true
+		}
+
+		if currentProc != nil {
+			for i := numNewEntries; i > 0; i-- {
+				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
 			}
 		}
 
@@ -244,11 +248,7 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 				parentStruct.Members[typeDeclare.Name.Name] = newField
 			}
 		}
-		if currentProc != nil {
-			for i := numNewEntries; i > 0; i-- {
-				nodesForProc = append(nodesForProc, parser.OutBuffer[len(parser.OutBuffer)-i].Node)
-			}
-		}
+
 	}
 	if parseFailed {
 		os.Exit(1)

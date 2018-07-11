@@ -25,10 +25,24 @@ type procGen struct {
 	nextVarNum int
 	rootScope  *scope
 	labelGen   *LabelIdGen
+	nodeStack  []*parsing.ASTNode // keep track of what node we are generating for
 }
 
-func (p *procGen) addOpt(opts ...ir.Inst) {
-	p.opts = append(p.opts, opts...)
+func (p *procGen) addOpt(opt ir.Inst) {
+	opt.GeneratedFrom = *p.nodeStack[len(p.nodeStack)-1]
+	p.opts = append(p.opts, opt)
+}
+
+func (p *procGen) pushCurrentlyGenerating(node *parsing.ASTNode) {
+	p.nodeStack = append(p.nodeStack, node)
+}
+func (p *procGen) popCurrentlyGenerating(node *parsing.ASTNode) {
+	length := len(p.nodeStack)
+	if p.nodeStack[length-1] == node {
+		p.nodeStack = p.nodeStack[:length-1]
+	} else {
+		panic("ice: popping an unexpected node from nodeStack")
+	}
 }
 
 type LabelIdGen struct {

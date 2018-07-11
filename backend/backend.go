@@ -635,7 +635,6 @@ func (p *procGen) generate() {
 		io.WriteString(p.out.buffer, line)
 	}
 
-	varOffset := make([]int, p.block.NumberOfVars)
 	paramPassingRegOrder := [...]registerId{rdi, rsi, rdx, rcx, r8, r9}
 	preservedRegisters := [...]registerId{rbx, r15, r14, r13, r12}
 
@@ -655,23 +654,7 @@ func (p *procGen) generate() {
 		}
 	}
 
-	firstLocal := p.block.NumberOfArgs
-	if firstLocal < p.block.NumberOfVars {
-		varOffset[firstLocal] = p.typeTable[firstLocal].Size()
-		for i := firstLocal + 1; i < p.block.NumberOfVars; i++ {
-			varOffset[i] = varOffset[i-1] + p.typeTable[i].Size()
-		}
-	}
-	framesize := 0
-	for _, typeRecord := range p.typeTable {
-		framesize += typeRecord.Size()
-	}
-	if framesize%16 != 0 {
-		// align the stack for SystemV abi. Upon being called, we are 8 bytes misaligned.
-		// Since we push rbp in our prologue we align to 16 here
-		framesize += 16 - framesize%16
-	}
-	// backendDebug(framesize, p.typeTable, varOffset)
+	// backendDebug(framesize, p.typeTable)
 	for optIdx, opt := range p.block.Opts {
 		addLine(fmt.Sprintf(".ir_line_%d:\n", optIdx))
 		for i := 0; i < len(p.dontSwap); i++ {
@@ -1330,13 +1313,9 @@ func (p *procGen) trace(vn int) {
 	fmt.Fprintf(p.out.buffer, "\t\t\t;%s\n", p.varInfoString(vn))
 }
 
-func backendDebug(framesize int, typeTable []typing.TypeRecord, offsetTable []int) {
-	fmt.Println("framesize", framesize)
-	if len(typeTable) != len(offsetTable) {
-		panic("what?")
-	}
+func backendDebug(framesize int, typeTable []typing.TypeRecord) {
 	for i, typeRecord := range typeTable {
-		fmt.Printf("var %d type: %#v offset %d\n", i, typeRecord, offsetTable[i])
+		fmt.Printf("var %d type: %#v\n", i, typeRecord)
 	}
 }
 

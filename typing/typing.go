@@ -1,7 +1,6 @@
 package typing
 
 import (
-	"errors"
 	"fmt"
 	"github.com/XrXr/alang/frontend"
 	"github.com/XrXr/alang/ir"
@@ -25,10 +24,29 @@ type Typer struct {
 }
 
 func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRecord) error {
+	bail := func(message string) {
+		panic(parsing.ErrorFromNode(opt.GeneratedFrom, message))
+	}
+	bailLeft := func(message string) {
+		expr := opt.GeneratedFrom.(parsing.ExprNode)
+		panic(parsing.ErrorFromNode(expr.Left, message))
+	}
 	resolve := func(opt ir.Inst) (TypeRecord, TypeRecord) {
 		l := typeTable[opt.Left()]
 		r := typeTable[opt.Right()]
 		return l, r
+	}
+	mustHaveType := func(vn int) TypeRecord {
+		record := typeTable[vn]
+		if record == nil {
+			panic("ice: Type should be resolved at this point. Faulty Ir?")
+		}
+		return record
+	}
+	mustBeAssignable := func(target, value TypeRecord) {
+		if !t.Assignable(target, value) {
+			bail(fmt.Sprintf("Type mismatch: writing to a location with type %s using a value of type %s"))
+		}
 	}
 	checkAndFindStructMemberType := func(baseVn int, fieldName string) TypeRecord {
 		baseType := typeTable[baseVn]
@@ -40,23 +58,18 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		baseIsString := baseType == t.Builtins[StringIdx]
 
 		if !baseIsStruct && !baseIsString {
-			panic("operand is not a struct or pointer to a struct")
+			bail("Struct member access on non struct")
 		}
-		var field *StructField
 		if baseIsStruct {
-			var ok bool
-			field, ok = baseStruct.Members[fieldName]
+			field, ok := baseStruct.Members[fieldName]
 			if !ok {
-				panic(string(fieldName) + " is not a member of the struct")
+				bail(string(fieldName) + " is not a member of the struct")
 			}
-		} else if baseIsString {
-			if fieldName != "data" && fieldName != "length" {
-				panic(string(fieldName) + " is not a member of the struct")
-			}
-		}
-		if baseIsStruct {
 			return field.Type
 		} else if baseIsString {
+			if fieldName != "data" && fieldName != "length" {
+				bail(string(fieldName) + " is not a member of the struct")
+			}
 			switch fieldName {
 			case "length":
 				return t.Builtins[IntIdx]
@@ -64,7 +77,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				return Pointer{ToWhat: t.Builtins[U8Idx]}
 			}
 		}
-		panic("should be exhaustive")
+		panic("ice: encountered a struct member that we don't know how to find the type of")
 		return nil
 	}
 	giveTypeOrVerify := func(target int, typeRecord TypeRecord) {
@@ -72,11 +85,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if currentType == nil {
 			typeTable[target] = typeRecord
 		} else {
-			if !t.TypesCompatible(currentType, typeRecord) {
-				parsing.Dump(currentType)
-				parsing.Dump(typeRecord)
-				panic("type a is incompatible with type b")
-			}
+			mustBeAssignable(currentType, typeRecord)
 		}
 	}
 	switch opt.Type {
@@ -86,16 +95,13 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			name := GrabUnresolvedName(unresolved)
 			structRecord, ok := env.Types[name]
 			if !ok {
-				panic(string(name + " does not name a type"))
+				bail(fmt.Sprintf(`"%s" does not name a type`, name))
 			}
 			finalType = BuildRecordAccordingToUnresolved(structRecord, unresolved)
 		}
 		giveTypeOrVerify(opt.Out(), finalType)
 	case ir.TakeAddress:
-		varType := typeTable[opt.In()]
-		if varType == nil {
-			panic("type should be resolved at this point")
-		}
+		varType := mustHaveType(opt.In())
 		typeTable[opt.Out()] = Pointer{ToWhat: varType}
 	case ir.PeelStruct:
 		fieldName := opt.Extra.(string)
@@ -139,26 +145,35 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			default:
 				// type casting
 				if len(extra.ArgVars) != 1 {
-					panic("Type casts can only operate on one variable")
+					bail("Type casting can only operates on one variable")
 				}
 				if typeRecord.Size() != typeTable[extra.ArgVars[0]].Size() {
-					panic("Invalid cast: size of the types must match")
+					bail("Invalid cast: size of the types must match")
 				}
 				giveTypeOrVerify(out, typeRecord)
 			}
 		} else {
 			procRecord, ok := env.Procs[callee]
 			if !ok {
-				panic("Call to undefined procedure " + extra.Name)
+				bail("Call to undefined procedure " + extra.Name)
 			}
 			if len(extra.ArgVars) != len(procRecord.Args) {
-				panic("Wrong number of argument for call to " + extra.Name)
+				bail("Wrong number of arguments. Have %d want %d")
+			}
+			for _, vn := range extra.ArgVars {
+				mustHaveType(vn)
 			}
 			for i, vn := range extra.ArgVars {
-				if !t.TypesCompatible(typeTable[vn], procRecord.Args[i]) {
-					parsing.Dump(typeTable[vn])
-					parsing.Dump(procRecord.Args[i])
-					panic(fmt.Sprintf("Argument %d of call to %s has incompatible type", i, extra.Name))
+				if !t.Assignable(typeTable[vn], procRecord.Args[i]) {
+					passed := make([]TypeRecord, len(extra.ArgVars))
+					for _, vn := range extra.ArgVars {
+						passed = append(passed, typeTable[vn])
+					}
+					message := "Argument type mismatch: want ("
+					message += RepForListOfTypes(procRecord.Args)
+					message += ")\n                        have ("
+					message += RepForListOfTypes(passed)
+					bail(message)
 				}
 			}
 
@@ -180,58 +195,43 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 				good = good || (lIsPointer && rIsPointer)
 			}
 			if !good {
-				parsing.Dump(l)
-				parsing.Dump(r)
-				return errors.New("operands must be numbers")
+				bail(fmt.Sprintf("Cannot copmare %s with %s"))
 			}
 		}
 		typeTable[extra.Out] = t.Builtins[BoolIdx]
 	case ir.IndirectWrite:
-		varType := typeTable[opt.Left()]
-		if varType == nil {
-			panic("type should be resolved at this point")
-		}
-		typeForData := typeTable[opt.Right()]
-		if typeForData == nil {
-			panic("type should be resolved at this point")
-		}
-		pointer, varIsPointer := varType.(Pointer)
-		if !varIsPointer {
-			panic("That's not a pointer what are you doing")
-		}
-		if isVoidPointer(pointer) {
-			panic("Can't indirect a void pointer")
-		}
-		if !t.TypesCompatible(pointer.ToWhat, typeForData) {
-			parsing.Dump(pointer.ToWhat)
-			parsing.Dump(typeForData)
-			panic("Type mismatch")
+		// This ir is special in that it puts a variable that it doesn't mutate in MutateOperand.
+		// If we start doing more sophisticated analysis we might want to change that.
+		varType := mustHaveType(opt.Left())
+		typeForData := mustHaveType(opt.Right())
+		switch record := varType.(type) {
+		case Pointer:
+			if isVoidPointer(record) {
+				bailLeft("Writing to a void pointer")
+			}
+			mustBeAssignable(record.ToWhat, typeForData)
+		case StringDataPointer:
+			bailLeft("Writing to a read-only field")
+		default:
+			bailLeft("Not a valid write target")
 		}
 	case ir.IndirectLoad:
-		ptrType := typeTable[opt.In()]
-		if ptrType == nil {
-			panic("type should be resolved at this point")
-		}
-		switch pointer := ptrType.(type) {
+		ptrType := mustHaveType(opt.In())
+		switch record := ptrType.(type) {
 		case StringDataPointer:
 			giveTypeOrVerify(opt.Out(), Pointer{ToWhat: t.Builtins[U8Idx]})
 		case Pointer:
-			pointer, isPointer := ptrType.(Pointer)
+			record, isPointer := ptrType.(Pointer)
 			if !isPointer {
-				panic("Can't indirect a non pointer")
+				bail("Indirecting a non pointer")
 			}
-			if isVoidPointer(pointer) {
-				panic("Can't indirect a void pointer")
+			if isVoidPointer(record) {
+				bail("Indirecting a void pointer")
 			}
-			giveTypeOrVerify(opt.Out(), pointer.ToWhat)
+			giveTypeOrVerify(opt.Out(), record.ToWhat)
 		}
 	case ir.Assign:
-		_, r := resolve(opt)
-		if r == nil {
-			parsing.Dump(typeTable)
-			panic("type should be resolved at this point")
-		}
-		giveTypeOrVerify(opt.Left(), r)
+		giveTypeOrVerify(opt.Left(), mustHaveType(opt.ReadOperand))
 	case ir.ArrayToPointer:
 		good := false
 		switch array := typeTable[opt.In()].(type) {
@@ -245,52 +245,39 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			}
 		}
 		if !good {
-			return errors.New("must be an array or a pointer to an array")
+			bail("Array access on non array")
 		}
 	case ir.Add:
 		l, r := resolve(opt)
 		lPointer, lIsPointer := l.(Pointer)
 		if !(lIsPointer && r.IsNumber()) {
 			if !(l.IsNumber() && r.IsNumber()) {
-				fmt.Printf("%#v %#v\n", l, r)
-				return errors.New("add not available for these types")
+				bail(fmt.Sprintf("Can't add to %s with %s"))
 			}
 		}
 		if lIsPointer && isVoidPointer(lPointer) {
-			panic("Pointer arithmethic not allowed on void pointers")
+			bail("Pointer arithmethic on void pointer")
 		}
-	case ir.Sub:
+	case ir.Sub, ir.Mult, ir.Div:
 		l, r := resolve(opt)
 		if !(l.IsNumber() && r.IsNumber()) {
-			return errors.New("operands must be numbers")
-		}
-	case ir.Mult:
-		l, r := resolve(opt)
-		if !(l.IsNumber() && r.IsNumber()) {
-			return errors.New("operands must be numbers")
+			bail("Operands must be numbers")
 		}
 	case ir.And, ir.Or:
 		l, r := resolve(opt)
 		_, lIsBool := l.(Boolean)
 		_, rIsBool := r.(Boolean)
 		if !lIsBool || !rIsBool {
-			return errors.New("operands must be booleans")
+			bail("Operands must be booleans")
 		}
 	case ir.Not:
 		inT := typeTable[opt.In()]
 		_, inIsPtr := inT.(Pointer)
 		_, inIsBool := inT.(Boolean)
 		if !inIsBool && !inIsPtr {
-			return errors.New("The not operator works with booleans and pointers only")
+			bail("The not operator only works with booleans and pointers")
 		}
 		giveTypeOrVerify(opt.Out(), t.Builtins[BoolIdx])
-	case ir.Div:
-		l, r := resolve(opt)
-		if !(l.IsNumber() && r.IsNumber()) {
-			parsing.Dump(l)
-			parsing.Dump(r)
-			return errors.New("operands must be numbers")
-		}
 		// TODO: issue warning for addition between float and ints
 		// and different signedness
 	}
@@ -338,7 +325,7 @@ func (t *Typer) typeImmediate(val interface{}) TypeRecord {
 	case parsing.TypeDecl:
 		return t.TypeRecordFromDecl(val)
 	}
-	panic("this must work")
+	panic("ice: Failed to find the type of a literal")
 	return nil
 }
 
@@ -371,16 +358,28 @@ func pointerArrayConsistent(a Pointer, b Pointer) bool {
 	return aPointsToArray && aArray.OfWhat == b.ToWhat
 }
 
-func (t *Typer) TypesCompatible(a TypeRecord, b TypeRecord) bool {
-	if reflect.DeepEqual(a, b) || (a.IsNumber() && b.IsNumber()) {
+func RepForListOfTypes(types []TypeRecord) string {
+	result := ""
+	length := len(types)
+	for j := 0; j < length; j++ {
+		result += "-notyet-" // procRecord.Args[j].Rep()
+		if j < length-1 {
+			result += ", "
+		}
+	}
+	return result
+}
+
+func (t *Typer) Assignable(target, value TypeRecord) bool {
+	if reflect.DeepEqual(target, value) || (target.IsNumber() && value.IsNumber()) {
 		return true
 	}
-	aPointer, aIsPointer := a.(Pointer)
-	bPointer, bIsPointer := b.(Pointer)
-	if aIsPointer && bIsPointer {
-		if isVoidPointer(aPointer) || isVoidPointer(bPointer) {
+	targetAsPointer, targetIsPointer := target.(Pointer)
+	valueAsPointer, valueIsPointer := value.(Pointer)
+	if targetIsPointer && valueIsPointer {
+		if isVoidPointer(targetAsPointer) || isVoidPointer(valueAsPointer) {
 			return true
-		} else if pointerArrayConsistent(aPointer, bPointer) || pointerArrayConsistent(bPointer, aPointer) {
+		} else if pointerArrayConsistent(targetAsPointer, valueAsPointer) || pointerArrayConsistent(valueAsPointer, targetAsPointer) {
 			return true
 		}
 	}

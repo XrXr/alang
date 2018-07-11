@@ -1,10 +1,13 @@
 package ir
 
+import "github.com/XrXr/alang/parsing"
+
 type Inst struct {
 	Type          InstType
 	MutateOperand int
 	ReadOperand   int
 	Extra         interface{}
+	GeneratedFrom parsing.ASTNode
 }
 
 //go:generate $GOPATH/bin/stringer -type=InstType

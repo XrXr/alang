@@ -23,12 +23,17 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 		gen.rootScope.newNamedVar(arg.Name.Name)
 	}
 
-	gen.addOpt(ir.Inst{Type: ir.StartProc, Extra: order.Name})
-	ret := genForProcSubSection(labelGen, order, gen.rootScope, 0)
-	gen.addOpt(ir.Inst{Type: ir.EndProc})
-	if ret != len(order.In) {
+	gen.opts = append(gen.opts, ir.Inst{Type: ir.StartProc, Extra: order.Name})
+	idxAfter := genForProcSubSection(labelGen, order, gen.rootScope, 0)
+	gen.opts = append(gen.opts, ir.Inst{Type: ir.EndProc})
+
+	if idxAfter != len(order.In) {
 		parsing.Dump(order.In)
 		panic("ice: gen didn't process whole proc")
+	}
+	if len(gen.nodeStack) != 0 {
+		parsing.Dump(gen.nodeStack)
+		panic("ice: nodeStack is not empty after generation has finished")
 	}
 	order.Out <- OptBlock{NumberOfVars: gen.nextVarNum, NumberOfArgs: len(order.ProcDecl.Args), Opts: gen.opts}
 	close(order.Out)
@@ -44,7 +49,11 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		i++
 		sawIfLastTime := sawIf
 		sawIf = false
+		gen.pushCurrentlyGenerating(nodePtr)
 		switch node := (*nodePtr).(type) {
+		case parsing.BlockEnd:
+			gen.popCurrentlyGenerating(nodePtr)
+			return i
 		case parsing.Declaration:
 			// these are declaration without values i.e. not foo := 3
 			newVar := scope.newNamedVar(node.Name.Name)
@@ -112,7 +121,7 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			gen.addOpt(labelInst(labelForIf))
 		case parsing.ElseNode:
 			if !sawIfLastTime {
-				panic("Bare else. Should've been caught by the parser")
+				panic("ice: bare else. Should've been caught by the parser")
 			}
 			elseLabel := labelGen.GenLabel("if_else_end_%d")
 			ifLabel := gen.opts[len(gen.opts)-1]
@@ -183,8 +192,6 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				gen.addOpt(ir.MakePlainInst(ir.Jump, loopStart))
 			}
 			gen.addOpt(labelInst(loopEnd))
-		case parsing.BlockEnd:
-			return i
 		case parsing.ContinueNode:
 			if scope.loopLabel == "" {
 				panic(parsing.ErrorFromNode(node, "Use of continue outside of a loop"))
@@ -205,8 +212,10 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		default:
 			genExpressionValue(scope, node)
 		}
+		gen.popCurrentlyGenerating(nodePtr)
 	}
-	return i
+	panic("ice: genForProcSubSection unable to find a EndBlock node")
+	return -1
 }
 
 // given an ast node, generate ir that computes its value. Returns the variable number which holds said value.
@@ -229,6 +238,8 @@ func genExpressionValue(scope *scope, node parsing.ASTNode) int {
 func genExpressionValueToVar(scope *scope, dest int, node parsing.ASTNode) {
 	gen := scope.gen
 	labelGen := gen.labelGen
+	gen.pushCurrentlyGenerating(&node)
+	defer gen.popCurrentlyGenerating(&node)
 	switch n := node.(type) {
 	case parsing.IdName:
 		vn, found := scope.resolve(n.Name)
@@ -357,13 +368,15 @@ func genExpressionValueToVar(scope *scope, dest int, node parsing.ASTNode) {
 
 func computePointer(scope *scope, node parsing.ASTNode) int {
 	gen := scope.gen
+	gen.pushCurrentlyGenerating(&node)
+	defer gen.popCurrentlyGenerating(&node)
 	switch n := node.(type) {
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.ArrayAccess:
-			return computePointerRecursive(scope, node, nil)
+			return computePointerRecursive(scope, node)
 		case parsing.Dot:
-			left := computePointerRecursive(scope, n.Left, node)
+			left := computePointerRecursive(scope, n.Left)
 			result := scope.newVar()
 			fieldName := n.Right.(parsing.IdName).Name
 			gen.addOpt(ir.MakeBinaryInst(ir.StructMemberPtr, result, left, fieldName))
@@ -374,20 +387,22 @@ func computePointer(scope *scope, node parsing.ASTNode) int {
 	return 0
 }
 
-func computePointerRecursive(scope *scope, node parsing.ASTNode, parent interface{}) int {
+func computePointerRecursive(scope *scope, node parsing.ASTNode) int {
 	gen := scope.gen
+	gen.pushCurrentlyGenerating(&node)
+	defer gen.popCurrentlyGenerating(&node)
 	switch n := node.(type) {
 	case parsing.ExprNode:
 		switch n.Op {
 		case parsing.ArrayAccess:
-			left := computePointerRecursive(scope, n.Left, node)
+			left := computePointerRecursive(scope, n.Left)
 			position := genExpressionValue(scope, n.Right)
 			arrayPointer := scope.newVar()
 			gen.addOpt(ir.MakeBinaryInst(ir.ArrayToPointer, arrayPointer, left, nil))
 			gen.addOpt(ir.MakeBinaryInst(ir.Add, arrayPointer, position, nil))
 			return arrayPointer
 		case parsing.Dot:
-			left := computePointerRecursive(scope, n.Left, node)
+			left := computePointerRecursive(scope, n.Left)
 			result := scope.newVar()
 			fieldName := n.Right.(parsing.IdName).Name
 			gen.addOpt(ir.MakeBinaryInst(ir.PeelStruct, result, left, fieldName))

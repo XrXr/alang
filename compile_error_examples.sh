@@ -9,4 +9,12 @@ for file in $(find -wholename './examples/errors/*.al'); do
     ./alang $file
     echo
 done
+
+for file in $(find -wholename './examples/typecheck/*.al'); do
+    echo "Compiling: $file"
+    ./alang $file > /dev/null
+    echo
+done
+
+
 exit 0
