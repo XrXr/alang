@@ -3,6 +3,7 @@ main :: proc() {
 	mystruct.234
 	hello =
 	today :=
+	23432 := 23
 	// using unary operator as binary operator
 	a := using @ unary
 	second(@sdfsdf food)

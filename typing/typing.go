@@ -31,6 +31,10 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		expr := opt.GeneratedFrom.(parsing.ExprNode)
 		panic(parsing.ErrorFromNode(expr.Left, message))
 	}
+	bailRight := func(message string) {
+		expr := opt.GeneratedFrom.(parsing.ExprNode)
+		panic(parsing.ErrorFromNode(expr.Right, message))
+	}
 	resolve := func(opt ir.Inst) (TypeRecord, TypeRecord) {
 		l := typeTable[opt.Left()]
 		r := typeTable[opt.Right()]
@@ -63,12 +67,12 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		if baseIsStruct {
 			field, ok := baseStruct.Members[fieldName]
 			if !ok {
-				bail(string(fieldName) + " is not a member of the struct")
+				bailRight(fmt.Sprintf("Not a member of struct %s", baseStruct.Name))
 			}
 			return field.Type
 		} else if baseIsString {
 			if fieldName != "data" && fieldName != "length" {
-				bail(string(fieldName) + " is not a member of the struct")
+				bailRight("Strings don't have this field")
 			}
 			switch fieldName {
 			case "length":
@@ -145,7 +149,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			default:
 				// type casting
 				if len(extra.ArgVars) != 1 {
-					bail("Type casting can only operates on one variable")
+					bail("Type casting only operates on one operand")
 				}
 				if typeRecord.Size() != typeTable[extra.ArgVars[0]].Size() {
 					bail("Invalid cast: size of the types must match")
@@ -157,24 +161,31 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 			if !ok {
 				bail("Call to undefined procedure " + extra.Name)
 			}
+			failed := false
+			var message string
 			if len(extra.ArgVars) != len(procRecord.Args) {
-				bail("Wrong number of arguments. Have %d want %d")
+				failed = true
+				message = "Wrong number of arguments"
 			}
 			for _, vn := range extra.ArgVars {
 				mustHaveType(vn)
 			}
 			for i, vn := range extra.ArgVars {
 				if !t.Assignable(typeTable[vn], procRecord.Args[i]) {
-					passed := make([]TypeRecord, len(extra.ArgVars))
-					for _, vn := range extra.ArgVars {
-						passed = append(passed, typeTable[vn])
-					}
-					message := "Argument type mismatch: want ("
-					message += RepForListOfTypes(procRecord.Args)
-					message += ")\n                        have ("
-					message += RepForListOfTypes(passed)
-					bail(message)
+					failed = true
+					message = "Argument type mismatch"
 				}
+			}
+			if failed {
+				passed := make([]TypeRecord, 0, len(extra.ArgVars))
+				for _, vn := range extra.ArgVars {
+					passed = append(passed, typeTable[vn])
+				}
+				message += "\nwant "
+				message += RepForListOfTypes(procRecord.Args)
+				message += "\nhave "
+				message += RepForListOfTypes(passed)
+				bail(message)
 			}
 
 			giveTypeOrVerify(out, *procRecord.Return)
@@ -221,14 +232,12 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		case StringDataPointer:
 			giveTypeOrVerify(opt.Out(), Pointer{ToWhat: t.Builtins[U8Idx]})
 		case Pointer:
-			record, isPointer := ptrType.(Pointer)
-			if !isPointer {
-				bail("Indirecting a non pointer")
-			}
 			if isVoidPointer(record) {
 				bail("Indirecting a void pointer")
 			}
 			giveTypeOrVerify(opt.Out(), record.ToWhat)
+		default:
+			bail("Indirecting a non pointer")
 		}
 	case ir.Assign:
 		giveTypeOrVerify(opt.Left(), mustHaveType(opt.ReadOperand))
@@ -359,7 +368,7 @@ func pointerArrayConsistent(a Pointer, b Pointer) bool {
 }
 
 func RepForListOfTypes(types []TypeRecord) string {
-	result := ""
+	result := "("
 	length := len(types)
 	for j := 0; j < length; j++ {
 		result += "-notyet-" // procRecord.Args[j].Rep()
@@ -367,6 +376,7 @@ func RepForListOfTypes(types []TypeRecord) string {
 			result += ", "
 		}
 	}
+	result += ")"
 	return result
 }
 

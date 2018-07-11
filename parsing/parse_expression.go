@@ -73,8 +73,8 @@ type lineParse struct {
 }
 
 // source location helpers
-func (l *lineParse) makeLoc() sourceLocation {
-	return sourceLocation{line: l.lineNumber}
+func (l *lineParse) makeLocation(startToken, endToken int) sourceLocation {
+	return sourceLocation{line: l.lineNumber, startColumn: l.startOfTok(startToken), endColumn: l.endOfTok(endToken)}
 }
 
 func (l *lineParse) startOfTok(tokIdx int) int {
@@ -86,14 +86,15 @@ func (l *lineParse) endOfTok(tokIdx int) int {
 }
 
 func (l *lineParse) singleTokSourceLocation(tokIdx int) sourceLocation {
-	info := l.makeLoc()
-	info.startColumn = l.startOfTok(tokIdx)
-	info.endColumn = l.endOfTok(tokIdx)
-	return info
+	return l.makeLocation(tokIdx, tokIdx)
 }
 
-func (l *lineParse) singleTokError(idx int, message string) error {
-	return errors.MakeError(l.startOfTok(1), l.endOfTok(1), message)
+func (l *lineParse) singleTokError(tokIdx int, message string) error {
+	return l.errorFromTokIdx(tokIdx, tokIdx, message)
+}
+
+func (l *lineParse) errorFromTokIdx(start, end int, message string) error {
+	return errors.MakeError(l.startOfTok(start), l.endOfTok(end), message)
 }
 
 func (l *lineParse) makeIdent(idx int) IdName {
@@ -152,16 +153,14 @@ func (l *lineParse) parseInStatementContext() (ASTNode, error) {
 		return ElseNode{}, nil
 	case firstToken == "struct" && nTokens == 3 && tokens[2] == "{":
 		if tokenIsId(tokens[1]) {
-			loc := l.makeLoc()
-			loc.startColumn = l.startOfTok(0)
-			loc.endColumn = l.endOfTok(2)
+			loc := l.makeLocation(0, 2)
 			return StructDeclare{sourceLocation: loc, Name: l.makeIdent(1)}, nil
 		} else {
 			return nil, l.singleTokError(1, invalidDeclNameMessage)
 		}
 	case firstToken == "var":
 		if nTokens < 3 {
-			return nil, errors.MakeError(0, nTokens-1, "Incomplete declaration")
+			return nil, l.errorFromTokIdx(0, nTokens-1, "Incomplete declaration")
 		}
 		return l.parseDecl(1, nTokens)
 	case firstToken == "break" && nTokens == 1:
@@ -177,6 +176,11 @@ func (l *lineParse) parseInStatementContext() (ASTNode, error) {
 			left, err := l.parseExprWithParen(parsed, 0, index)
 			if err != nil {
 				return nil, err
+			}
+			if op == Declare || op == ConstDeclare {
+				if _, leftIsIdent := left.(IdName); !leftIsIdent {
+					return nil, ErrorFromNode(left, "This must be an identifier")
+				}
 			}
 			right, err := l.parseExprWithParen(parsed, index+1, nTokens)
 			if err != nil {
@@ -195,11 +199,11 @@ func (l *lineParse) parseInStatementContext() (ASTNode, error) {
 
 func (l *lineParse) finishExprNode(node *ExprNode, opTokIdx int) error {
 	if node.Right == nil {
-		return errors.MakeError(opTokIdx, opTokIdx, "This operator needs an operand to the right")
+		return l.singleTokError(opTokIdx, "This operator needs an operand to the right")
 	}
 	unary := isUnary[node.Op]
 	if !unary && node.Left == nil {
-		return errors.MakeError(opTokIdx, opTokIdx, "This operator needs an operand to the left")
+		return l.singleTokError(opTokIdx, "This operator needs an operand to the left")
 	}
 	if !unary {
 		// caller sets it in this case
@@ -217,9 +221,10 @@ func (l *lineParse) parseDecl(start, end int) (ASTNode, error) {
 		return nil, err
 	}
 	if !tokenIsId(tokens[start]) {
-		return nil, errors.MakeError(start, start, invalidDeclNameMessage)
+		return nil, l.singleTokError(start, invalidDeclNameMessage)
 	}
-	return Declaration{Name: l.makeIdent(start), Type: typeDecl}, nil
+	loc := l.makeLocation(start, end-1)
+	return Declaration{sourceLocation: loc, Name: l.makeIdent(start), Type: typeDecl}, nil
 }
 
 func (l *lineParse) parseInStructDeclContext() (ASTNode, error) {
@@ -243,11 +248,11 @@ func (l *lineParse) parseTypeDecl(start, end int) (TypeDecl, error) {
 			if i+2 < end && tok == "[" && tokens[i+2] == "]" {
 				arraySize, err := strconv.Atoi(tokens[i+1])
 				if err != nil {
-					return TypeDecl{}, errors.MakeError(i, i+2, "Array size must be an integer literal")
+					return TypeDecl{}, l.errorFromTokIdx(i, i+2, "Array size must be an integer literal")
 				}
 				// three because that's the number of tokens [323] parses to
 				if i+3 >= end {
-					return TypeDecl{}, errors.MakeError(i, end-1, "Arrays must contain some type")
+					return TypeDecl{}, l.errorFromTokIdx(i, end-1, "Arrays must contain some type")
 				}
 				sizes = append(sizes, arraySize)
 				if tokens[i+3] == "[" {
@@ -264,7 +269,7 @@ func (l *lineParse) parseTypeDecl(start, end int) (TypeDecl, error) {
 					ArrayBase:          &containedType,
 				}, nil
 			} else if i != end-1 {
-				return TypeDecl{}, errors.MakeError(start, end-1, "This needs to be a type declaration")
+				return TypeDecl{}, l.errorFromTokIdx(start, end-1, "This needs to be a type declaration")
 			}
 		}
 		i++
@@ -288,13 +293,13 @@ func (l *lineParse) genParenInfo(start int, end int) ([]bracketInfo, error) {
 			openStack = append(openStack, i)
 		case ")", "]":
 			if len(openStack) == 0 {
-				return nil, errors.MakeError(i, i, fmt.Sprintf(`unmatched "%s"`, tok))
+				return nil, l.singleTokError(i, fmt.Sprintf(`unmatched "%s"`, tok))
 			}
 			if tok == ")" && tokens[openStack[len(openStack)-1]] != "(" {
-				return nil, errors.MakeError(i, i, `unmatched ")"`)
+				return nil, l.singleTokError(i, `unmatched ")"`)
 			}
 			if tok == "]" && tokens[openStack[len(openStack)-1]] != "[" {
-				return nil, errors.MakeError(i, i, `unmatched "]"`)
+				return nil, l.singleTokError(i, `unmatched "]"`)
 			}
 			kind := round
 			if tok == "]" {
@@ -306,7 +311,7 @@ func (l *lineParse) genParenInfo(start int, end int) ([]bracketInfo, error) {
 		i++
 	}
 	if len(openStack) != 0 {
-		return nil, errors.MakeError(openStack[0], openStack[0], `unclosed bracket`)
+		return nil, l.singleTokError(openStack[0], `unclosed bracket`)
 	}
 	return parenInfo, nil
 }
@@ -323,7 +328,8 @@ func (l *lineParse) parseExprWithParen(parsed map[int]parsedNode, start, end int
 			if paren.open == start {
 				panic("ice: asked to parse an expression that starts with [. What?")
 			}
-			node, err := l.parseExprUnit(parsed, paren.open+1, paren.end)
+			loc := l.makeLocation(paren.open, paren.end)
+			node, err := l.parseExprUnit(parsed, paren.open+1, paren.end, &loc)
 			if err != nil {
 				return nil, err
 			}
@@ -332,18 +338,23 @@ func (l *lineParse) parseExprWithParen(parsed map[int]parsedNode, start, end int
 		} else if paren.kind == round && paren.open-1 >= start && tokenIsId(tokens[paren.open-1]) {
 			// it's a call or a proc expression
 			var node ASTNode
-			var isForeignProc bool
 			parsedStart := paren.open - 1
 			parsedEnd := paren.end
 			if tokens[paren.open-1] == "proc" {
-				isForeignProc = paren.open-2 >= start && tokens[paren.open-2] == "foreign"
-				proc, endOfProcExpr, err := l.parseProcExpr(parsed, paren, !isForeignProc)
+				isForeignProc := paren.open-2 >= start && tokens[paren.open-2] == "foreign"
+				proc, afterProcExpr, err := l.parseProcExpr(parsed, paren, !isForeignProc)
 				if err != nil {
 					return nil, err
 				}
 				proc.IsForeign = isForeignProc
+				if isForeignProc {
+					parsedStart = paren.open - 2
+				}
+				parsedEnd = afterProcExpr
+				proc.line = l.lineNumber
+				proc.startColumn = parsedStart
+				proc.endColumn = afterProcExpr - 1
 				node = *proc
-				parsedEnd = endOfProcExpr
 			} else {
 				call, err := l.parseCallList(parsed, paren)
 				if err != nil {
@@ -351,13 +362,11 @@ func (l *lineParse) parseExprWithParen(parsed map[int]parsedNode, start, end int
 				}
 				node = *call
 			}
-			if isForeignProc {
-				parsedStart = paren.open - 2
-			}
 			parsed[parsedStart] = parsedNode{node, parsedEnd}
-			parsed[parsedEnd] = parsedNode{node, paren.open - 1}
+			parsed[parsedEnd] = parsedNode{node, parsedStart}
 		} else {
-			node, err := l.parseExprUnit(parsed, paren.open+1, paren.end)
+			loc := l.makeLocation(paren.open, paren.end)
+			node, err := l.parseExprUnit(parsed, paren.open+1, paren.end, &loc)
 			if err != nil {
 				return nil, err
 			}
@@ -369,17 +378,17 @@ func (l *lineParse) parseExprWithParen(parsed map[int]parsedNode, start, end int
 	if found && outterMost.otherEnd == end-1 {
 		return outterMost.node, nil
 	}
-	return l.parseExprUnit(parsed, start, end)
+	return l.parseExprUnit(parsed, start, end, nil)
 }
 
 // A unit does not contain unparsed parentheses
-func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int) (ASTNode, error) {
+func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int, locationOverride *sourceLocation) (ASTNode, error) {
 	tokens := l.tokens
 	if start == end {
 		return nil, nil
 	}
 	if end-start == 1 {
-		return l.parseToken(start), nil
+		return l.parseToken(start, locationOverride), nil
 	}
 
 	var ops OpHeap
@@ -388,37 +397,37 @@ func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int) (AS
 	i := start
 	for i < end {
 		parsed, found := parsed[i]
-		if found && tokens[i] != "[" {
+		tok := tokens[i]
+		if found && tok != "[" {
 			i = parsed.otherEnd + 1
 			continue
 		}
-		tok := tokens[i]
 		op, good := tokToOp[tok]
 		if good {
 			if _, hasPrecendence := precedence[op]; !hasPrecendence {
 				println(op.String())
-				panic("need precedence info for this to work")
+				panic("ice: missing precedence info")
 			}
 			heap.Push(&ops, opToken{i, op})
 		}
 		i++
 		if tok == "(" {
-			panic("parseExprUnit() shouldn't see any open parenthesis tokens")
+			panic("ice: parseExprUnit() shouldn't see any open parenthesis tokens")
 		}
 		if tok == "[" {
 			if !found {
-				panic("stuff inside [] should always be parsed already")
+				panic("ice: stuff inside [] should always be parsed already")
 			}
 			i = parsed.otherEnd + 1
 		}
 	}
-
+	var lastNode *ExprNode
 	for len(ops) > 0 {
 		opTok := heap.Pop(&ops).(opToken)
 		leftI := opTok.index - 1
 		rightI := opTok.index + 1
-
-		if isUnary[opTok.op] {
+		unaryOp := isUnary[opTok.op]
+		if unaryOp {
 			// We store the parsed node at the boundary index of the expression.
 			// The boundary for a unary operator is the op token.
 			leftI = opTok.index
@@ -428,13 +437,13 @@ func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int) (AS
 		newNode.Op = opTok.op
 		oneToLeftValid := opTok.index > 0 && opTok.index > start
 		oneToRightValid := opTok.index < len(tokens)-1 && opTok.index < end
-		if oneToLeftValid && !isUnary[newNode.Op] {
+		if oneToLeftValid && !unaryOp {
 			parsed, good := parsed[opTok.index-1]
 			if good {
 				newNode.Left = parsed.node
 				leftI = parsed.otherEnd
 			} else {
-				newNode.Left = l.parseToken(leftI)
+				newNode.Left = l.parseToken(leftI, nil)
 			}
 		}
 		if oneToRightValid {
@@ -450,7 +459,7 @@ func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int) (AS
 				newNode.Right = parsed.node
 				rightI = parsed.otherEnd
 			} else {
-				newNode.Right = l.parseToken(opTok.index + 1)
+				newNode.Right = l.parseToken(opTok.index+1, nil)
 			}
 		}
 
@@ -458,26 +467,57 @@ func (l *lineParse) parseExprUnit(parsed map[int]parsedNode, start, end int) (AS
 		if err != nil {
 			return nil, err
 		}
-
+		if unaryOp {
+			newNode.startColumn = l.startOfTok(leftI)
+		}
+		lastNode = &newNode
 		parsed[leftI] = parsedNode{newNode, rightI}
 		parsed[rightI] = parsedNode{newNode, leftI}
 	}
 	orphanOperandMessage := "This operand isn't consumed by any operator"
 	if info, startIsParsed := parsed[start]; startIsParsed {
 		if info.otherEnd == end-1 {
-			return info.node, nil
+			node := info.node
+			if locationOverride != nil && lastNode != nil {
+				lastNode.sourceLocation = *locationOverride
+				node = *lastNode
+			}
+			return node, nil
 		} else {
 			for i := start; i < end; i++ {
 				_, parsed := parsed[i]
 				if !parsed {
-					return nil, errors.MakeError(i, i, orphanOperandMessage)
+					return nil, l.singleTokError(i, orphanOperandMessage)
 				}
 			}
 			panic(fmt.Sprintf("ice: inconsistency in parsed map: whole range isn't covered but a node that isn't parsed can't be found in the map"))
 		}
 	} else {
-		return nil, errors.MakeError(start, start, orphanOperandMessage)
+		return nil, l.singleTokError(start, orphanOperandMessage)
 	}
+}
+
+func (l *lineParse) parseToken(tokIdx int, locationOverride *sourceLocation) ASTNode {
+	token := l.tokens[tokIdx]
+	var loc sourceLocation
+	if locationOverride != nil {
+		loc = *locationOverride
+	} else {
+		loc = l.singleTokSourceLocation(tokIdx)
+	}
+	switch {
+	case unicode.IsDigit(rune(token[0])) || token[0] == '-':
+		return Literal{loc, Number, token}
+	case token == "true" || token == "false":
+		return Literal{loc, Boolean, token}
+	case token[0] == '"':
+		return Literal{loc, String, token[1 : len(token)-1]}
+	case token == "nil":
+		return Literal{sourceLocation: loc, Type: NilPtr}
+	case tokenIsId(token):
+		return IdName{loc, l.tokens[tokIdx]}
+	}
+	return nil
 }
 
 func (l *lineParse) parseCallList(parsed map[int]parsedNode, paren bracketInfo) (*ProcCall, error) {
@@ -508,11 +548,8 @@ func (l *lineParse) parseCallList(parsed map[int]parsedNode, paren bracketInfo) 
 	}
 	// caller checks whether this is valid ident
 	idNode := l.makeIdent(paren.open - 1)
-	loc := l.makeLoc()
-	loc.startColumn = l.startOfTok(paren.open - 1)
-	loc.endColumn = l.endOfTok(paren.end)
-
-	return &ProcCall{Callee: idNode, Args: args}, nil
+	loc := l.makeLocation(paren.open-1, paren.end)
+	return &ProcCall{sourceLocation: loc, Callee: idNode, Args: args}, nil
 }
 
 func (l *lineParse) parseProcExpr(parsed map[int]parsedNode, paren bracketInfo, requireBlock bool) (*ProcDecl, int, error) {
@@ -526,7 +563,7 @@ func (l *lineParse) parseProcExpr(parsed map[int]parsedNode, paren bracketInfo, 
 			}
 		}
 		if declEnd == -1 {
-			return nil, 0, errors.MakeError(paren.open-1, paren.end, "Proc expressions must have a body")
+			return nil, 0, l.errorFromTokIdx(paren.open-1, paren.end, "Proc expressions must have a body")
 		}
 	} else {
 		declEnd = len(tokens)
@@ -561,7 +598,7 @@ func (l *lineParse) parseProcExpr(parsed map[int]parsedNode, paren bracketInfo, 
 	returnType := TypeDecl{Base: IdName{Name: "void"}}
 	if paren.end+1 < len(tokens) && tokens[paren.end+1] == "->" {
 		if paren.end+2 >= len(tokens) || tokens[paren.end+2] == "{" {
-			return nil, 0, errors.MakeError(paren.end+1, paren.end+1, "A return type should come after this")
+			return nil, 0, l.errorFromTokIdx(paren.end+1, paren.end+1, "A return type should come after this")
 		}
 		var err error
 		returnType, err = l.parseTypeDecl(paren.end+2, declEnd)
@@ -573,23 +610,6 @@ func (l *lineParse) parseProcExpr(parsed map[int]parsedNode, paren bracketInfo, 
 		declEnd = len(tokens) - 1
 	}
 	return &ProcDecl{Return: returnType, Args: args}, declEnd, nil
-}
-
-func (l *lineParse) parseToken(tokIdx int) ASTNode {
-	token := l.tokens[tokIdx]
-	switch {
-	case unicode.IsDigit(rune(token[0])) || token[0] == '-':
-		return Literal{l.singleTokSourceLocation(tokIdx), Number, token}
-	case token == "true" || token == "false":
-		return Literal{l.singleTokSourceLocation(tokIdx), Boolean, token}
-	case token[0] == '"':
-		return Literal{l.singleTokSourceLocation(tokIdx), String, token[1 : len(token)-1]}
-	case token == "nil":
-		return Literal{sourceLocation: l.singleTokSourceLocation(tokIdx), Type: NilPtr}
-	case tokenIsId(token):
-		return l.makeIdent(tokIdx)
-	}
-	return nil
 }
 
 func tokenIsOperator(token string) bool {

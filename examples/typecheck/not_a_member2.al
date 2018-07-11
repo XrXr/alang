@@ -1,3 +1,3 @@
 main :: proc () {
-	puts(2323)
+	foo := "hi".joust
 }

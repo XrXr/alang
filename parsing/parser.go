@@ -82,9 +82,6 @@ func (p *Parser) processLine(line string, lineNumber int) error {
 		n, err = lp.parseInStatementContext()
 	}
 	if err != nil {
-		userError := err.(*errors.UserError)
-		userError.StartColumn = indices[userError.StartColumn]
-		userError.EndColumn = indices[userError.EndColumn] + len(tokens[userError.EndColumn]) - 1
 		return err
 	}
 	// fmt.Printf("Line \"%s\" gave:\n", line)

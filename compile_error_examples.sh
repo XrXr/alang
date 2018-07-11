@@ -16,5 +16,4 @@ for file in $(find -wholename './examples/typecheck/*.al'); do
     echo
 done
 
-
 exit 0
