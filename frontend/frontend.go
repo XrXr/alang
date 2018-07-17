@@ -176,11 +176,12 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			}
 			if !usingRangeExpr {
 				gen.addOpt(labelInst(loopStart))
-				condVar := loopScope.newVar()
-				genExpressionValueToVar(loopScope, condVar, node.Expression)
-				gen.addOpt(ir.MakeReadOnlyInst(ir.JumpIfFalse, condVar, loopEnd))
+				if node.Expression != nil {
+					condVar := loopScope.newVar()
+					genExpressionValueToVar(loopScope, condVar, node.Expression)
+					gen.addOpt(ir.MakeReadOnlyInst(ir.JumpIfFalse, condVar, loopEnd))
+				}
 			}
-
 			// loop body
 			i = genForProcSubSection(labelGen, order, loopScope, i)
 			// continue code

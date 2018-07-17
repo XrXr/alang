@@ -17,6 +17,19 @@ main :: proc() {
         fib2 = next
     }
 
+    fib3last := 0
+    fib3 := 1
+    i = 0
+    for {
+        if i >= 55 {
+            break
+        }
+        next := fib3 + fib3last
+        fib3last = fib3
+        fib3 = next
+        i += 1
+    }
+
     puts("should be 0\n")
-    print_int(fib-fib2)
+    print_int(fib-fib2+fib3-fib)
 }
