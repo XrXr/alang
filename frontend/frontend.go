@@ -308,7 +308,7 @@ func genExpressionValueToVar(scope *scope, dest int, node parsing.ASTNode) {
 			gen.addOpt(labelInst(end))
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
 			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
-			parsing.LesserEqual, parsing.DoubleEqual, parsing.BangEqual, parsing.ArrayAccess:
+			parsing.LesserEqual, parsing.DoubleEqual, parsing.BangEqual:
 			leftDest := scope.newVar()
 			genExpressionValueToVar(scope, leftDest, n.Left)
 			rightDest := genExpressionValue(scope, n.Right)
@@ -337,11 +337,6 @@ func genExpressionValueToVar(scope *scope, dest int, node parsing.ASTNode) {
 				gen.addOpt(ir.MakeReadOnlyInst(ir.Compare, leftDest, ir.CompareExtra{How: ir.AreEqual, Right: rightDest, Out: dest}))
 			case parsing.BangEqual:
 				gen.addOpt(ir.MakeReadOnlyInst(ir.Compare, leftDest, ir.CompareExtra{How: ir.NotEqual, Right: rightDest, Out: dest}))
-			case parsing.ArrayAccess:
-				dataPointer := scope.newVar()
-				gen.addOpt(ir.MakeBinaryInst(ir.ArrayToPointer, dataPointer, leftDest, nil))
-				gen.addOpt(ir.MakeBinaryInst(ir.Add, dataPointer, rightDest, nil))
-				gen.addOpt(ir.MakeBinaryInst(ir.IndirectLoad, dest, dataPointer, nil))
 			}
 		case parsing.AddressOf:
 			switch right := n.Right.(type) {
@@ -358,7 +353,7 @@ func genExpressionValueToVar(scope *scope, dest int, node parsing.ASTNode) {
 				address := computePointer(scope, n.Right)
 				gen.addOpt(ir.MakeBinaryInst(ir.Assign, dest, address, nil))
 			}
-		case parsing.Dot:
+		case parsing.ArrayAccess, parsing.Dot:
 			location := computePointer(scope, n)
 			gen.addOpt(ir.MakeBinaryInst(ir.IndirectLoad, dest, location, nil))
 		default:
