@@ -123,11 +123,13 @@ proc_print_int:
 	ret
 
 _intrinsic_zero_mem:
+.write8:
     cmp rcx, 8
     jl .write1
     mov qword [rdi], 0
     add rdi, 8
     sub rcx, 8
+    jmp .write8
 .write1:
     cmp rcx, 0
     je .done
