@@ -225,8 +225,8 @@ func Dump(insts []Inst) {
 		case Call:
 			extra := opt.Extra.(CallExtra)
 			fmt.Printf(" %v", extra.ArgVars)
-		case Label, Jump, JumpIfTrue, JumpIfFalse:
-			fmt.Printf(" %s", opt.Extra)
+		case Label, Jump, JumpIfTrue, JumpIfFalse, AssignImm, StartProc:
+			fmt.Printf(" %v", opt.Extra)
 		}
 		fmt.Println("}")
 	}

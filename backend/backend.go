@@ -545,10 +545,6 @@ func (p *procGen) zeroOutVarOnStack(vn int) {
 	p.issueCommand("call _intrinsic_zero_mem")
 }
 
-func (p *procGen) fitsInRegister(vn int) bool {
-	return p.sizeof(vn) <= 8
-}
-
 func (p *procGen) perfectRegSize(vn int) bool {
 	size := p.sizeof(vn)
 	return size == 8 || size == 4 || size == 2 || size == 1
@@ -574,7 +570,7 @@ func (p *procGen) signOrZeroExtendMov(dest int, source int) {
 }
 
 func (p *procGen) varVarCopy(dest int, source int) {
-	if p.fitsInRegister(source) {
+	if p.perfectRegSize(source) {
 		p.ensureInRegister(source)
 		if p.inRegister(dest) {
 			if p.typeTable[dest].IsNumber() && p.typeTable[source].IsNumber() && p.sizeof(dest) > p.sizeof(source) {
@@ -719,8 +715,9 @@ func (p *procGen) generate() {
 				// :structinreg
 				out := opt.Out()
 				_, isStruct := p.typeTable[out].(typing.StructRecord)
+				_, isArray := p.typeTable[out].(typing.Array)
 				freeReg, freeRegExists := p.registers.nextAvailable()
-				if !isStruct && p.fitsInRegister(out) && freeRegExists {
+				if !isStruct && !isArray && p.perfectRegSize(out) && freeRegExists {
 					p.loadRegisterWithVar(freeReg, out)
 				}
 				if p.inRegister(out) {
@@ -878,6 +875,7 @@ func (p *procGen) generate() {
 				}
 			} else {
 				retVar := opt.Out()
+				procRecord := p.env.Procs[extra.Name]
 				var numStackVars int
 				numArgs := len(extra.ArgVars)
 				provideReturnStorage := p.sizeof(retVar) > 16
@@ -885,8 +883,7 @@ func (p *procGen) generate() {
 					numArgs += 1
 				}
 
-				procRecord := p.env.Procs[extra.Name]
-				realArgsPassedInReg := 0
+				argsPassed := 0
 				for i, arg := range extra.ArgVars {
 					if provideReturnStorage {
 						i += 1
@@ -894,7 +891,7 @@ func (p *procGen) generate() {
 					if i >= len(paramPassingRegOrder) {
 						break
 					}
-					realArgsPassedInReg++
+					argsPassed++
 					switch p.typeTable[arg].Size() {
 					case 8, 4, 2, 1:
 						p.loadRegisterWithVar(paramPassingRegOrder[i], arg)
@@ -903,9 +900,8 @@ func (p *procGen) generate() {
 					}
 				}
 
-				if realArgsPassedInReg < len(extra.ArgVars) {
-					// TODO :newbackend
-					numStackVars = len(extra.ArgVars) - realArgsPassedInReg
+				if argsPassed < len(extra.ArgVars) {
+					numStackVars = len(extra.ArgVars) - argsPassed
 					if numStackVars%2 == 1 {
 						// Make sure we are aligned to 16
 						p.issueCommand("sub rsp, 8")
@@ -955,14 +951,13 @@ func (p *procGen) generate() {
 				}
 
 				// TODO this needs to change when we support things bigger than 8 bytes
-				// TODO :newbackend
 				if numArgs > len(paramPassingRegOrder) {
 					p.issueCommand(fmt.Sprintf("add rsp, %d", numStackVars*8+numStackVars%2*8))
 				}
 				if p.registers.all[rax].occupiedBy != invalidVn {
 					panic("rax should've been freed up before the call")
 				}
-				if p.sizeof(retVar) > 0 && p.fitsInRegister(retVar) {
+				if p.sizeof(retVar) > 0 && p.sizeof(retVar) <= 8 {
 					if p.inRegister(retVar) {
 						p.releaseRegister(p.varStorage[retVar].currentRegister)
 					}
@@ -1126,7 +1121,7 @@ func (p *procGen) generate() {
 			pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
 			p.ensureInRegister(ptr)
 
-			if p.fitsInRegister(data) {
+			if p.perfectRegSize(data) {
 				p.ensureInRegister(data)
 				dataRegName := p.registerOf(data).nameForSize(pointedToSize)
 				prefix := prefixForSize(pointedToSize)

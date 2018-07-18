@@ -67,6 +67,8 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 					if existsInCurrentScope {
 						panic(parsing.ErrorFromNode(node.Left, "Redeclaration of variable"))
 					}
+					// we need to generate the right side before we make the variable in the current scope since
+					// in this statement the name on the rhs refers to the var in the outer scope.
 					rhsResult := genExpressionValue(scope, node.Right)
 					vnForNewVar := scope.newNamedVar(varName)
 					gen.addOpt(ir.MakeBinaryInst(ir.Assign, vnForNewVar, rhsResult, nil))

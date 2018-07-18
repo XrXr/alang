@@ -16,9 +16,15 @@ main :: proc () {
 }
 
 verify_array :: proc() {
-	var empty [20]u8
-	for i := 0..19 {
+	var empty [8]u8
+	for i := 0..7 {
 		if empty[i] != 0 {
+			puts("junk in fresh array\n")
+		}
+	}
+	var empty2 [6]u8
+	for i := 0..5 {
+		if empty2[i] != 0 {
 			puts("junk in fresh array\n")
 		}
 	}
@@ -48,8 +54,8 @@ verify_numbers :: proc() {
 }
 
 put_junk :: proc() {
-	var junk [20]u8
-	for i := 0..19 {
+	var junk [1000]u8
+	for i := 0..999 {
 		junk[i] = 255
 	}
 }
