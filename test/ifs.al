@@ -13,6 +13,10 @@ main :: proc () {
         puts("literal\n")
     }
 
+    if false {
+        puts("no\n")
+    }
+
     if 9 > 8 {
         puts("greater\n")
     }
@@ -21,13 +25,22 @@ main :: proc () {
         puts("no\n")
     }
 
-    if 3 < 2 {
+    if 29 > 29 {
         puts("no\n")
     }
 
     if 2 < 3 {
         puts("smaller\n")
     }
+
+    if 3 < 2 {
+        puts("no\n")
+    }
+
+    if 3 < 3 {
+        puts("no\n")
+    }
+
 
     if 7 <= 7 {
         puts("less equal equal\n")
@@ -58,6 +71,14 @@ main :: proc () {
     }
 
     if 12 == 123 {
+        puts("no\n")
+    }
+
+    if 12 != 29 {
+        puts("not equal\n")
+    }
+
+    if 12 != 12 {
         puts("no\n")
     }
 }

@@ -1028,10 +1028,8 @@ func (p *procGen) generate() {
 			outReg, outInReg := p.registers.nextAvailable()
 			if outInReg {
 				p.loadRegisterWithVar(outReg, out)
-				p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
 			} else {
 				p.ensureStackOffsetValid(out)
-				p.issueCommand(fmt.Sprintf("mov %s, 1", p.stackOperand(out)))
 			}
 
 			var firstOperand, secondOperand string
@@ -1050,8 +1048,6 @@ func (p *procGen) generate() {
 					panic("faulty ir: comparsion between non numbers with different sizes")
 				}
 			} else {
-				// TODO: autoCommand() we can have a method that gives an operand preferring register.
-				// Not sure we do it in other places yet though.
 				if !p.inRegister(l) && !p.inRegister(r) {
 					p.ensureInRegister(l)
 				}
@@ -1060,24 +1056,20 @@ func (p *procGen) generate() {
 			}
 
 			p.issueCommand(fmt.Sprintf("cmp %s, %s", firstOperand, secondOperand))
-			labelName := p.genLabel(".cmp")
 			switch extra.How {
 			case ir.Greater:
-				p.issueCommand(fmt.Sprintf("jg %s", labelName))
+				p.issueCommand(fmt.Sprintf("setg %s", p.varOperand(out)))
 			case ir.Lesser:
-				p.issueCommand(fmt.Sprintf("jl %s", labelName))
+				p.issueCommand(fmt.Sprintf("setl %s", p.varOperand(out)))
 			case ir.GreaterOrEqual:
-				p.issueCommand(fmt.Sprintf("jge %s", labelName))
+				p.issueCommand(fmt.Sprintf("setge %s", p.varOperand(out)))
 			case ir.LesserOrEqual:
-				p.issueCommand(fmt.Sprintf("jle %s", labelName))
+				p.issueCommand(fmt.Sprintf("setle %s", p.varOperand(out)))
 			case ir.AreEqual:
-				p.issueCommand(fmt.Sprintf("je %s", labelName))
+				p.issueCommand(fmt.Sprintf("sete %s", p.varOperand(out)))
 			case ir.NotEqual:
-				p.issueCommand(fmt.Sprintf("jne %s", labelName))
+				p.issueCommand(fmt.Sprintf("setne %s", p.varOperand(out)))
 			}
-
-			p.issueCommand(fmt.Sprintf("mov %s, 0", p.varOperand(out)))
-			fmt.Fprintf(p.out.buffer, "%s:\n", labelName)
 		case ir.Transclude:
 			panic("Transcludes should be gone by now")
 		case ir.TakeAddress:
