@@ -1045,7 +1045,7 @@ func (p *procGen) generate() {
 						secondOperand = p.signOrZeroExtendIfNeeded(r, l)
 					}
 				} else {
-					panic("faulty ir: comparsion between non numbers with different sizes")
+					panic("faulty ir: comparison between non numbers with different sizes")
 				}
 			} else {
 				if !p.inRegister(l) && !p.inRegister(r) {
@@ -1056,20 +1056,24 @@ func (p *procGen) generate() {
 			}
 
 			p.issueCommand(fmt.Sprintf("cmp %s, %s", firstOperand, secondOperand))
+			var mnemonic string
 			switch extra.How {
 			case ir.Greater:
-				p.issueCommand(fmt.Sprintf("setg %s", p.varOperand(out)))
+				mnemonic = "setg"
 			case ir.Lesser:
-				p.issueCommand(fmt.Sprintf("setl %s", p.varOperand(out)))
+				mnemonic = "setl"
 			case ir.GreaterOrEqual:
-				p.issueCommand(fmt.Sprintf("setge %s", p.varOperand(out)))
+				mnemonic = "setge"
 			case ir.LesserOrEqual:
-				p.issueCommand(fmt.Sprintf("setle %s", p.varOperand(out)))
+				mnemonic = "setle"
 			case ir.AreEqual:
-				p.issueCommand(fmt.Sprintf("sete %s", p.varOperand(out)))
+				mnemonic = "sete"
 			case ir.NotEqual:
-				p.issueCommand(fmt.Sprintf("setne %s", p.varOperand(out)))
+				mnemonic = "setne"
+			default:
+				panic("ice: passed a unknown method of comparison")
 			}
+			p.issueCommand(fmt.Sprintf("%s %s", mnemonic, p.varOperand(out)))
 		case ir.Transclude:
 			panic("Transcludes should be gone by now")
 		case ir.TakeAddress:
