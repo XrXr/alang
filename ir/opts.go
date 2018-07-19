@@ -200,6 +200,47 @@ func IterAndMutate(opt *Inst, cb func(vn *int)) {
 	}
 }
 
+func FindMutationVar(opt *Inst) int {
+	const noMutation = -1
+	if opt.Type == IndirectWrite {
+		return noMutation
+	}
+
+	if opt.Type > MutateOnlyInstructions && opt.Type < ReadOnlyInstructions {
+		return opt.MutateOperand
+	}
+	if opt.Type > ReadAndMutateInstructions {
+		return opt.MutateOperand
+	}
+	switch opt.Type {
+	case Compare:
+		extra := opt.Extra.(CompareExtra)
+		return extra.Out
+	}
+	return noMutation
+}
+
+func EnumerateAllReadOnlyVars(opt *Inst, cb func(vn int)) {
+	if opt.Type > ReadOnlyInstructions && opt.Type < ReadAndMutateInstructions {
+		cb(opt.ReadOperand)
+	} else if opt.Type > ReadAndMutateInstructions {
+		cb(opt.ReadOperand)
+	}
+
+	switch opt.Type {
+	case Call:
+		for _, vn := range opt.Extra.(CallExtra).ArgVars {
+			cb(vn)
+		}
+	case Return:
+		for _, vn := range opt.Extra.(ReturnExtra).Values {
+			cb(vn)
+		}
+	case Compare:
+		cb(opt.Extra.(CompareExtra).Right)
+	}
+}
+
 func Dump(insts []Inst) {
 	fmt.Println("IR Dump:")
 	for i, opt := range insts {
@@ -224,9 +265,11 @@ func Dump(insts []Inst) {
 			fmt.Printf(" %v", extra.Values)
 		case Call:
 			extra := opt.Extra.(CallExtra)
-			fmt.Printf(" %v", extra.ArgVars)
-		case Label, Jump, JumpIfTrue, JumpIfFalse, AssignImm, StartProc:
+			fmt.Printf(" %s %v", extra.Name, extra.ArgVars)
+		case Label, Jump, JumpIfTrue, JumpIfFalse, StartProc:
 			fmt.Printf(" %v", opt.Extra)
+		case AssignImm:
+			fmt.Printf(" (%v)", opt.Extra)
 		}
 		fmt.Println("}")
 	}

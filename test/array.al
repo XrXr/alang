@@ -1,9 +1,9 @@
 main :: proc() {
     var array [5]int
-    array[0]  = 100
-    array[1]  = 25
-    array[2]  = 2
-    array[3]  = 3
+    array[0]   = 100
+    array[1]   = 25
+    array[2]   = 2
+    array[3]   = 3
     array[2+2] = 1
 
     ret := array[0]

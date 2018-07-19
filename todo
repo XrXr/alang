@@ -19,6 +19,8 @@
  ✔ :morecopies copying full structs @done (18-06-23 20:51)
  ✔ factor out signExtendToMatchSize @done (18-06-19 20:07)
  ✘ do some reserach about signedModulous -- how do we do s32 *= s64? what if on the right side the sign bit is set? @cancelled (18-07-03 19:11)
+ ☐ hidden parameter for returning large values can be clobbered
+ ☐ bitwise operators
  ☐ be less barbaric about saving registers in proc prologue
  ✔ &structA.field @done (18-07-11 21:22)
  ✔ &arr[409] @done (18-07-11 21:22)

@@ -21,6 +21,19 @@ func newOutputBlock() *outputBlock {
 	return &block
 }
 
+type precomputeType int
+
+const (
+	notPrecomputable precomputeType = iota
+	integer
+	pointerToVar
+)
+
+type preComputeInfo struct {
+	valueType precomputeType
+	value     int64
+}
+
 type registerId int
 
 const (
@@ -44,6 +57,9 @@ const (
 const invalidVn int = -1
 const invalidRegister registerId = -1
 const zombieMessage string = "ice: trying to revive a decommissioned variable"
+
+var paramPassingRegOrder = [...]registerId{rdi, rsi, rdx, rcx, r8, r9}
+var preservedRegisters = [...]registerId{rbx, r15, r14, r13, r12}
 
 type registerInfo struct {
 	qwordName  string // 64 bit
@@ -185,6 +201,10 @@ type procGen struct {
 	currentFrameSize          int
 	nextLabelId               int
 	stackBoundVars            []int
+	// info for compile time evaluation
+	preCompute      []preComputeInfo
+	preComputeStart map[int]bool
+	preComputeUntil []int
 	// info for backfilling instructions
 	prologueBlock    *outputBlock
 	conditionalJumps []preJumpState
@@ -461,6 +481,18 @@ func (p *procGen) ensureStackOffsetValid(vn int) {
 	p.varStorage[vn].rbpOffset = p.currentFrameSize
 }
 
+func (p *procGen) allocateRuntimeStorage(vn int) {
+	if p.inRegister(vn) || p.hasStackStorage(vn) {
+		return
+	}
+	reg, available := p.registers.nextAvailable()
+	if available {
+		p.loadRegisterWithVar(reg, vn)
+	} else {
+		p.ensureStackOffsetValid(vn)
+	}
+}
+
 func (p *procGen) morphToState(targetState *fullVarState) {
 	backup := p.fullVarState.copyVarState()
 	p.noNewStackStorage = true
@@ -550,23 +582,29 @@ func (p *procGen) perfectRegSize(vn int) bool {
 	return size == 8 || size == 4 || size == 2 || size == 1
 }
 
-func (p *procGen) signOrZeroExtendMov(dest int, source int) {
-	// caller is responsible for making sure that both vars are in register
-	destReg := p.registerOf(dest)
-	sourceTightFit := p.fittingRegisterName(source)
+func (p *procGen) signOrZeroExtendMovToReg(dest registerId, sourceVn int) {
+	destReg := &p.registers.all[dest]
 	destRegName := destReg.qwordName
 	var mnemonic string
-	if p.typer.IsUnsigned(p.typeTable[source]) {
-		if p.sizeof(source) == 4 {
-			mnemonic = "mov" // upper 4 bytes are automatically zeroed
-			destRegName = destReg.nameForSize(4)
-		} else {
-			mnemonic = "movzx"
-		}
+	if p.sizeof(sourceVn) == 8 {
+		mnemonic = "mov"
 	} else {
-		mnemonic = "movsx"
+		if p.typer.IsUnsigned(p.typeTable[sourceVn]) {
+			if p.sizeof(sourceVn) == 4 {
+				mnemonic = "mov" // upper 4 bytes are automatically zeroed
+				destRegName = destReg.nameForSize(4)
+			} else {
+				mnemonic = "movzx"
+			}
+		} else {
+			mnemonic = "movsx"
+		}
 	}
-	p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destRegName, sourceTightFit))
+	p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destRegName, p.varOperand(sourceVn)))
+}
+
+func (p *procGen) signOrZeroExtendMov(dest int, source int) {
+	p.signOrZeroExtendMovToReg(p.varStorage[dest].currentRegister, source)
 }
 
 func (p *procGen) varVarCopy(dest int, source int) {
@@ -613,11 +651,26 @@ func (p *procGen) conditionalJump(jumpInst ir.Inst) {
 	fmt.Fprintf(p.out.buffer, "%s:\n", nojump)
 }
 
-func (p *procGen) jump(jumpInst ir.Inst) {
+func (p *procGen) jump(jumpInst *ir.Inst) {
 	label := jumpInst.Extra.(string)
 	targetState := p.labelToState[label]
 	p.morphToState(targetState)
 	p.issueCommand(fmt.Sprintf("jmp .%s", label))
+}
+
+func (p *procGen) jumpOrDelayedJump(optIdx int, opt *ir.Inst) {
+	label := opt.Extra.(string)
+	_, labelSeen := p.labelToState[label]
+	if labelSeen {
+		p.jump(opt)
+	} else {
+		p.jumps = append(p.jumps, preJumpState{
+			out:    p.out,
+			state:  p.copyVarState(),
+			optIdx: optIdx,
+		})
+		p.switchToNewOutBlock()
+	}
 }
 
 func (p *procGen) genLabel(prefix string) string {
@@ -626,14 +679,331 @@ func (p *procGen) genLabel(prefix string) string {
 	return label
 }
 
-func (p *procGen) generate() {
-	addLine := func(line string) {
-		io.WriteString(p.out.buffer, line)
+func (p *procGen) genAssignImm(optIdx int, opt ir.Inst) {
+	out := opt.Out()
+
+	didPrecompute := false
+	if p.preComputeStart[optIdx] || p.preComputing(out) {
+		didPrecompute = true
+		switch value := opt.Extra.(type) {
+		case int64:
+			p.preCompute[out].valueType = integer
+			p.preCompute[out].value = value
+		case bool:
+			p.preCompute[out].valueType = integer
+			var val int64 = 0
+			if value == true {
+				val = 1
+			}
+			p.preCompute[out].value = val
+		default:
+			didPrecompute = false
+		}
 	}
 
-	paramPassingRegOrder := [...]registerId{rdi, rsi, rdx, rcx, r8, r9}
-	preservedRegisters := [...]registerId{rbx, r15, r14, r13, r12}
+	if !didPrecompute {
+		switch value := opt.Extra.(type) {
+		case int64:
+			p.ensureInRegister(out)
+			p.regImmCommand("mov", out, value)
+		case uint64:
+			p.ensureInRegister(out)
+			p.issueCommand(fmt.Sprintf("mov %s, %d", p.registerOf(out).qwordName, value))
+		case bool:
+			p.ensureInRegister(out)
+			var val int64 = 0
+			if value == true {
+				val = 1
+			}
+			p.regImmCommand("mov", out, val)
+		case string:
+			destReg := p.ensureInRegister(out)
+			labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
+			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
 
+			var buf bytes.Buffer
+			buf.WriteString("\tdb\t")
+			byteCount := 0
+			i := 0
+			needToStartQuote := true
+			for ; i < len(value); i++ {
+				if needToStartQuote {
+					buf.WriteRune('"')
+					needToStartQuote = false
+				}
+				if value[i] == '\\' && value[i+1] == 'n' {
+					buf.WriteString(`",10,`)
+					needToStartQuote = true
+					i++
+				} else {
+					buf.WriteString(string(value[i]))
+				}
+				byteCount++
+			}
+			// end the string
+			if !needToStartQuote {
+				buf.WriteString(`",0`)
+			} else {
+				// it's a string that ends with \n
+				buf.WriteRune('0')
+			}
+
+			p.staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
+			p.staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
+			p.staticDataBuf.ReadFrom(&buf)
+			p.staticDataBuf.WriteRune('\n')
+		case parsing.TypeDecl, parsing.LiteralType:
+			// :structinreg
+			out := opt.Out()
+			_, isStruct := p.typeTable[out].(typing.StructRecord)
+			_, isArray := p.typeTable[out].(typing.Array)
+			freeReg, freeRegExists := p.registers.nextAvailable()
+			if !isStruct && !isArray && p.perfectRegSize(out) && freeRegExists {
+				p.loadRegisterWithVar(freeReg, out)
+			}
+			if p.inRegister(out) {
+				p.issueCommand(fmt.Sprintf("mov %s, 0", p.registerOf(out).qwordName))
+			} else {
+				p.zeroOutVarOnStack(out)
+			}
+		default:
+			parsing.Dump(value)
+			panic("unknown immediate value type")
+		}
+	}
+}
+
+func (p *procGen) genCall(optIdx int, opt ir.Inst) {
+	p.swapStackBoundVars()
+	extra := opt.Extra.(ir.CallExtra)
+	if typeRecord, callToType := p.env.Types[extra.Name]; callToType {
+		switch typeRecord.(type) {
+		case *typing.StructRecord:
+			// making a struct. We never put structs in registers even if they fit
+			// :structinreg
+			p.zeroOutVarOnStack(opt.Out())
+		default:
+			// cast
+			p.varVarCopy(opt.Out(), extra.ArgVars[0])
+		}
+	} else {
+		retVar := opt.Out()
+		procRecord := p.env.Procs[extra.Name]
+		var numStackVars int
+		numArgs := len(extra.ArgVars)
+		provideReturnStorage := p.sizeof(retVar) > 16
+		if provideReturnStorage {
+			numArgs += 1
+		}
+
+		visibleArgsInReg := len(extra.ArgVars)
+		if len(paramPassingRegOrder) <= visibleArgsInReg {
+			visibleArgsInReg = len(paramPassingRegOrder)
+			if provideReturnStorage {
+				visibleArgsInReg--
+			}
+		}
+
+		if visibleArgsInReg < len(extra.ArgVars) {
+			tmpReg := paramPassingRegOrder[len(paramPassingRegOrder)-1]
+			if currentTenant := p.registers.all[tmpReg].occupiedBy; currentTenant != invalidVn {
+				p.ensureStackOffsetValid(currentTenant)
+				p.memRegCommand("mov", currentTenant, currentTenant)
+				p.releaseRegister(tmpReg)
+			}
+			tmpRegInfo := &p.registers.all[tmpReg]
+			numStackVars = len(extra.ArgVars) - visibleArgsInReg
+			if numStackVars%2 == 1 {
+				// Make sure we are aligned to 16
+				p.issueCommand("sub rsp, 8")
+			}
+			for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numStackVars; i-- {
+				arg := extra.ArgVars[i]
+				argSize := p.typeTable[arg].Size()
+				switch argSize {
+				case 8, 4, 2, 1:
+					if p.preComputing(arg) {
+						p.issueCommand(fmt.Sprintf("mov %s, %d", tmpRegInfo.qwordName, p.getPreComputedValue(arg)))
+					} else {
+						p.signOrZeroExtendMovToReg(tmpReg, arg)
+					}
+					p.issueCommand(fmt.Sprintf("push %s", tmpRegInfo.qwordName))
+				default:
+					panic("Unsupported parameter size")
+				}
+			}
+		}
+
+		for i, arg := range extra.ArgVars {
+			if provideReturnStorage {
+				i += 1
+			}
+			if i >= len(paramPassingRegOrder) {
+				break
+			}
+			switch valueSize := p.typeTable[arg].Size(); valueSize {
+			case 8, 4, 2, 1:
+				reg := paramPassingRegOrder[i]
+				p.loadRegisterWithVar(reg, arg)
+				if valueSize < procRecord.Args[i].Size() {
+					p.signOrZeroExtendMovToReg(reg, arg)
+				}
+				if p.preComputing(arg) {
+					p.issueCommand(fmt.Sprintf("mov %s, %d", p.registers.all[reg].qwordName, p.getPreComputedValue(arg)))
+				}
+			default:
+				panic("Unsupported parameter size")
+			}
+		}
+
+		// the first part of this array is the same as paramPassingRegOrder
+		regsThatGetDestroyed := [...]registerId{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
+		for _, reg := range regsThatGetDestroyed {
+			owner := p.registers.all[reg].occupiedBy
+			if owner != invalidVn {
+				if !(p.lastUsage[owner] == optIdx || p.preComputing(owner)) {
+					p.ensureStackOffsetValid(owner)
+					p.memRegCommand("mov", owner, owner)
+				}
+				p.releaseRegister(reg)
+			}
+		}
+
+		if provideReturnStorage {
+			p.ensureStackOffsetValid(retVar)
+			p.loadVarOffsetIntoReg(retVar, rdi)
+		}
+
+		if procRecord.IsForeign {
+			p.issueCommand(fmt.Sprintf("call %s  wrt ..plt", extra.Name))
+		} else {
+			p.issueCommand(fmt.Sprintf("call proc_%s", extra.Name))
+		}
+
+		// TODO this needs to change when we support things bigger than 8 bytes
+		if numArgs > len(paramPassingRegOrder) {
+			p.issueCommand(fmt.Sprintf("add rsp, %d", numStackVars*8+numStackVars%2*8))
+		}
+		if p.registers.all[rax].occupiedBy != invalidVn {
+			panic("rax should've been freed up before the call")
+		}
+		if p.sizeof(retVar) > 0 && p.sizeof(retVar) <= 8 {
+			if p.inRegister(retVar) {
+				p.releaseRegister(p.varStorage[retVar].currentRegister)
+			}
+			p.allocateRegToVar(rax, retVar)
+		}
+	}
+
+}
+
+func (p *procGen) genReturn(optIdx int, opt ir.Inst) {
+	returnType := *p.procRecord.Return
+
+	returnExtra := opt.Extra.(ir.ReturnExtra)
+	if len(returnExtra.Values) > 0 {
+		retVar := returnExtra.Values[0]
+		if p.preComputing(retVar) {
+			p.issueCommand(fmt.Sprintf("mov rax, %d", p.getPreComputedValue(retVar)))
+		} else if p.perfectRegSize(retVar) {
+			p.loadRegisterWithVar(rax, retVar)
+			if returnType.Size() > p.sizeof(retVar) {
+				p.signOrZeroExtendMov(retVar, retVar)
+			}
+		} else if p.callerProvidesReturnSpace {
+			if returnType.Size() != p.sizeof(retVar) {
+				panic("ice: returning a big var that doesn't match the size of the declared return type. Typechecker should've caught it")
+			}
+			if p.inRegister(retVar) {
+				panic("ice: a var this big shouldn't be in register")
+			}
+			p.ensureStackOffsetValid(retVar)
+			p.freeUpRegisters(false, rsi, rdi, rcx)
+			p.issueCommand("mov rdi, qword [rbp-8]")
+			p.loadVarOffsetIntoReg(retVar, rsi)
+			p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
+			p.issueCommand("call _intrinsic_memcpy")
+		} else {
+			panic("Can't handle return where the data doesn't exactly fit a register or 8 < size <= 16 yet")
+		}
+	}
+	p.issueCommand("jmp .end_of_proc")
+}
+
+func (p *procGen) setccToVar(how ir.ComparisonMethod, vn int) {
+	var mnemonic string
+	switch how {
+	case ir.Greater:
+		mnemonic = "setg"
+	case ir.Lesser:
+		mnemonic = "setl"
+	case ir.GreaterOrEqual:
+		mnemonic = "setge"
+	case ir.LesserOrEqual:
+		mnemonic = "setle"
+	case ir.AreEqual:
+		mnemonic = "sete"
+	case ir.NotEqual:
+		mnemonic = "setne"
+	default:
+		panic("ice: passed a unknown method of comparison")
+	}
+	p.issueCommand(fmt.Sprintf("%s %s", mnemonic, p.varOperand(vn)))
+}
+
+func (p *procGen) andOrImm(opt *ir.Inst, imm int64) {
+	var mnemonic string
+	switch opt.Type {
+	case ir.And:
+		mnemonic = "and"
+	case ir.Or:
+		mnemonic = "or"
+	}
+	if p.sizeof(opt.Left()) == 1 {
+		p.issueCommand(fmt.Sprintf("%s %s, %d", mnemonic, p.varOperand(opt.Left()), imm))
+	} else {
+		panic("ice: and and or for more than 1 byte is not supported yet")
+	}
+}
+
+func (p *procGen) evalCompare(opt *ir.Inst) int64 {
+	extra := opt.Extra.(ir.CompareExtra)
+	leftValue := p.getPreComputedValue(opt.ReadOperand)
+	rightValue := p.getPreComputedValue(extra.Right)
+	var result bool
+	switch extra.How {
+	case ir.Lesser:
+		result = leftValue < rightValue
+	case ir.LesserOrEqual:
+		result = leftValue <= rightValue
+	case ir.Greater:
+		result = leftValue > rightValue
+	case ir.GreaterOrEqual:
+		result = leftValue >= rightValue
+	case ir.AreEqual:
+		result = leftValue == rightValue
+	case ir.NotEqual:
+		result = leftValue != rightValue
+	}
+
+	if result {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+func (p *procGen) tmpStorageForValue(size int, value int64) string {
+	tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(size), size)
+	p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, value))
+	return tmpStackStorage
+}
+
+func (p *procGen) preComputing(vn int) bool {
+	return p.preCompute[vn].valueType != notPrecomputable
+}
+
+func (p *procGen) generate() {
 	{
 		paramOffset := -16
 		for i := 0; i < p.block.NumberOfArgs; i++ {
@@ -652,637 +1022,49 @@ func (p *procGen) generate() {
 
 	// backendDebug(framesize, p.typeTable)
 	for optIdx, opt := range p.block.Opts {
-		addLine(fmt.Sprintf(".ir_line_%d:\n", optIdx))
-		for i := 0; i < len(p.dontSwap); i++ {
+		fmt.Println("doing ir line", optIdx)
+		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+		for i := range p.dontSwap {
 			p.dontSwap[i] = false
 		}
 		switch opt.Type {
-		case ir.Assign:
-			p.varVarCopy(opt.Left(), opt.Right())
 		case ir.AssignImm:
-			dst := opt.Out()
-			switch value := opt.Extra.(type) {
-			case int64:
-				p.ensureInRegister(dst)
-				p.regImmCommand("mov", dst, value)
-			case uint64:
-				p.ensureInRegister(dst)
-				p.issueCommand(fmt.Sprintf("mov %s, %d", p.registerOf(dst).qwordName, value))
-			case bool:
-				p.ensureInRegister(dst)
-				var val int64 = 0
-				if value == true {
-					val = 1
-				}
-				p.regImmCommand("mov", dst, val)
-			case string:
-				destReg := p.ensureInRegister(dst)
-				labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
-				p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
-
-				var buf bytes.Buffer
-				buf.WriteString("\tdb\t")
-				byteCount := 0
-				i := 0
-				needToStartQuote := true
-				for ; i < len(value); i++ {
-					if needToStartQuote {
-						buf.WriteRune('"')
-						needToStartQuote = false
-					}
-					if value[i] == '\\' && value[i+1] == 'n' {
-						buf.WriteString(`",10,`)
-						needToStartQuote = true
-						i++
-					} else {
-						buf.WriteString(string(value[i]))
-					}
-					byteCount++
-				}
-				// end the string
-				if !needToStartQuote {
-					buf.WriteString(`",0`)
-				} else {
-					// it's a string that ends with \n
-					buf.WriteRune('0')
-				}
-
-				p.staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
-				p.staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
-				p.staticDataBuf.ReadFrom(&buf)
-				p.staticDataBuf.WriteRune('\n')
-			case parsing.TypeDecl, parsing.LiteralType:
-				// :structinreg
-				out := opt.Out()
-				_, isStruct := p.typeTable[out].(typing.StructRecord)
-				_, isArray := p.typeTable[out].(typing.Array)
-				freeReg, freeRegExists := p.registers.nextAvailable()
-				if !isStruct && !isArray && p.perfectRegSize(out) && freeRegExists {
-					p.loadRegisterWithVar(freeReg, out)
-				}
-				if p.inRegister(out) {
-					p.issueCommand(fmt.Sprintf("mov %s, 0", p.registerOf(out).qwordName))
-				} else {
-					p.zeroOutVarOnStack(out)
-				}
-			default:
-				parsing.Dump(value)
-				panic("unknown immediate value type")
-			}
-		case ir.Add, ir.Sub:
-			var leaFormatString string
-			var mnemonic string
-			if opt.Type == ir.Add {
-				leaFormatString = "lea %[1]s, [%[1]s+%[2]s*%[3]d]"
-				mnemonic = "add"
-			} else {
-				leaFormatString = "lea %[1]s, [%[1]s-%[2]s*%[3]d]"
-				mnemonic = "sub"
-			}
-			pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
-			rRegId := p.ensureInRegister(opt.Right())
-			rReg := p.registerOf(opt.Right())
-
-			if leftIsPointer {
-				lRegIdx := p.ensureInRegister(opt.Left())
-				pointedToSize := pointer.ToWhat.Size()
-				switch pointedToSize {
-				case 1, 2, 4, 8:
-					p.issueCommand(
-						fmt.Sprintf(leaFormatString, p.registers.all[lRegIdx].qwordName, rReg.qwordName, pointedToSize))
-				default:
-					tempReg, freeRegExists := p.registers.nextAvailable()
-					var tempRegTenant int
-					if !freeRegExists {
-						tempReg = rRegId
-						for tempReg == lRegIdx || tempReg == rRegId {
-							tempReg = (tempReg + 1) % numRegisters
-						}
-						tempRegTenant = p.registers.all[tempReg].occupiedBy
-						p.ensureStackOffsetValid(tempRegTenant)
-						p.memRegCommand("mov", tempRegTenant, tempRegTenant)
-					}
-					p.movRegReg(tempReg, rRegId)
-					tempRegName := p.registers.all[tempReg].qwordName
-					p.issueCommand(fmt.Sprintf("imul %s, %d", tempRegName, pointedToSize))
-					p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.registerOf(opt.Left()).qwordName, tempRegName))
-					if !freeRegExists {
-						p.regMemCommand("mov", tempRegTenant, tempRegTenant)
-					}
-				}
-			} else {
-				rRegLeftSize := p.signOrZeroExtendIfNeeded(opt.Right(), opt.Left())
-				if p.inRegister(opt.Left()) {
-					// we sign extend right above in case sizeof(left) > sizeof(right)
-					// in case that sizeof(left) <= sizeof(right) we don't need to do anything extra
-					// since the truncation/modding happens naturally
-					p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.fittingRegisterName(opt.Left()), rRegLeftSize))
-				} else {
-					p.memRegCommand(mnemonic, opt.Left(), opt.Right())
-				}
-			}
-		case ir.Increment:
-			p.issueCommand(fmt.Sprintf("inc %s", p.varOperand(opt.MutateOperand)))
-		case ir.Decrement:
-			p.issueCommand(fmt.Sprintf("dec %s", p.varOperand(opt.MutateOperand)))
-		case ir.Mult:
-			l := opt.Left()
-			r := opt.Right()
-			p.loadRegisterWithVar(rax, l)
-			p.dontSwap[rax] = true
-			if p.sizeof(l) > p.sizeof(r) {
-				p.ensureInRegister(r)
-				p.signOrZeroExtendIfNeeded(r, l)
-			}
-			if p.sizeof(l) == 1 {
-				// we have to bring r to a register to do a 8 bit multiply
-				p.ensureInRegister(r)
-				p.issueCommand(fmt.Sprintf("imul %s", p.registerOf(r).byteName))
-			} else if p.inRegister(r) {
-				p.regRegCommandSizedToFirst("imul", l, r)
-			} else {
-				p.regMemCommand("imul", l, r)
-			}
-		case ir.Div:
-			l := opt.Left()
-			r := opt.Right()
-
-			p.loadRegisterWithVar(rax, l)
-			rdxTenant := p.registers.all[rdx].occupiedBy
-			var borrowedAReg bool
-			var regBorrowed registerId
-			if rdxTenant != invalidVn {
-				if regBorrowed, borrowedAReg = p.registers.nextAvailable(); borrowedAReg {
-					p.movRegReg(regBorrowed, rdx)
-				} else {
-					p.ensureStackOffsetValid(rdxTenant)
-					p.memRegCommand("mov", rdxTenant, rdxTenant)
-				}
-			}
-			p.issueCommand("xor rdx, rdx")
-			needSignExtension := p.sizeof(l) > p.sizeof(r)
-			if !p.inRegister(r) && needSignExtension {
-				p.loadRegisterWithVar(r8, r) // got to bring it into register to do sign extension
-			}
-			if p.inRegister(r) && p.varStorage[r].currentRegister != rdx {
-				rRegLeftSize := p.signOrZeroExtendIfNeeded(r, l)
-				p.issueCommand(fmt.Sprintf("idiv %s", rRegLeftSize))
-			} else {
-				if !p.hasStackStorage(r) {
-					panic("operand to div doens't have stack offset nor is it in register. Where is the value?")
-				}
-				p.issueCommand(fmt.Sprintf("idiv %s", p.stackOperand(r)))
-			}
-			if rdxTenant != invalidVn {
-				if borrowedAReg {
-					p.movRegReg(rdx, regBorrowed)
-				} else {
-					p.regMemCommand("mov", rdxTenant, rdxTenant)
-				}
-			}
-		case ir.JumpIfFalse, ir.JumpIfTrue:
-			label := opt.Extra.(string)
-			in := opt.In()
-
-			if p.inRegister(in) {
-				regName := p.fittingRegisterName(in)
-				p.issueCommand(fmt.Sprintf("cmp %s, 0", regName))
-			} else {
-				p.issueCommand(fmt.Sprintf("cmp %s, 0", p.stackOperand(in)))
-			}
-			_, labelSeen := p.labelToState[label]
-			if labelSeen {
-				p.conditionalJump(opt)
-			} else {
-				p.conditionalJumps = append(p.conditionalJumps, preJumpState{
-					out:    p.out,
-					state:  p.copyVarState(),
-					optIdx: optIdx})
-				p.switchToNewOutBlock()
-			}
+			p.genAssignImm(optIdx, opt)
+			p.finishPreCompute(optIdx, opt)
+			continue
 		case ir.Call:
-			p.swapStackBoundVars()
-			extra := opt.Extra.(ir.CallExtra)
-			if typeRecord, callToType := p.env.Types[extra.Name]; callToType {
-				switch typeRecord.(type) {
-				case *typing.StructRecord:
-					// making a struct. We never put structs in registers even if they fit
-					// :structinreg
-					p.zeroOutVarOnStack(opt.Out())
-				default:
-					// cast
-					p.varVarCopy(opt.Out(), extra.ArgVars[0])
-				}
-			} else {
-				retVar := opt.Out()
-				procRecord := p.env.Procs[extra.Name]
-				var numStackVars int
-				numArgs := len(extra.ArgVars)
-				provideReturnStorage := p.sizeof(retVar) > 16
-				if provideReturnStorage {
-					numArgs += 1
-				}
+			p.genCall(optIdx, opt)
+			p.finishPreCompute(optIdx, opt)
+			continue
+		case ir.Return:
+			p.genReturn(optIdx, opt)
+			p.finishPreCompute(optIdx, opt)
+			continue
+		}
+		doPreCompute := false
+		ir.IterOverAllVars(opt, func(vn int) {
+			if p.preCompute[vn].valueType != notPrecomputable {
+				doPreCompute = true
+			}
+		})
+		if doPreCompute {
+			p.genPreCompute(optIdx, opt)
+			p.finishPreCompute(optIdx, opt)
+		} else {
+			p.genInst(optIdx, opt)
 
-				argsPassed := 0
-				for i, arg := range extra.ArgVars {
-					if provideReturnStorage {
-						i += 1
-					}
-					if i >= len(paramPassingRegOrder) {
-						break
-					}
-					argsPassed++
-					switch p.typeTable[arg].Size() {
-					case 8, 4, 2, 1:
-						p.loadRegisterWithVar(paramPassingRegOrder[i], arg)
-					default:
-						panic("Unsupported parameter size")
-					}
-				}
-
-				if argsPassed < len(extra.ArgVars) {
-					numStackVars = len(extra.ArgVars) - argsPassed
-					if numStackVars%2 == 1 {
-						// Make sure we are aligned to 16
-						p.issueCommand("sub rsp, 8")
-					}
-					for i := len(extra.ArgVars) - 1; i >= len(extra.ArgVars)-numStackVars; i-- {
-						arg := extra.ArgVars[i]
-						argSize := p.typeTable[arg].Size()
-						switch argSize {
-						case 8, 4, 2, 1:
-							if p.inRegister(arg) {
-								p.issueCommand(fmt.Sprintf("push %s", p.registerOf(arg).qwordName))
-							} else {
-								p.issueCommand(fmt.Sprintf("push %s", p.stackOperand(arg)))
-								if argSize < 8 {
-									// each param is rounded to 8 bytes
-									p.issueCommand(fmt.Sprintf("sub esp, %d", 8-argSize))
-								}
-							}
-						default:
-							panic("Unsupported parameter size")
-						}
-					}
-				}
-
-				// the first part of this array is the same as paramPassingRegOrder
-				regsThatGetDestroyed := [...]registerId{rdi, rsi, rdx, rcx, r8, r9, rax, r10, r11}
-				for _, reg := range regsThatGetDestroyed {
-					owner := p.registers.all[reg].occupiedBy
-					if owner != invalidVn {
-						if p.lastUsage[owner] != optIdx {
-							p.ensureStackOffsetValid(owner)
-							p.memRegCommand("mov", owner, owner)
-						}
+			decommissionIfLastUse := func(vn int) {
+				reg := p.varStorage[vn].currentRegister
+				if p.lastUsage[vn] == optIdx {
+					if reg != invalidRegister {
 						p.releaseRegister(reg)
 					}
-				}
-
-				if provideReturnStorage {
-					p.ensureStackOffsetValid(retVar)
-					p.loadVarOffsetIntoReg(retVar, rdi)
-				}
-
-				if procRecord.IsForeign {
-					p.issueCommand(fmt.Sprintf("call %s  wrt ..plt", extra.Name))
-				} else {
-					p.issueCommand(fmt.Sprintf("call proc_%s", extra.Name))
-				}
-
-				// TODO this needs to change when we support things bigger than 8 bytes
-				if numArgs > len(paramPassingRegOrder) {
-					p.issueCommand(fmt.Sprintf("add rsp, %d", numStackVars*8+numStackVars%2*8))
-				}
-				if p.registers.all[rax].occupiedBy != invalidVn {
-					panic("rax should've been freed up before the call")
-				}
-				if p.sizeof(retVar) > 0 && p.sizeof(retVar) <= 8 {
-					if p.inRegister(retVar) {
-						p.releaseRegister(p.varStorage[retVar].currentRegister)
-					}
-					p.allocateRegToVar(rax, retVar)
+					p.varStorage[vn].decommissioned = true
 				}
 			}
-		case ir.Jump:
-			label := opt.Extra.(string)
-			_, labelSeen := p.labelToState[label]
-			if labelSeen {
-				p.jump(opt)
-			} else {
-				p.jumps = append(p.jumps, preJumpState{
-					out:    p.out,
-					state:  p.copyVarState(),
-					optIdx: optIdx,
-				})
-				p.switchToNewOutBlock()
-			}
-		case ir.Label:
-			label := opt.Extra.(string)
-			addLine(fmt.Sprintf(".%s:\n", label))
-			if _, alreadyThere := p.labelToState[label]; alreadyThere {
-				panic("same label issued twice")
-			}
-			p.labelToState[label] = p.copyVarState()
-		case ir.StartProc:
-			fmt.Fprintf(p.out.buffer, "proc_%s:\n", opt.Extra.(string))
-			p.issueCommand("push rbp")
-			for _, reg := range preservedRegisters {
-				p.issueCommand(fmt.Sprintf("push %s", p.registers.all[reg].qwordName))
-			}
-			p.issueCommand("mov rbp, rsp")
-			if p.callerProvidesReturnSpace {
-				p.issueCommand("push rdi")
-				p.currentFrameSize += 8
-			}
-			p.prologueBlock = p.out
-			p.switchToNewOutBlock()
-		case ir.EndProc:
-			fmt.Fprintln(p.out.buffer, ".end_of_proc:")
-			p.issueCommand("mov rsp, rbp")
-			for i := len(preservedRegisters) - 1; i >= 0; i-- {
-				reg := preservedRegisters[i]
-				p.issueCommand(fmt.Sprintf("pop %s", p.registers.all[reg].qwordName))
-			}
-			p.issueCommand("pop rbp")
-			p.issueCommand("ret")
-			framesize := p.currentFrameSize
-			if effectiveFrameSize := framesize + 8*len(preservedRegisters); effectiveFrameSize%16 != 0 {
-				// align the stack for SystemV abi. Upon being called, we are 8 bytes misaligned.
-				// Since we push rbp in our prologue we align to 16 here
-				framesize += 16 - effectiveFrameSize%16
-			}
-			fmt.Fprintf(p.prologueBlock.buffer, "\tsub rsp, %d\n", framesize)
-		case ir.Compare:
-			extra := opt.Extra.(ir.CompareExtra)
-			out := extra.Out
-			l := opt.In()
-			r := extra.Right
-			lt := p.typeTable[l]
-			rt := p.typeTable[r]
-			if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) {
-				// array & struct compare
-				panic("Not yet")
-			}
-
-			outReg, outInReg := p.registers.nextAvailable()
-			if outInReg {
-				p.loadRegisterWithVar(outReg, out)
-			} else {
-				p.ensureStackOffsetValid(out)
-			}
-
-			var firstOperand, secondOperand string
-			if lt.Size() != rt.Size() {
-				if lt.IsNumber() && rt.IsNumber() {
-					p.ensureInRegister(l)
-					p.ensureInRegister(r)
-					if lt.Size() < rt.Size() {
-						firstOperand = p.signOrZeroExtendIfNeeded(l, r)
-						secondOperand = p.fittingRegisterName(r)
-					} else {
-						firstOperand = p.fittingRegisterName(l)
-						secondOperand = p.signOrZeroExtendIfNeeded(r, l)
-					}
-				} else {
-					panic("faulty ir: comparison between non numbers with different sizes")
-				}
-			} else {
-				if !p.inRegister(l) && !p.inRegister(r) {
-					p.ensureInRegister(l)
-				}
-				firstOperand = p.varOperand(l)
-				secondOperand = p.varOperand(r)
-			}
-
-			p.issueCommand(fmt.Sprintf("cmp %s, %s", firstOperand, secondOperand))
-			var mnemonic string
-			switch extra.How {
-			case ir.Greater:
-				mnemonic = "setg"
-			case ir.Lesser:
-				mnemonic = "setl"
-			case ir.GreaterOrEqual:
-				mnemonic = "setge"
-			case ir.LesserOrEqual:
-				mnemonic = "setle"
-			case ir.AreEqual:
-				mnemonic = "sete"
-			case ir.NotEqual:
-				mnemonic = "setne"
-			default:
-				panic("ice: passed a unknown method of comparison")
-			}
-			p.issueCommand(fmt.Sprintf("%s %s", mnemonic, p.varOperand(out)))
-		case ir.Transclude:
-			panic("Transcludes should be gone by now")
-		case ir.TakeAddress:
-			in := opt.In()
-			out := opt.Out()
-			p.ensureStackOffsetValid(in)
-			outReg := p.ensureInRegister(out)
-			p.loadVarOffsetIntoReg(in, outReg)
-			p.stackBoundVars = append(p.stackBoundVars, in)
-		case ir.ArrayToPointer:
-			in := opt.In()
-			out := opt.Out()
-			p.ensureStackOffsetValid(in)
-			p.ensureInRegister(out)
-			switch p.typeTable[opt.In()].(type) {
-			case typing.Array:
-				p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registerOf(out).qwordName, p.varStorage[in].rbpOffset))
-			case typing.Pointer:
-				p.issueCommand(fmt.Sprintf("mov %s, %s", p.fittingRegisterName(out), p.varOperand(in)))
-			default:
-				panic("must be array or pointer to an array")
-			}
-		case ir.IndirectLoad, ir.IndirectWrite:
-			p.swapStackBoundVars()
-			_, isDataMemberOfString := p.typeTable[opt.In()].(typing.StringDataPointer)
-			if opt.Type == ir.IndirectLoad && isDataMemberOfString {
-				p.varVarCopy(opt.Out(), opt.In())
-				break
-			}
-			var ptr, data int
-			var commandTemplate string
-			if opt.Type == ir.IndirectLoad {
-				ptr = opt.In()
-				data = opt.Out()
-				commandTemplate = "mov %s, %s [%s]"
-			} else {
-				ptr = opt.Left()
-				data = opt.Right()
-				commandTemplate = "mov %[2]s [%[3]s], %[1]s"
-			}
-			pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
-			p.ensureInRegister(ptr)
-
-			if p.perfectRegSize(data) {
-				p.ensureInRegister(data)
-				dataRegName := p.registerOf(data).nameForSize(pointedToSize)
-				prefix := prefixForSize(pointedToSize)
-				ptrRegName := p.registerOf(ptr).qwordName
-				p.issueCommand(fmt.Sprintf(commandTemplate, dataRegName, prefix, ptrRegName))
-			} else {
-				if p.sizeof(data) != pointedToSize {
-					panic("indirect read/write with inconsistent sizes")
-				}
-				memcpy := func(dataDest registerId, ptrDest registerId) {
-					p.freeUpRegisters(true, rsi, rdi, rcx)
-					p.ensureStackOffsetValid(data)
-					p.loadVarOffsetIntoReg(data, dataDest)
-					p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[ptrDest].qwordName, p.varOperand(ptr)))
-					p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
-					p.issueCommand("call _intrinsic_memcpy")
-				}
-				if opt.Type == ir.IndirectLoad {
-					memcpy(rdi, rsi)
-				} else {
-					memcpy(rsi, rdi)
-				}
-			}
-		case ir.StructMemberPtr:
-			out := opt.Out()
-			in := opt.In()
-			p.ensureInRegister(out)
-			outReg := p.registerOf(out)
-			baseType := p.typeTable[opt.In()]
-			fieldName := opt.Extra.(string)
-			switch baseType := baseType.(type) {
-			case typing.Pointer:
-				switch baseType.ToWhat.(type) {
-				case typing.String:
-					p.swapStackBoundVars()
-					p.ensureInRegister(out)
-					p.ensureInRegister(in)
-					switch fieldName {
-					case "data":
-						p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
-						p.issueCommand(fmt.Sprintf("add %s, 8", outReg.qwordName))
-					case "length":
-						p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
-					}
-				default:
-					p.ensureInRegister(in)
-					record := baseType.ToWhat.(*typing.StructRecord)
-					p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]",
-						outReg.qwordName, p.registerOf(in).qwordName, record.Members[fieldName].Offset))
-				}
-			case *typing.StructRecord:
-				p.ensureStackOffsetValid(in)
-				p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]",
-					outReg.qwordName, p.varStorage[in].rbpOffset, baseType.Members[fieldName].Offset))
-			case typing.String:
-				p.ensureInRegister(in)
-				switch fieldName {
-				case "data":
-					p.ensureInRegister(in)
-					p.issueCommand(fmt.Sprintf("lea %s, [%s+8]", outReg.qwordName, p.registerOf(in).qwordName))
-				case "length":
-					p.movRegReg(p.varStorage[out].currentRegister, p.varStorage[in].currentRegister)
-				}
-			default:
-				panic("Type checker didn't do its job")
-			}
-		case ir.PeelStruct:
-			// this instruction is an artifact of the fact that the frontend doesn't have type information when generating ir.
-			// every intermediate dot use this instruction to deal with both auto dereferencing and struct nesting.
-			in := opt.In()
-			out := opt.Out()
-			p.ensureInRegister(out)
-			outReg := p.registerOf(out)
-			baseType := p.typeTable[in]
-			fieldName := opt.Extra.(string)
-			switch baseType := baseType.(type) {
-			case typing.Pointer:
-				p.ensureInRegister(in)
-				inReg := p.registerOf(in)
-				record := baseType.ToWhat.(*typing.StructRecord)
-				memberOffset := record.Members[fieldName].Offset
-				_, memberIsPointer := record.Members[fieldName].Type.(typing.Pointer)
-				if memberIsPointer {
-					p.issueCommand(fmt.Sprintf("mov %s, qword [%s+%d]", outReg.qwordName, inReg.qwordName, memberOffset))
-				} else {
-					p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]", outReg.qwordName, inReg.qwordName, memberOffset))
-				}
-			case *typing.StructRecord:
-				memberOffset := baseType.Members[fieldName].Offset
-				_, memberIsPointer := baseType.Members[fieldName].Type.(typing.Pointer)
-				p.ensureStackOffsetValid(in)
-				if memberIsPointer {
-					p.issueCommand(fmt.Sprintf("mov %s, qword [rbp-%d+%d]", outReg.qwordName, p.varStorage[in].rbpOffset, memberOffset))
-				} else {
-					p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]", outReg.qwordName, p.varStorage[in].rbpOffset, memberOffset))
-				}
-			}
-		case ir.Not:
-			setLabel := p.genLabel(".keep_zero")
-			out := opt.Out()
-			in := opt.In()
-			p.ensureInRegister(out)
-			p.issueCommand(fmt.Sprintf("mov %s, 0", p.fittingRegisterName(out)))
-			p.issueCommand(fmt.Sprintf("cmp %s, 0", p.varOperand(in)))
-			p.issueCommand(fmt.Sprintf("jnz %s", setLabel))
-			p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
-			fmt.Fprintf(p.out.buffer, "%s:\n", setLabel)
-		case ir.And:
-			l := opt.Left()
-			r := opt.Right()
-			if !p.inRegister(l) && !p.inRegister(r) {
-				p.ensureInRegister(l)
-			}
-			p.issueCommand(fmt.Sprintf("and %s, %s", p.varOperand(l), p.varOperand(r)))
-		case ir.Or:
-			l := opt.Left()
-			r := opt.Right()
-			if !p.inRegister(l) && !p.inRegister(r) {
-				p.ensureInRegister(l)
-			}
-			p.issueCommand(fmt.Sprintf("or %s, %s", p.varOperand(l), p.varOperand(r)))
-		case ir.Return:
-			returnType := *p.procRecord.Return
-
-			returnExtra := opt.Extra.(ir.ReturnExtra)
-			if len(returnExtra.Values) > 0 {
-				retVar := returnExtra.Values[0]
-				if p.perfectRegSize(retVar) {
-					p.loadRegisterWithVar(rax, retVar)
-					if returnType.Size() > p.sizeof(retVar) {
-						p.signOrZeroExtendMov(retVar, retVar)
-					}
-				} else if p.callerProvidesReturnSpace {
-					if returnType.Size() != p.sizeof(retVar) {
-						panic("ice: returning a big var that doesn't match the size of the declared return type. Typechecker should've caught it")
-					}
-					if p.inRegister(retVar) {
-						panic("ice: a var this big shouldn't be in register")
-					}
-					p.ensureStackOffsetValid(retVar)
-					p.freeUpRegisters(false, rsi, rdi, rcx)
-					p.issueCommand("mov rdi, qword [rbp-8]")
-					p.loadVarOffsetIntoReg(retVar, rsi)
-					p.issueCommand(fmt.Sprintf("mov rcx, %d", p.sizeof(retVar)))
-					p.issueCommand("call _intrinsic_memcpy")
-				} else {
-					panic("Can't handle return where the data doesn't exactly fit a register or 8 < size <= 16 yet")
-				}
-			}
-			p.issueCommand("jmp .end_of_proc")
-		default:
-			panic(opt)
+			ir.IterOverAllVars(opt, decommissionIfLastUse)
+			// p.trace(3)
 		}
-
-		decommissionIfLastUse := func(vn int) {
-			reg := p.varStorage[vn].currentRegister
-			if p.lastUsage[vn] == optIdx {
-				if reg != invalidRegister {
-					p.releaseRegister(reg)
-				}
-				p.varStorage[vn].decommissioned = true
-			}
-		}
-		ir.IterOverAllVars(opt, decommissionIfLastUse)
-		// p.trace(3)
 	}
 
 	for _, jump := range p.conditionalJumps {
@@ -1293,7 +1075,535 @@ func (p *procGen) generate() {
 	for _, jump := range p.jumps {
 		p.out = jump.out
 		p.fullVarState = jump.state
-		p.jump(p.block.Opts[jump.optIdx])
+		p.jump(&p.block.Opts[jump.optIdx])
+	}
+}
+
+func (p *procGen) getPreComputedValue(vn int) int64 {
+	if !p.preComputing(vn) {
+		println(vn)
+		panic("ice: a value expected to be pre-computable is not")
+	}
+	return p.preCompute[vn].value
+}
+
+func (p *procGen) genPreCompute(optIdx int, opt ir.Inst) {
+	mutVar := ir.FindMutationVar(&opt)
+	computationOnly := mutVar > -1 && p.preComputing(mutVar)
+
+	if computationOnly {
+		switch opt.Type {
+		case ir.Assign:
+			p.preCompute[opt.Left()].value = p.getPreComputedValue(opt.Right())
+		case ir.Add:
+			p.preCompute[opt.Left()].value += p.getPreComputedValue(opt.Right())
+		case ir.Sub:
+			p.preCompute[opt.Left()].value -= p.getPreComputedValue(opt.Right())
+		case ir.Mult:
+			p.preCompute[opt.Left()].value *= p.getPreComputedValue(opt.Right())
+		case ir.Div:
+			rightValue := p.getPreComputedValue(opt.Right())
+			if rightValue == 0 {
+				panic(parsing.ErrorFromNode(opt.GeneratedFrom, "Divide by zero"))
+			}
+			p.preCompute[opt.Left()].value /= rightValue
+		case ir.Compare:
+			extra := opt.Extra.(ir.CompareExtra)
+			p.preCompute[extra.Out].valueType = integer
+			p.preCompute[extra.Out].value = p.evalCompare(&opt)
+		case ir.Increment:
+			p.preCompute[opt.Out()].value++
+		case ir.Decrement:
+			p.preCompute[opt.Out()].value--
+		case ir.Not:
+			if p.preCompute[opt.In()].value == 0 {
+				p.preCompute[opt.Out()].value = 1
+			} else {
+				p.preCompute[opt.Out()].value = 0
+			}
+		case ir.And:
+			p.preCompute[opt.Left()].value &= p.getPreComputedValue(opt.Right())
+		case ir.Or:
+			p.preCompute[opt.Left()].value |= p.getPreComputedValue(opt.Right())
+		default:
+			panic("ice: don't know how to precompute using an inst")
+		}
+	} else {
+		switch opt.Type {
+		case ir.Assign:
+			l := opt.Left()
+			r := opt.Right()
+			p.ensureStackOffsetValid(l)
+			info := p.preCompute[r]
+			if info.valueType == integer {
+				p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(l), info.value))
+			} else {
+				panic("ice: use of precomputed value of this type for ir.Assign is not implemented")
+			}
+			p.preCompute[opt.Out()].value = p.preCompute[opt.In()].value
+		case ir.Add:
+			howMuch := p.getPreComputedValue(opt.Right())
+			if pointer, isPointer := p.typeTable[opt.Left()].(typing.Pointer); isPointer {
+				howMuch *= int64(pointer.ToWhat.Size())
+			}
+			p.issueCommand(fmt.Sprintf("add %s, %d", p.varOperand(opt.Left()), howMuch))
+		case ir.Sub:
+			p.issueCommand(fmt.Sprintf("sub %s, %d", p.varOperand(opt.Left()), p.getPreComputedValue(opt.Right())))
+		case ir.Mult:
+			l := opt.Left()
+			r := opt.Right()
+			tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(p.sizeof(l)), p.sizeof(l))
+			p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, p.getPreComputedValue(r)))
+			if p.sizeof(l) == 1 {
+				p.loadRegisterWithVar(rax, l)
+				p.issueCommand(fmt.Sprintf("imul %s", tmpStackStorage))
+			} else {
+				p.ensureInRegister(l)
+				p.issueCommand(fmt.Sprintf("imul %s, %s", p.fittingRegisterName(l), tmpStackStorage))
+			}
+		case ir.Div:
+			l := opt.Left()
+			r := opt.Right()
+			preCompValue := p.getPreComputedValue(r)
+			if preCompValue == 0 {
+				panic(parsing.ErrorFromNode(opt.GeneratedFrom, "Divide by zero"))
+			}
+			tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(p.sizeof(l)), p.sizeof(l))
+			p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, preCompValue))
+			p.loadRegisterWithVar(rax, l)
+			p.freeUpRegisters(true, rdx)
+			p.issueCommand("xor rdx, rdx")
+			p.issueCommand(fmt.Sprintf("div %s", tmpStackStorage))
+		case ir.Compare:
+			extra := opt.Extra.(ir.CompareExtra)
+			l := opt.ReadOperand
+			r := extra.Right
+			p.allocateRuntimeStorage(extra.Out)
+			if p.preComputing(l) && p.preComputing(r) {
+				p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(extra.Out), p.evalCompare(&opt)))
+			} else if p.preComputing(l) {
+				p.ensureInRegister(r)
+				tmpStorage := p.tmpStorageForValue(p.sizeof(r), p.getPreComputedValue(l))
+				p.issueCommand(fmt.Sprintf("cmp %s, %s", tmpStorage, p.varOperand(r)))
+				p.setccToVar(extra.How, extra.Out)
+			} else if p.preComputing(r) {
+				p.ensureInRegister(l)
+				tmpStorage := p.tmpStorageForValue(p.sizeof(l), p.getPreComputedValue(r))
+				p.issueCommand(fmt.Sprintf("cmp %s, %s", p.varOperand(opt.ReadOperand), tmpStorage))
+				p.setccToVar(extra.How, extra.Out)
+			}
+		case ir.And:
+			preCompValue := p.getPreComputedValue(opt.Right())
+			if preCompValue == 0 {
+				p.issueCommand(fmt.Sprintf("mov %s, 0", p.varOperand(opt.Left())))
+			} else {
+				p.andOrImm(&opt, preCompValue)
+			}
+		case ir.Or:
+			preCompValue := p.getPreComputedValue(opt.Right())
+			if preCompValue != 0 {
+				p.issueCommand(fmt.Sprintf("mov %s, 1", p.varOperand(opt.Left())))
+			} else {
+				p.andOrImm(&opt, preCompValue)
+			}
+		case ir.Not:
+			preCompValue := p.getPreComputedValue(opt.In())
+			result := 0
+			if preCompValue == 0 {
+				result = 1
+			}
+			p.allocateRuntimeStorage(opt.Out())
+			p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(opt.Out()), result))
+		case ir.JumpIfFalse:
+			if p.getPreComputedValue(opt.ReadOperand) == 0 {
+				p.jumpOrDelayedJump(optIdx, &opt)
+			} else {
+				p.issueCommand("; never jumps")
+			}
+		case ir.JumpIfTrue:
+			if p.getPreComputedValue(opt.ReadOperand) != 0 {
+				p.jumpOrDelayedJump(optIdx, &opt)
+			} else {
+				p.issueCommand("; never jumps")
+			}
+		case ir.IndirectWrite:
+			p.swapStackBoundVars()
+			preCompValue := p.getPreComputedValue(opt.ReadOperand)
+			p.ensureInRegister(opt.MutateOperand)
+			reg := p.registerOf(opt.MutateOperand).qwordName
+			prefix := prefixForSize(p.typeTable[opt.MutateOperand].(typing.Pointer).ToWhat.Size())
+			p.issueCommand(fmt.Sprintf("mov %s [%s], %d", prefix, reg, preCompValue))
+		default:
+			panic("ice: unknown inst trying to use a precomputed value")
+		}
+	}
+}
+
+func (p *procGen) finishPreCompute(optIdx int, opt ir.Inst) {
+}
+
+func (p *procGen) genInst(optIdx int, opt ir.Inst) {
+	switch opt.Type {
+	case ir.Assign:
+		p.varVarCopy(opt.Left(), opt.Right())
+	case ir.Add, ir.Sub:
+		var leaFormatString string
+		var mnemonic string
+		if opt.Type == ir.Add {
+			leaFormatString = "lea %[1]s, [%[1]s+%[2]s*%[3]d]"
+			mnemonic = "add"
+		} else {
+			leaFormatString = "lea %[1]s, [%[1]s-%[2]s*%[3]d]"
+			mnemonic = "sub"
+		}
+		pointer, leftIsPointer := p.typeTable[opt.Left()].(typing.Pointer)
+		rRegId := p.ensureInRegister(opt.Right())
+		rReg := p.registerOf(opt.Right())
+
+		if leftIsPointer {
+			lRegIdx := p.ensureInRegister(opt.Left())
+			pointedToSize := pointer.ToWhat.Size()
+			switch pointedToSize {
+			case 1, 2, 4, 8:
+				p.issueCommand(
+					fmt.Sprintf(leaFormatString, p.registers.all[lRegIdx].qwordName, rReg.qwordName, pointedToSize))
+			default:
+				tempReg, freeRegExists := p.registers.nextAvailable()
+				var tempRegTenant int
+				if !freeRegExists {
+					tempReg = rRegId
+					for tempReg == lRegIdx || tempReg == rRegId {
+						tempReg = (tempReg + 1) % numRegisters
+					}
+					tempRegTenant = p.registers.all[tempReg].occupiedBy
+					p.ensureStackOffsetValid(tempRegTenant)
+					p.memRegCommand("mov", tempRegTenant, tempRegTenant)
+				}
+				p.movRegReg(tempReg, rRegId)
+				tempRegName := p.registers.all[tempReg].qwordName
+				p.issueCommand(fmt.Sprintf("imul %s, %d", tempRegName, pointedToSize))
+				p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.registerOf(opt.Left()).qwordName, tempRegName))
+				if !freeRegExists {
+					p.regMemCommand("mov", tempRegTenant, tempRegTenant)
+				}
+			}
+		} else {
+			rRegLeftSize := p.signOrZeroExtendIfNeeded(opt.Right(), opt.Left())
+			if p.inRegister(opt.Left()) {
+				// we sign extend right above in case sizeof(left) > sizeof(right)
+				// in case that sizeof(left) <= sizeof(right) we don't need to do anything extra
+				// since the truncation/modding happens naturally
+				p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.fittingRegisterName(opt.Left()), rRegLeftSize))
+			} else {
+				p.memRegCommand(mnemonic, opt.Left(), opt.Right())
+			}
+		}
+	case ir.Increment:
+		p.issueCommand(fmt.Sprintf("inc %s", p.varOperand(opt.MutateOperand)))
+	case ir.Decrement:
+		p.issueCommand(fmt.Sprintf("dec %s", p.varOperand(opt.MutateOperand)))
+	case ir.Mult:
+		l := opt.Left()
+		r := opt.Right()
+		p.loadRegisterWithVar(rax, l)
+		p.dontSwap[rax] = true
+		if p.sizeof(l) > p.sizeof(r) {
+			p.ensureInRegister(r)
+			p.signOrZeroExtendIfNeeded(r, l)
+		}
+		if p.sizeof(l) == 1 {
+			// we have to bring r to a register to do a 8 bit multiply
+			p.ensureInRegister(r)
+			p.issueCommand(fmt.Sprintf("imul %s", p.registerOf(r).byteName))
+		} else if p.inRegister(r) {
+			p.regRegCommandSizedToFirst("imul", l, r)
+		} else {
+			p.regMemCommand("imul", l, r)
+		}
+	case ir.Div:
+		l := opt.Left()
+		r := opt.Right()
+
+		p.loadRegisterWithVar(rax, l)
+		p.freeUpRegisters(true, rdx)
+		p.issueCommand("xor rdx, rdx")
+		needSignExtension := p.sizeof(l) > p.sizeof(r)
+		if !p.inRegister(r) && needSignExtension {
+			p.loadRegisterWithVar(r8, r) // got to bring it into register to do sign extension
+		}
+		if p.inRegister(r) && p.varStorage[r].currentRegister != rdx {
+			rRegLeftSize := p.signOrZeroExtendIfNeeded(r, l)
+			p.issueCommand(fmt.Sprintf("idiv %s", rRegLeftSize))
+		} else {
+			if !p.hasStackStorage(r) {
+				panic("operand to div doens't have stack offset nor is it in register. Where is the value?")
+			}
+			p.issueCommand(fmt.Sprintf("idiv %s", p.stackOperand(r)))
+		}
+	case ir.JumpIfFalse, ir.JumpIfTrue:
+		label := opt.Extra.(string)
+		in := opt.In()
+
+		if p.inRegister(in) {
+			regName := p.fittingRegisterName(in)
+			p.issueCommand(fmt.Sprintf("cmp %s, 0", regName))
+		} else {
+			p.issueCommand(fmt.Sprintf("cmp %s, 0", p.stackOperand(in)))
+		}
+		_, labelSeen := p.labelToState[label]
+		if labelSeen {
+			p.conditionalJump(opt)
+		} else {
+			p.conditionalJumps = append(p.conditionalJumps, preJumpState{
+				out:    p.out,
+				state:  p.copyVarState(),
+				optIdx: optIdx})
+			p.switchToNewOutBlock()
+		}
+	case ir.Jump:
+		p.jumpOrDelayedJump(optIdx, &opt)
+	case ir.Label:
+		label := opt.Extra.(string)
+		fmt.Fprintf(p.out.buffer, ".%s:\n", label)
+		if _, alreadyThere := p.labelToState[label]; alreadyThere {
+			panic("same label issued twice")
+		}
+		p.labelToState[label] = p.copyVarState()
+	case ir.StartProc:
+		fmt.Fprintf(p.out.buffer, "proc_%s:\n", opt.Extra.(string))
+		p.issueCommand("push rbp")
+		for _, reg := range preservedRegisters {
+			p.issueCommand(fmt.Sprintf("push %s", p.registers.all[reg].qwordName))
+		}
+		p.issueCommand("mov rbp, rsp")
+		if p.callerProvidesReturnSpace {
+			p.issueCommand("push rdi")
+			p.currentFrameSize += 8
+		}
+		p.prologueBlock = p.out
+		p.switchToNewOutBlock()
+	case ir.EndProc:
+		fmt.Fprintln(p.out.buffer, ".end_of_proc:")
+		p.issueCommand("mov rsp, rbp")
+		for i := len(preservedRegisters) - 1; i >= 0; i-- {
+			reg := preservedRegisters[i]
+			p.issueCommand(fmt.Sprintf("pop %s", p.registers.all[reg].qwordName))
+		}
+		p.issueCommand("pop rbp")
+		p.issueCommand("ret")
+		framesize := p.currentFrameSize
+		if effectiveFrameSize := framesize + 8*len(preservedRegisters); effectiveFrameSize%16 != 0 {
+			// align the stack for SystemV abi. Upon being called, we are 8 bytes misaligned.
+			// Since we push rbp in our prologue we align to 16 here
+			framesize += 16 - effectiveFrameSize%16
+		}
+		fmt.Fprintf(p.prologueBlock.buffer, "\tsub rsp, %d\n", framesize)
+	case ir.Compare:
+		extra := opt.Extra.(ir.CompareExtra)
+		out := extra.Out
+		l := opt.In()
+		r := extra.Right
+		lt := p.typeTable[l]
+		rt := p.typeTable[r]
+		if ls := lt.Size(); !(ls == 8 || ls == 4 || ls == 1) {
+			// array & struct compare
+			panic("Not yet")
+		}
+
+		var firstOperand, secondOperand string
+		if lt.Size() != rt.Size() {
+			if lt.IsNumber() && rt.IsNumber() {
+				p.ensureInRegister(l)
+				p.ensureInRegister(r)
+				if lt.Size() < rt.Size() {
+					firstOperand = p.signOrZeroExtendIfNeeded(l, r)
+					secondOperand = p.fittingRegisterName(r)
+				} else {
+					firstOperand = p.fittingRegisterName(l)
+					secondOperand = p.signOrZeroExtendIfNeeded(r, l)
+				}
+			} else {
+				panic("faulty ir: comparison between non numbers with different sizes")
+			}
+		} else {
+			if !p.inRegister(l) && !p.inRegister(r) {
+				p.ensureInRegister(l)
+			}
+			firstOperand = p.varOperand(l)
+			secondOperand = p.varOperand(r)
+		}
+
+		p.issueCommand(fmt.Sprintf("cmp %s, %s", firstOperand, secondOperand))
+		p.allocateRuntimeStorage(out)
+		p.setccToVar(extra.How, out)
+	case ir.Transclude:
+		panic("Transcludes should be gone by now")
+	case ir.TakeAddress:
+		in := opt.In()
+		out := opt.Out()
+		p.ensureStackOffsetValid(in)
+		outReg := p.ensureInRegister(out)
+		p.loadVarOffsetIntoReg(in, outReg)
+		p.stackBoundVars = append(p.stackBoundVars, in)
+	case ir.ArrayToPointer:
+		in := opt.In()
+		out := opt.Out()
+		p.ensureStackOffsetValid(in)
+		p.ensureInRegister(out)
+		switch p.typeTable[opt.In()].(type) {
+		case typing.Array:
+			p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registerOf(out).qwordName, p.varStorage[in].rbpOffset))
+		case typing.Pointer:
+			p.issueCommand(fmt.Sprintf("mov %s, %s", p.fittingRegisterName(out), p.varOperand(in)))
+		default:
+			panic("must be array or pointer to an array")
+		}
+	case ir.IndirectLoad, ir.IndirectWrite:
+		p.swapStackBoundVars()
+		_, isDataMemberOfString := p.typeTable[opt.In()].(typing.StringDataPointer)
+		if opt.Type == ir.IndirectLoad && isDataMemberOfString {
+			p.varVarCopy(opt.Out(), opt.In())
+			break
+		}
+
+		var ptr, data int
+		var commandTemplate string
+		if opt.Type == ir.IndirectLoad {
+			ptr = opt.In()
+			data = opt.Out()
+			commandTemplate = "mov %s, %s [%s]"
+		} else {
+			ptr = opt.Left()
+			data = opt.Right()
+			commandTemplate = "mov %[2]s [%[3]s], %[1]s"
+		}
+		pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
+		p.ensureInRegister(ptr)
+
+		if p.perfectRegSize(data) {
+			p.ensureInRegister(data)
+			dataRegName := p.registerOf(data).nameForSize(pointedToSize)
+			prefix := prefixForSize(pointedToSize)
+			ptrRegName := p.registerOf(ptr).qwordName
+			p.issueCommand(fmt.Sprintf(commandTemplate, dataRegName, prefix, ptrRegName))
+		} else {
+			if p.sizeof(data) != pointedToSize {
+				panic("indirect read/write with inconsistent sizes")
+			}
+			memcpy := func(dataDest registerId, ptrDest registerId) {
+				p.freeUpRegisters(true, rsi, rdi, rcx)
+				p.ensureStackOffsetValid(data)
+				p.loadVarOffsetIntoReg(data, dataDest)
+				p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[ptrDest].qwordName, p.varOperand(ptr)))
+				p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
+				p.issueCommand("call _intrinsic_memcpy")
+			}
+			if opt.Type == ir.IndirectLoad {
+				memcpy(rdi, rsi)
+			} else {
+				memcpy(rsi, rdi)
+			}
+		}
+	case ir.StructMemberPtr:
+		out := opt.Out()
+		in := opt.In()
+		p.ensureInRegister(out)
+		outReg := p.registerOf(out)
+		baseType := p.typeTable[opt.In()]
+		fieldName := opt.Extra.(string)
+		switch baseType := baseType.(type) {
+		case typing.Pointer:
+			switch baseType.ToWhat.(type) {
+			case typing.String:
+				p.swapStackBoundVars()
+				p.ensureInRegister(out)
+				p.ensureInRegister(in)
+				switch fieldName {
+				case "data":
+					p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+					p.issueCommand(fmt.Sprintf("add %s, 8", outReg.qwordName))
+				case "length":
+					p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
+				}
+			default:
+				p.ensureInRegister(in)
+				record := baseType.ToWhat.(*typing.StructRecord)
+				p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]",
+					outReg.qwordName, p.registerOf(in).qwordName, record.Members[fieldName].Offset))
+			}
+		case *typing.StructRecord:
+			p.ensureStackOffsetValid(in)
+			p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]",
+				outReg.qwordName, p.varStorage[in].rbpOffset, baseType.Members[fieldName].Offset))
+		case typing.String:
+			p.ensureInRegister(in)
+			switch fieldName {
+			case "data":
+				p.ensureInRegister(in)
+				p.issueCommand(fmt.Sprintf("lea %s, [%s+8]", outReg.qwordName, p.registerOf(in).qwordName))
+			case "length":
+				p.movRegReg(p.varStorage[out].currentRegister, p.varStorage[in].currentRegister)
+			}
+		default:
+			panic("Type checker didn't do its job")
+		}
+	case ir.PeelStruct:
+		// this instruction is an artifact of the fact that the frontend doesn't have type information when generating ir.
+		// every intermediate dot use this instruction to deal with both auto dereferencing and struct nesting.
+		in := opt.In()
+		out := opt.Out()
+		p.ensureInRegister(out)
+		outReg := p.registerOf(out)
+		baseType := p.typeTable[in]
+		fieldName := opt.Extra.(string)
+		switch baseType := baseType.(type) {
+		case typing.Pointer:
+			p.ensureInRegister(in)
+			inReg := p.registerOf(in)
+			record := baseType.ToWhat.(*typing.StructRecord)
+			memberOffset := record.Members[fieldName].Offset
+			_, memberIsPointer := record.Members[fieldName].Type.(typing.Pointer)
+			if memberIsPointer {
+				p.issueCommand(fmt.Sprintf("mov %s, qword [%s+%d]", outReg.qwordName, inReg.qwordName, memberOffset))
+			} else {
+				p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]", outReg.qwordName, inReg.qwordName, memberOffset))
+			}
+		case *typing.StructRecord:
+			memberOffset := baseType.Members[fieldName].Offset
+			_, memberIsPointer := baseType.Members[fieldName].Type.(typing.Pointer)
+			p.ensureStackOffsetValid(in)
+			if memberIsPointer {
+				p.issueCommand(fmt.Sprintf("mov %s, qword [rbp-%d+%d]", outReg.qwordName, p.varStorage[in].rbpOffset, memberOffset))
+			} else {
+				p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]", outReg.qwordName, p.varStorage[in].rbpOffset, memberOffset))
+			}
+		}
+	case ir.Not:
+		setLabel := p.genLabel(".keep_zero")
+		out := opt.Out()
+		in := opt.In()
+		p.ensureInRegister(out)
+		p.issueCommand(fmt.Sprintf("mov %s, 0", p.fittingRegisterName(out)))
+		p.issueCommand(fmt.Sprintf("cmp %s, 0", p.varOperand(in)))
+		p.issueCommand(fmt.Sprintf("jnz %s", setLabel))
+		p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
+		fmt.Fprintf(p.out.buffer, "%s:\n", setLabel)
+	case ir.And:
+		l := opt.Left()
+		r := opt.Right()
+		if !p.inRegister(l) && !p.inRegister(r) {
+			p.ensureInRegister(l)
+		}
+		p.issueCommand(fmt.Sprintf("and %s, %s", p.varOperand(l), p.varOperand(r)))
+	case ir.Or:
+		l := opt.Left()
+		r := opt.Right()
+		if !p.inRegister(l) && !p.inRegister(r) {
+			p.ensureInRegister(l)
+		}
+		p.issueCommand(fmt.Sprintf("or %s, %s", p.varOperand(l), p.varOperand(r)))
+	default:
+		panic(opt)
 	}
 }
 
@@ -1353,6 +1663,35 @@ func findLastusage(block frontend.OptBlock) []int {
 	return lastUse
 }
 
+func findComputableUntil(block frontend.OptBlock) (map[int]bool, []int) {
+	preComputeStart := make(map[int]bool)
+	// a temporary version that finds vars that is never mutated
+	computableUntil := make([]int, block.NumberOfVars)
+	for i, opt := range block.Opts {
+		if opt.Type == ir.AssignImm && computableUntil[opt.Out()] == 0 {
+			computableUntil[opt.Out()] = i
+		}
+	}
+
+	for optIdx, opt := range block.Opts {
+		if opt.Type == ir.TakeAddress {
+			computableUntil[opt.ReadOperand] = 0
+		}
+		mutVar := ir.FindMutationVar(&opt)
+		if mutVar > -1 && optIdx > computableUntil[mutVar] {
+			computableUntil[mutVar] = 0
+		}
+	}
+
+	for i, genesisIdx := range computableUntil {
+		if genesisIdx != 0 {
+			preComputeStart[genesisIdx] = true
+			computableUntil[i] = len(block.Opts)
+		}
+	}
+	return preComputeStart, computableUntil
+}
+
 func collectOutput(firstBlock *outputBlock, out io.Writer) {
 	outBlock := firstBlock
 	for outBlock != nil {
@@ -1379,8 +1718,12 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		labelToState:              make(map[string]*fullVarState),
 		lastUsage:                 findLastusage(block),
 		procRecord:                procRecord,
+		preCompute:                make([]preComputeInfo, block.NumberOfVars),
 		callerProvidesReturnSpace: (*(procRecord.Return)).Size() > 16,
 	}
+	preComputeStart, preComputeUntil := findComputableUntil(block)
+	gen.preComputeStart = preComputeStart
+	gen.preComputeUntil = preComputeUntil
 	gen.generate()
 	collectOutput(gen.firstOutputBlock, out)
 	return &staticDataBuf
