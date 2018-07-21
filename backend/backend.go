@@ -24,12 +24,12 @@ func newOutputBlock() *outputBlock {
 type precomputeType int
 
 const (
-	notPrecomputable precomputeType = iota
+	notKnownAtCompileTime precomputeType = iota
 	integer
 	pointerToVar
 )
 
-type preComputeInfo struct {
+type precomputeInfo struct {
 	valueType precomputeType
 	value     int64
 }
@@ -202,9 +202,9 @@ type procGen struct {
 	nextLabelId               int
 	stackBoundVars            []int
 	// info for compile time evaluation
-	preCompute      []preComputeInfo
-	preComputeStart map[int]bool
-	preComputeUntil []int
+	precompute         []precomputeInfo
+	constantVars       []bool
+	stopPrecomputation []int
 	// info for backfilling instructions
 	prologueBlock    *outputBlock
 	conditionalJumps []preJumpState
@@ -682,94 +682,80 @@ func (p *procGen) genLabel(prefix string) string {
 func (p *procGen) genAssignImm(optIdx int, opt ir.Inst) {
 	out := opt.Out()
 
-	didPrecompute := false
-	if p.preComputeStart[optIdx] || p.preComputing(out) {
-		didPrecompute = true
-		switch value := opt.Extra.(type) {
-		case int64:
-			p.preCompute[out].valueType = integer
-			p.preCompute[out].value = value
-		case bool:
-			p.preCompute[out].valueType = integer
-			var val int64 = 0
-			if value == true {
-				val = 1
-			}
-			p.preCompute[out].value = val
-		default:
-			didPrecompute = false
+	switch value := opt.Extra.(type) {
+	case int64:
+		p.precompute[out].valueType = integer
+		p.precompute[out].value = value
+		return
+	case bool:
+		p.precompute[out].valueType = integer
+		var val int64 = 0
+		if value == true {
+			val = 1
 		}
+		p.precompute[out].value = val
+		return
 	}
 
-	if !didPrecompute {
-		switch value := opt.Extra.(type) {
-		case int64:
-			p.ensureInRegister(out)
-			p.regImmCommand("mov", out, value)
-		case uint64:
-			p.ensureInRegister(out)
-			p.issueCommand(fmt.Sprintf("mov %s, %d", p.registerOf(out).qwordName, value))
-		case bool:
-			p.ensureInRegister(out)
-			var val int64 = 0
-			if value == true {
-				val = 1
-			}
-			p.regImmCommand("mov", out, val)
-		case string:
-			destReg := p.ensureInRegister(out)
-			labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
-			p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
+	p.precompute[out].valueType = notKnownAtCompileTime
 
-			var buf bytes.Buffer
-			buf.WriteString("\tdb\t")
-			byteCount := 0
-			i := 0
-			needToStartQuote := true
-			for ; i < len(value); i++ {
-				if needToStartQuote {
-					buf.WriteRune('"')
-					needToStartQuote = false
-				}
-				if value[i] == '\\' && value[i+1] == 'n' {
-					buf.WriteString(`",10,`)
-					needToStartQuote = true
-					i++
-				} else {
-					buf.WriteString(string(value[i]))
-				}
-				byteCount++
-			}
-			// end the string
-			if !needToStartQuote {
-				buf.WriteString(`",0`)
-			} else {
-				// it's a string that ends with \n
-				buf.WriteRune('0')
-			}
+	switch value := opt.Extra.(type) {
+	case uint64:
+		p.ensureInRegister(out)
+		p.issueCommand(fmt.Sprintf("mov %s, %d", p.registerOf(out).qwordName, value))
+	case string:
+		destReg := p.ensureInRegister(out)
+		labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
+		p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
 
-			p.staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
-			p.staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
-			p.staticDataBuf.ReadFrom(&buf)
-			p.staticDataBuf.WriteRune('\n')
-		case parsing.TypeDecl, parsing.LiteralType:
-			// :structinreg
-			out := opt.Out()
-			_, isStruct := p.typeTable[out].(typing.StructRecord)
-			_, isArray := p.typeTable[out].(typing.Array)
-			freeReg, freeRegExists := p.registers.nextAvailable()
-			if !isStruct && !isArray && p.perfectRegSize(out) && freeRegExists {
-				p.loadRegisterWithVar(freeReg, out)
+		var buf bytes.Buffer
+		buf.WriteString("\tdb\t")
+		byteCount := 0
+		i := 0
+		needToStartQuote := true
+		for ; i < len(value); i++ {
+			if needToStartQuote {
+				buf.WriteRune('"')
+				needToStartQuote = false
 			}
-			if p.inRegister(out) {
-				p.issueCommand(fmt.Sprintf("mov %s, 0", p.registerOf(out).qwordName))
+			if value[i] == '\\' && value[i+1] == 'n' {
+				buf.WriteString(`",10,`)
+				needToStartQuote = true
+				i++
 			} else {
-				p.zeroOutVarOnStack(out)
+				buf.WriteString(string(value[i]))
 			}
-		default:
-			parsing.Dump(value)
-			panic("unknown immediate value type")
+			byteCount++
 		}
+		// end the string
+		if !needToStartQuote {
+			buf.WriteString(`",0`)
+		} else {
+			// it's a string that ends with \n
+			buf.WriteRune('0')
+		}
+
+		p.staticDataBuf.WriteString(fmt.Sprintf("%s:\n", labelName))
+		p.staticDataBuf.WriteString(fmt.Sprintf("\tdq\t%d\n", byteCount))
+		p.staticDataBuf.ReadFrom(&buf)
+		p.staticDataBuf.WriteRune('\n')
+	case parsing.TypeDecl, parsing.LiteralType:
+		// :structinreg
+		out := opt.Out()
+		_, isStruct := p.typeTable[out].(typing.StructRecord)
+		_, isArray := p.typeTable[out].(typing.Array)
+		freeReg, freeRegExists := p.registers.nextAvailable()
+		if !isStruct && !isArray && p.perfectRegSize(out) && freeRegExists {
+			p.loadRegisterWithVar(freeReg, out)
+		}
+		if p.inRegister(out) {
+			p.issueCommand(fmt.Sprintf("mov %s, 0", p.registerOf(out).qwordName))
+		} else {
+			p.zeroOutVarOnStack(out)
+		}
+	default:
+		parsing.Dump(value)
+		panic("unknown immediate value type")
 	}
 }
 
@@ -822,8 +808,8 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 				argSize := p.typeTable[arg].Size()
 				switch argSize {
 				case 8, 4, 2, 1:
-					if p.preComputing(arg) {
-						p.issueCommand(fmt.Sprintf("mov %s, %d", tmpRegInfo.qwordName, p.getPreComputedValue(arg)))
+					if p.valueKnown(arg) {
+						p.issueCommand(fmt.Sprintf("mov %s, %d", tmpRegInfo.qwordName, p.getPrecomputedValue(arg)))
 					} else {
 						p.signOrZeroExtendMovToReg(tmpReg, arg)
 					}
@@ -848,8 +834,8 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 				if valueSize < procRecord.Args[i].Size() {
 					p.signOrZeroExtendMovToReg(reg, arg)
 				}
-				if p.preComputing(arg) {
-					p.issueCommand(fmt.Sprintf("mov %s, %d", p.registers.all[reg].qwordName, p.getPreComputedValue(arg)))
+				if p.valueKnown(arg) {
+					p.issueCommand(fmt.Sprintf("mov %s, %d", p.registers.all[reg].qwordName, p.getPrecomputedValue(arg)))
 				}
 			default:
 				panic("Unsupported parameter size")
@@ -861,7 +847,7 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 		for _, reg := range regsThatGetDestroyed {
 			owner := p.registers.all[reg].occupiedBy
 			if owner != invalidVn {
-				if !(p.lastUsage[owner] == optIdx || p.preComputing(owner)) {
+				if !(p.lastUsage[owner] == optIdx || p.valueKnown(owner)) {
 					p.ensureStackOffsetValid(owner)
 					p.memRegCommand("mov", owner, owner)
 				}
@@ -903,8 +889,8 @@ func (p *procGen) genReturn(optIdx int, opt ir.Inst) {
 	returnExtra := opt.Extra.(ir.ReturnExtra)
 	if len(returnExtra.Values) > 0 {
 		retVar := returnExtra.Values[0]
-		if p.preComputing(retVar) {
-			p.issueCommand(fmt.Sprintf("mov rax, %d", p.getPreComputedValue(retVar)))
+		if p.valueKnown(retVar) {
+			p.issueCommand(fmt.Sprintf("mov rax, %d", p.getPrecomputedValue(retVar)))
 		} else if p.perfectRegSize(retVar) {
 			p.loadRegisterWithVar(rax, retVar)
 			if returnType.Size() > p.sizeof(retVar) {
@@ -968,8 +954,8 @@ func (p *procGen) andOrImm(opt *ir.Inst, imm int64) {
 
 func (p *procGen) evalCompare(opt *ir.Inst) int64 {
 	extra := opt.Extra.(ir.CompareExtra)
-	leftValue := p.getPreComputedValue(opt.ReadOperand)
-	rightValue := p.getPreComputedValue(extra.Right)
+	leftValue := p.getPrecomputedValue(opt.ReadOperand)
+	rightValue := p.getPrecomputedValue(extra.Right)
 	var result bool
 	switch extra.How {
 	case ir.Lesser:
@@ -999,8 +985,102 @@ func (p *procGen) tmpStorageForValue(size int, value int64) string {
 	return tmpStackStorage
 }
 
-func (p *procGen) preComputing(vn int) bool {
-	return p.preCompute[vn].valueType != notPrecomputable
+func (p *procGen) valueKnown(vn int) bool {
+	return p.precompute[vn].valueType != notKnownAtCompileTime
+}
+
+func (p *procGen) knownStatForOpt(opt ir.Inst) (bool, bool, bool) {
+	mut := ir.FindMutationVar(&opt)
+	allVarsKnown := true
+	anyVarKnown := false
+	allInputsKnown := true
+	ir.IterOverAllVars(opt, func(vn int) {
+		if p.precompute[vn].valueType == notKnownAtCompileTime {
+			allVarsKnown = false
+			if vn != mut {
+				allInputsKnown = false
+			}
+		} else {
+			anyVarKnown = true
+		}
+	})
+	return allVarsKnown, anyVarKnown, allInputsKnown
+}
+
+func (p *procGen) generateSingleOpt(optIdx int, opt ir.Inst) {
+	fmt.Println("doing ir line", optIdx)
+	fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+	defer func() {
+		ir.IterOverAllVars(opt, func(vn int) {
+			if stopAt := p.stopPrecomputation[vn]; stopAt == optIdx {
+				p.stopPrecomputingVar(vn)
+			}
+		})
+	}()
+	for i := range p.dontSwap {
+		p.dontSwap[i] = false
+	}
+
+	if opt.Type == ir.TakeAddress {
+		p.stopPrecomputingVar(opt.In())
+	}
+
+	mut := ir.FindMutationVar(&opt)
+	var allInputsKnown, anyVarKnown bool
+	varStat := func() {
+		anyVarKnown = false
+		allInputsKnown = true
+		ir.IterOverAllVars(opt, func(vn int) {
+			if p.precompute[vn].valueType == notKnownAtCompileTime {
+				if vn != mut {
+					allInputsKnown = false
+				}
+			} else {
+				anyVarKnown = true
+			}
+		})
+	}
+	varStat()
+	if mut >= 0 && p.valueKnown(mut) && !allInputsKnown {
+		p.stopPrecomputingVar(mut)
+		varStat()
+	}
+	switch opt.Type {
+	case ir.OutsideLoopMutations:
+		return
+	case ir.AssignImm:
+		p.genAssignImm(optIdx, opt)
+		return
+	case ir.Call:
+		p.genCall(optIdx, opt)
+		return
+	case ir.Return:
+		p.genReturn(optIdx, opt)
+		return
+	}
+
+	if allInputsKnown {
+		if p.doPrecomputaion(optIdx, opt) {
+			return
+		}
+	}
+
+	if anyVarKnown {
+		p.genPrecompute(optIdx, opt)
+	} else {
+		p.genInst(optIdx, opt)
+
+		decommissionIfLastUse := func(vn int) {
+			reg := p.varStorage[vn].currentRegister
+			if p.lastUsage[vn] == optIdx {
+				if reg != invalidRegister {
+					p.releaseRegister(reg)
+				}
+				p.varStorage[vn].decommissioned = true
+			}
+		}
+		ir.IterOverAllVars(opt, decommissionIfLastUse)
+	}
 }
 
 func (p *procGen) generate() {
@@ -1022,49 +1102,8 @@ func (p *procGen) generate() {
 
 	// backendDebug(framesize, p.typeTable)
 	for optIdx, opt := range p.block.Opts {
-		fmt.Println("doing ir line", optIdx)
-		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
-		for i := range p.dontSwap {
-			p.dontSwap[i] = false
-		}
-		switch opt.Type {
-		case ir.AssignImm:
-			p.genAssignImm(optIdx, opt)
-			p.finishPreCompute(optIdx, opt)
-			continue
-		case ir.Call:
-			p.genCall(optIdx, opt)
-			p.finishPreCompute(optIdx, opt)
-			continue
-		case ir.Return:
-			p.genReturn(optIdx, opt)
-			p.finishPreCompute(optIdx, opt)
-			continue
-		}
-		doPreCompute := false
-		ir.IterOverAllVars(opt, func(vn int) {
-			if p.preCompute[vn].valueType != notPrecomputable {
-				doPreCompute = true
-			}
-		})
-		if doPreCompute {
-			p.genPreCompute(optIdx, opt)
-			p.finishPreCompute(optIdx, opt)
-		} else {
-			p.genInst(optIdx, opt)
-
-			decommissionIfLastUse := func(vn int) {
-				reg := p.varStorage[vn].currentRegister
-				if p.lastUsage[vn] == optIdx {
-					if reg != invalidRegister {
-						p.releaseRegister(reg)
-					}
-					p.varStorage[vn].decommissioned = true
-				}
-			}
-			ir.IterOverAllVars(opt, decommissionIfLastUse)
-			// p.trace(3)
-		}
+		p.generateSingleOpt(optIdx, opt)
+		// p.trace(12)
 	}
 
 	for _, jump := range p.conditionalJumps {
@@ -1079,167 +1118,186 @@ func (p *procGen) generate() {
 	}
 }
 
-func (p *procGen) getPreComputedValue(vn int) int64 {
-	if !p.preComputing(vn) {
+func (p *procGen) getPrecomputedValue(vn int) int64 {
+	if !p.valueKnown(vn) {
 		println(vn)
 		panic("ice: a value expected to be pre-computable is not")
 	}
-	return p.preCompute[vn].value
+	return p.precompute[vn].value
 }
 
-func (p *procGen) genPreCompute(optIdx int, opt ir.Inst) {
-	mutVar := ir.FindMutationVar(&opt)
-	computationOnly := mutVar > -1 && p.preComputing(mutVar)
+func (p *procGen) stopPrecomputingVar(vn int) {
+	if !p.valueKnown(vn) {
+		return
+	}
+	value := p.getPrecomputedValue(vn)
+	p.allocateRuntimeStorage(vn)
+	p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(vn), value))
+	p.precompute[vn].valueType = notKnownAtCompileTime
+}
 
-	if computationOnly {
-		switch opt.Type {
-		case ir.Assign:
-			p.preCompute[opt.Left()].value = p.getPreComputedValue(opt.Right())
-		case ir.Add:
-			p.preCompute[opt.Left()].value += p.getPreComputedValue(opt.Right())
-		case ir.Sub:
-			p.preCompute[opt.Left()].value -= p.getPreComputedValue(opt.Right())
-		case ir.Mult:
-			p.preCompute[opt.Left()].value *= p.getPreComputedValue(opt.Right())
-		case ir.Div:
-			rightValue := p.getPreComputedValue(opt.Right())
-			if rightValue == 0 {
-				panic(parsing.ErrorFromNode(opt.GeneratedFrom, "Divide by zero"))
-			}
-			p.preCompute[opt.Left()].value /= rightValue
-		case ir.Compare:
-			extra := opt.Extra.(ir.CompareExtra)
-			p.preCompute[extra.Out].valueType = integer
-			p.preCompute[extra.Out].value = p.evalCompare(&opt)
-		case ir.Increment:
-			p.preCompute[opt.Out()].value++
-		case ir.Decrement:
-			p.preCompute[opt.Out()].value--
-		case ir.Not:
-			if p.preCompute[opt.In()].value == 0 {
-				p.preCompute[opt.Out()].value = 1
-			} else {
-				p.preCompute[opt.Out()].value = 0
-			}
-		case ir.And:
-			p.preCompute[opt.Left()].value &= p.getPreComputedValue(opt.Right())
-		case ir.Or:
-			p.preCompute[opt.Left()].value |= p.getPreComputedValue(opt.Right())
-		default:
-			panic("ice: don't know how to precompute using an inst")
+// Caller makes sure that the value for every input variable is known at compile time
+// returns whether we did any computation
+func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
+	switch opt.Type {
+	case ir.Add, ir.Sub, ir.Div, ir.Mult, ir.And, ir.Or, ir.Increment, ir.Decrement:
+		if !p.valueKnown(opt.MutateOperand) {
+			return false
 		}
-	} else {
-		switch opt.Type {
-		case ir.Assign:
-			l := opt.Left()
-			r := opt.Right()
+	}
+	switch opt.Type {
+	case ir.Assign:
+		p.precompute[opt.Left()].value = p.getPrecomputedValue(opt.Right())
+		p.precompute[opt.Left()].valueType = integer
+	case ir.Add:
+		p.precompute[opt.Left()].value += p.getPrecomputedValue(opt.Right())
+	case ir.Sub:
+		p.precompute[opt.Left()].value -= p.getPrecomputedValue(opt.Right())
+	case ir.Mult:
+		p.precompute[opt.Left()].value *= p.getPrecomputedValue(opt.Right())
+	case ir.Div:
+		rightValue := p.getPrecomputedValue(opt.Right())
+		if rightValue == 0 {
+			panic(parsing.ErrorFromNode(opt.GeneratedFrom, "Divide by zero"))
+		}
+		p.precompute[opt.Left()].value /= rightValue
+	case ir.Compare:
+		extra := opt.Extra.(ir.CompareExtra)
+		p.precompute[extra.Out].valueType = integer
+		p.precompute[extra.Out].value = p.evalCompare(&opt)
+	case ir.Increment:
+		p.precompute[opt.Out()].value++
+	case ir.Decrement:
+		p.precompute[opt.Out()].value--
+	case ir.Not:
+		p.precompute[opt.Out()].valueType = integer
+		if p.precompute[opt.In()].value == 0 {
+			p.precompute[opt.Out()].value = 1
+		} else {
+			p.precompute[opt.Out()].value = 0
+		}
+	case ir.And:
+		p.precompute[opt.Left()].value &= p.getPrecomputedValue(opt.Right())
+	case ir.Or:
+		p.precompute[opt.Left()].value |= p.getPrecomputedValue(opt.Right())
+	default:
+		return false
+	}
+	return true
+}
+
+func (p *procGen) genPrecompute(optIdx int, opt ir.Inst) {
+	switch opt.Type {
+	case ir.Assign:
+		l := opt.Left()
+		r := opt.Right()
+		if p.valueKnown(r) {
+			p.precompute[l] = p.precompute[r]
+		} else {
 			p.ensureStackOffsetValid(l)
-			info := p.preCompute[r]
+			info := p.precompute[r]
 			if info.valueType == integer {
 				p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(l), info.value))
 			} else {
 				panic("ice: use of precomputed value of this type for ir.Assign is not implemented")
 			}
-			p.preCompute[opt.Out()].value = p.preCompute[opt.In()].value
-		case ir.Add:
-			howMuch := p.getPreComputedValue(opt.Right())
-			if pointer, isPointer := p.typeTable[opt.Left()].(typing.Pointer); isPointer {
-				howMuch *= int64(pointer.ToWhat.Size())
-			}
-			p.issueCommand(fmt.Sprintf("add %s, %d", p.varOperand(opt.Left()), howMuch))
-		case ir.Sub:
-			p.issueCommand(fmt.Sprintf("sub %s, %d", p.varOperand(opt.Left()), p.getPreComputedValue(opt.Right())))
-		case ir.Mult:
-			l := opt.Left()
-			r := opt.Right()
-			tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(p.sizeof(l)), p.sizeof(l))
-			p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, p.getPreComputedValue(r)))
-			if p.sizeof(l) == 1 {
-				p.loadRegisterWithVar(rax, l)
-				p.issueCommand(fmt.Sprintf("imul %s", tmpStackStorage))
-			} else {
-				p.ensureInRegister(l)
-				p.issueCommand(fmt.Sprintf("imul %s, %s", p.fittingRegisterName(l), tmpStackStorage))
-			}
-		case ir.Div:
-			l := opt.Left()
-			r := opt.Right()
-			preCompValue := p.getPreComputedValue(r)
-			if preCompValue == 0 {
-				panic(parsing.ErrorFromNode(opt.GeneratedFrom, "Divide by zero"))
-			}
-			tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(p.sizeof(l)), p.sizeof(l))
-			p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, preCompValue))
-			p.loadRegisterWithVar(rax, l)
-			p.freeUpRegisters(true, rdx)
-			p.issueCommand("xor rdx, rdx")
-			p.issueCommand(fmt.Sprintf("div %s", tmpStackStorage))
-		case ir.Compare:
-			extra := opt.Extra.(ir.CompareExtra)
-			l := opt.ReadOperand
-			r := extra.Right
-			p.allocateRuntimeStorage(extra.Out)
-			if p.preComputing(l) && p.preComputing(r) {
-				p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(extra.Out), p.evalCompare(&opt)))
-			} else if p.preComputing(l) {
-				p.ensureInRegister(r)
-				tmpStorage := p.tmpStorageForValue(p.sizeof(r), p.getPreComputedValue(l))
-				p.issueCommand(fmt.Sprintf("cmp %s, %s", tmpStorage, p.varOperand(r)))
-				p.setccToVar(extra.How, extra.Out)
-			} else if p.preComputing(r) {
-				p.ensureInRegister(l)
-				tmpStorage := p.tmpStorageForValue(p.sizeof(l), p.getPreComputedValue(r))
-				p.issueCommand(fmt.Sprintf("cmp %s, %s", p.varOperand(opt.ReadOperand), tmpStorage))
-				p.setccToVar(extra.How, extra.Out)
-			}
-		case ir.And:
-			preCompValue := p.getPreComputedValue(opt.Right())
-			if preCompValue == 0 {
-				p.issueCommand(fmt.Sprintf("mov %s, 0", p.varOperand(opt.Left())))
-			} else {
-				p.andOrImm(&opt, preCompValue)
-			}
-		case ir.Or:
-			preCompValue := p.getPreComputedValue(opt.Right())
-			if preCompValue != 0 {
-				p.issueCommand(fmt.Sprintf("mov %s, 1", p.varOperand(opt.Left())))
-			} else {
-				p.andOrImm(&opt, preCompValue)
-			}
-		case ir.Not:
-			preCompValue := p.getPreComputedValue(opt.In())
-			result := 0
-			if preCompValue == 0 {
-				result = 1
-			}
-			p.allocateRuntimeStorage(opt.Out())
-			p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(opt.Out()), result))
-		case ir.JumpIfFalse:
-			if p.getPreComputedValue(opt.ReadOperand) == 0 {
-				p.jumpOrDelayedJump(optIdx, &opt)
-			} else {
-				p.issueCommand("; never jumps")
-			}
-		case ir.JumpIfTrue:
-			if p.getPreComputedValue(opt.ReadOperand) != 0 {
-				p.jumpOrDelayedJump(optIdx, &opt)
-			} else {
-				p.issueCommand("; never jumps")
-			}
-		case ir.IndirectWrite:
-			p.swapStackBoundVars()
-			preCompValue := p.getPreComputedValue(opt.ReadOperand)
-			p.ensureInRegister(opt.MutateOperand)
-			reg := p.registerOf(opt.MutateOperand).qwordName
-			prefix := prefixForSize(p.typeTable[opt.MutateOperand].(typing.Pointer).ToWhat.Size())
-			p.issueCommand(fmt.Sprintf("mov %s [%s], %d", prefix, reg, preCompValue))
-		default:
-			panic("ice: unknown inst trying to use a precomputed value")
+			p.precompute[opt.Out()].value = p.precompute[opt.In()].value
 		}
+	case ir.Add:
+		howMuch := p.getPrecomputedValue(opt.Right())
+		if pointer, isPointer := p.typeTable[opt.Left()].(typing.Pointer); isPointer {
+			howMuch *= int64(pointer.ToWhat.Size())
+		}
+		p.issueCommand(fmt.Sprintf("add %s, %d", p.varOperand(opt.Left()), howMuch))
+	case ir.Sub:
+		p.issueCommand(fmt.Sprintf("sub %s, %d", p.varOperand(opt.Left()), p.getPrecomputedValue(opt.Right())))
+	case ir.Mult:
+		l := opt.Left()
+		r := opt.Right()
+		tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(p.sizeof(l)), p.sizeof(l))
+		p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, p.getPrecomputedValue(r)))
+		if p.sizeof(l) == 1 {
+			p.loadRegisterWithVar(rax, l)
+			p.issueCommand(fmt.Sprintf("imul %s", tmpStackStorage))
+		} else {
+			p.ensureInRegister(l)
+			p.issueCommand(fmt.Sprintf("imul %s, %s", p.fittingRegisterName(l), tmpStackStorage))
+		}
+	case ir.Div:
+		l := opt.Left()
+		r := opt.Right()
+		preCompValue := p.getPrecomputedValue(r)
+		if preCompValue == 0 {
+			panic(parsing.ErrorFromNode(opt.GeneratedFrom, "Divide by zero"))
+		}
+		tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(p.sizeof(l)), p.sizeof(l))
+		p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, preCompValue))
+		p.loadRegisterWithVar(rax, l)
+		p.freeUpRegisters(true, rdx)
+		p.issueCommand("xor rdx, rdx")
+		p.issueCommand(fmt.Sprintf("div %s", tmpStackStorage))
+	case ir.Compare:
+		extra := opt.Extra.(ir.CompareExtra)
+		l := opt.ReadOperand
+		r := extra.Right
+		p.allocateRuntimeStorage(extra.Out)
+		if p.valueKnown(l) && p.valueKnown(r) {
+			p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(extra.Out), p.evalCompare(&opt)))
+		} else if p.valueKnown(l) {
+			p.ensureInRegister(r)
+			tmpStorage := p.tmpStorageForValue(p.sizeof(r), p.getPrecomputedValue(l))
+			p.issueCommand(fmt.Sprintf("cmp %s, %s", tmpStorage, p.varOperand(r)))
+			p.setccToVar(extra.How, extra.Out)
+		} else if p.valueKnown(r) {
+			p.ensureInRegister(l)
+			tmpStorage := p.tmpStorageForValue(p.sizeof(l), p.getPrecomputedValue(r))
+			p.issueCommand(fmt.Sprintf("cmp %s, %s", p.varOperand(opt.ReadOperand), tmpStorage))
+			p.setccToVar(extra.How, extra.Out)
+		}
+	case ir.And:
+		preCompValue := p.getPrecomputedValue(opt.Right())
+		if preCompValue == 0 {
+			p.issueCommand(fmt.Sprintf("mov %s, 0", p.varOperand(opt.Left())))
+		} else {
+			p.andOrImm(&opt, preCompValue)
+		}
+	case ir.Or:
+		preCompValue := p.getPrecomputedValue(opt.Right())
+		if preCompValue != 0 {
+			p.issueCommand(fmt.Sprintf("mov %s, 1", p.varOperand(opt.Left())))
+		} else {
+			p.andOrImm(&opt, preCompValue)
+		}
+	case ir.Not:
+		preCompValue := p.getPrecomputedValue(opt.In())
+		result := 0
+		if preCompValue == 0 {
+			result = 1
+		}
+		p.allocateRuntimeStorage(opt.Out())
+		p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(opt.Out()), result))
+	case ir.JumpIfFalse:
+		if p.getPrecomputedValue(opt.ReadOperand) == 0 {
+			p.jumpOrDelayedJump(optIdx, &opt)
+		} else {
+			p.issueCommand("; never jumps")
+		}
+	case ir.JumpIfTrue:
+		if p.getPrecomputedValue(opt.ReadOperand) != 0 {
+			p.jumpOrDelayedJump(optIdx, &opt)
+		} else {
+			p.issueCommand("; never jumps")
+		}
+	case ir.IndirectWrite:
+		p.swapStackBoundVars()
+		preCompValue := p.getPrecomputedValue(opt.ReadOperand)
+		p.ensureInRegister(opt.MutateOperand)
+		reg := p.registerOf(opt.MutateOperand).qwordName
+		prefix := prefixForSize(p.typeTable[opt.MutateOperand].(typing.Pointer).ToWhat.Size())
+		p.issueCommand(fmt.Sprintf("mov %s [%s], %d", prefix, reg, preCompValue))
+	default:
+		panic("ice: unknown inst trying to use a precomputed value")
 	}
-}
-
-func (p *procGen) finishPreCompute(optIdx int, opt ir.Inst) {
 }
 
 func (p *procGen) genInst(optIdx int, opt ir.Inst) {
@@ -1611,7 +1669,11 @@ func (p *procGen) trace(vn int) {
 	if vn >= len(p.varStorage) {
 		return
 	}
-	fmt.Fprintf(p.out.buffer, "\t\t\t;%s\n", p.varInfoString(vn))
+	if p.valueKnown(vn) {
+		fmt.Printf("var %d has compile time value %d\n", vn, p.getPrecomputedValue(vn))
+	} else {
+		fmt.Fprintf(p.out.buffer, "\t\t\t;%s\n", p.varInfoString(vn))
+	}
 }
 
 func backendDebug(framesize int, typeTable []typing.TypeRecord) {
@@ -1663,33 +1725,40 @@ func findLastusage(block frontend.OptBlock) []int {
 	return lastUse
 }
 
-func findComputableUntil(block frontend.OptBlock) (map[int]bool, []int) {
-	preComputeStart := make(map[int]bool)
-	// a temporary version that finds vars that is never mutated
-	computableUntil := make([]int, block.NumberOfVars)
+func findConstantVars(block frontend.OptBlock) []bool {
+	mutatedOnce := make([]bool, block.NumberOfVars)
+	constant := make([]bool, block.NumberOfVars)
+	for i := range constant {
+		constant[i] = true
+	}
+	for _, opt := range block.Opts {
+		mut := ir.FindMutationVar(&opt)
+		if mut < 0 {
+			continue
+		}
+		if mutatedOnce[mut] {
+			constant[mut] = false
+		}
+		mutatedOnce[mut] = true
+	}
+	return constant
+}
+
+func findWhenToStopPrecomputation(block frontend.OptBlock) []int {
+	stop := make([]int, block.NumberOfVars)
+	for i := range stop {
+		stop[i] = len(block.Opts)
+	}
 	for i, opt := range block.Opts {
-		if opt.Type == ir.AssignImm && computableUntil[opt.Out()] == 0 {
-			computableUntil[opt.Out()] = i
+		if opt.Type == ir.OutsideLoopMutations {
+			for _, mut := range *opt.Extra.(*[]int) {
+				if mut >= 0 && i < stop[mut] {
+					stop[mut] = i
+				}
+			}
 		}
 	}
-
-	for optIdx, opt := range block.Opts {
-		if opt.Type == ir.TakeAddress {
-			computableUntil[opt.ReadOperand] = 0
-		}
-		mutVar := ir.FindMutationVar(&opt)
-		if mutVar > -1 && optIdx > computableUntil[mutVar] {
-			computableUntil[mutVar] = 0
-		}
-	}
-
-	for i, genesisIdx := range computableUntil {
-		if genesisIdx != 0 {
-			preComputeStart[genesisIdx] = true
-			computableUntil[i] = len(block.Opts)
-		}
-	}
-	return preComputeStart, computableUntil
+	return stop
 }
 
 func collectOutput(firstBlock *outputBlock, out io.Writer) {
@@ -1718,12 +1787,13 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		labelToState:              make(map[string]*fullVarState),
 		lastUsage:                 findLastusage(block),
 		procRecord:                procRecord,
-		preCompute:                make([]preComputeInfo, block.NumberOfVars),
+		precompute:                make([]precomputeInfo, block.NumberOfVars),
 		callerProvidesReturnSpace: (*(procRecord.Return)).Size() > 16,
 	}
-	preComputeStart, preComputeUntil := findComputableUntil(block)
-	gen.preComputeStart = preComputeStart
-	gen.preComputeUntil = preComputeUntil
+	constantVars := findConstantVars(block)
+	stopPrecomputation := findWhenToStopPrecomputation(block)
+	gen.constantVars = constantVars
+	gen.stopPrecomputation = stopPrecomputation
 	gen.generate()
 	collectOutput(gen.firstOutputBlock, out)
 	return &staticDataBuf

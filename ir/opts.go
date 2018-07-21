@@ -11,53 +11,6 @@ type Inst struct {
 	GeneratedFrom parsing.ASTNode
 }
 
-//go:generate $GOPATH/bin/stringer -type=InstType
-type InstType int
-
-// !!! the order here is important !!!
-// make sure you are putting things under the correct section.
-// arity is how many vars are used in the main struct
-const (
-	ZeroVarInstructions InstType = iota
-
-	Return
-	Transclude
-	Jump
-	StartProc
-	EndProc
-	Label
-
-	MutateOnlyInstructions
-
-	Call
-	AssignImm
-	Increment
-	Decrement
-
-	ReadOnlyInstructions
-
-	JumpIfFalse
-	JumpIfTrue
-	Compare
-
-	ReadAndMutateInstructions
-
-	Sub
-	Assign
-	Add
-	Mult
-	Div
-	TakeAddress
-	ArrayToPointer
-	IndirectWrite
-	IndirectLoad
-	StructMemberPtr
-	PeelStruct
-	Not
-	And
-	Or
-)
-
 func (i *Inst) Left() int {
 	return i.MutateOperand
 }
@@ -81,6 +34,70 @@ func (i *Inst) Swap(original int, newVar int) {
 	if i.ReadOperand == original {
 		i.ReadOperand = newVar
 	}
+}
+
+//go:generate $GOPATH/bin/stringer -type=InstType
+type InstType int
+
+// !!! the order here is important !!!
+// make sure you are putting things under the correct section.
+// arity is how many vars are used in the main struct
+const (
+	ZeroVarInstructions InstType = iota
+
+	Return
+	Transclude
+	Jump
+	StartProc
+	EndProc
+	Label
+	OutsideLoopMutations
+
+	MutateOnlyInstructions
+
+	Call
+	AssignImm
+	Increment
+	Decrement
+
+	ReadOnlyInstructions
+
+	JumpIfFalse
+	JumpIfTrue
+	Compare
+
+	ReadAndMutateInstructions
+
+	Add
+	Sub
+	Mult
+	Div
+	Assign
+	TakeAddress
+	ArrayToPointer
+	IndirectWrite
+	IndirectLoad
+	StructMemberPtr
+	PeelStruct
+	Not
+	And
+	Or
+)
+
+func (i InstType) ZeroVar() bool {
+	return i > ZeroVarInstructions && i < MutateOnlyInstructions
+}
+
+func (i InstType) MutateOnly() bool {
+	return i > MutateOnlyInstructions && i < ReadOnlyInstructions
+}
+
+func (i InstType) ReadOnly() bool {
+	return i > ReadOnlyInstructions && i < ReadAndMutateInstructions
+}
+
+func (i InstType) ReadAndWrite() bool {
+	return i > ReadAndMutateInstructions
 }
 
 type CallExtra struct {
@@ -200,6 +217,8 @@ func IterAndMutate(opt *Inst, cb func(vn *int)) {
 	}
 }
 
+// There is at most one mutation per instruction
+// not true if we do :multireturn
 func FindMutationVar(opt *Inst) int {
 	const noMutation = -1
 	if opt.Type == IndirectWrite {

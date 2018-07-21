@@ -59,21 +59,35 @@ func (g *LabelIdGen) GenLabel(template string) (ret string) {
 }
 
 type scope struct {
-	gen         *procGen
-	parentScope *scope
-	varTable    map[string]int
-	loopLabel   string
+	gen            *procGen
+	parentScope    *scope
+	varTable       map[string]int
+	loopLabel      string
+	firstVarInLoop int
+	// keep track of mutation of variables that are not local to the loop scope
+	outsideLoopMutations *[]int
 }
 
 func (s *scope) inherit() *scope {
 	sub := scope{
-		gen:         s.gen,
-		parentScope: s,
-		varTable:    make(map[string]int),
-		loopLabel:   s.loopLabel,
+		gen:            s.gen,
+		parentScope:    s,
+		varTable:       make(map[string]int),
+		loopLabel:      s.loopLabel,
+		firstVarInLoop: s.firstVarInLoop,
 	}
 	// #speed
 	return &sub
+}
+
+func (s *scope) addOpt(opt ir.Inst) {
+	if s.loopLabel != "" {
+		// if the opt mutates a var that's outside the loop
+		if mut := ir.FindMutationVar(&opt); mut > -1 && mut < s.firstVarInLoop {
+			*s.outsideLoopMutations = append(*s.outsideLoopMutations, mut)
+		}
+	}
+	s.gen.addOpt(opt)
 }
 
 func (s *scope) resolve(name string) (int, bool) {

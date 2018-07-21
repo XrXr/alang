@@ -132,10 +132,14 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			i = genForProcSubSection(labelGen, order, scope.inherit(), i)
 			gen.addOpt(labelInst(elseLabel))
 		case parsing.Loop:
+			outsideLoopMutations := &[]int{}
+			gen.addOpt(ir.Inst{Type: ir.OutsideLoopMutations, Extra: outsideLoopMutations})
 			loopStart := labelGen.GenLabel("loop_%d")
 			loopEnd := loopStart + "_loopEnd"
 			loopScope := scope.inherit()
 			loopScope.loopLabel = loopStart
+			loopScope.outsideLoopMutations = outsideLoopMutations
+			loopScope.firstVarInLoop = gen.nextVarNum
 
 			var iterationVar int
 			var varUsed bool

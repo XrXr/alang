@@ -29,6 +29,7 @@
  ☐ hidden parameter for returning large values can be clobbered
  ☐ bitwise operators
  ☐ be less barbaric about saving registers in proc prologue
+ ☐ :multireturn
  ✔ &structA.field @done (18-07-11 21:22)
  ✔ &arr[409] @done (18-07-11 21:22)
  ✔ arr[533].dkd = 300 @done (18-07-04 15:11)
@@ -36,7 +37,7 @@
  ✔ proc argument type checking @done (18-06-23 20:51)
  ☐ proc overloading?
  ✔ complex expressions like if (rettrue() && retfalse() == false) @done (18-06-11 20:24)
- □ increment/decrement
+ ✘ increment/decrement @cancelled (18-07-21 23:58)
  ✔ better typing for numbers. There is a hack in place for assigning an int to u8 atm @done (18-06-16 00:41)
  ✔ the whole Unresolved type situation @done (18-07-11 21:22)
    ✔ procs that take parameters which reference structs -- they are left as unresolved type for now @done (18-06-11 20:25)
