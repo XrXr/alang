@@ -33,8 +33,10 @@ const (
 
 	ReadOnlyInstructions
 
-	JumpIfFalse
 	JumpIfTrue
+	JumpIfFalse
+	ShortJumpIfTrue
+	ShortJumpIfFalse
 	Compare
 
 	ReadAndMutateInstructions

@@ -207,6 +207,7 @@ type procGen struct {
 	currentFrameSize          int
 	nextLabelId               int
 	stackBoundVars            []int
+	skipUntilLabel            string
 	// info for compile time evaluation
 	precompute             []precomputeInfo
 	optionSelectPrecompute [][]varPrecomputeInfo
@@ -648,9 +649,9 @@ func (p *procGen) conditionalJump(jumpInst ir.Inst) {
 	label := jumpInst.Extra.(string)
 	targetState := p.labelToState[label]
 	nojump := p.genLabel(".nojump")
-	if jumpInst.Type == ir.JumpIfFalse {
+	if jumpInst.Type == ir.JumpIfFalse || jumpInst.Type == ir.ShortJumpIfFalse {
 		p.issueCommand(fmt.Sprintf("jnz %s", nojump))
-	} else if jumpInst.Type == ir.JumpIfTrue {
+	} else if jumpInst.Type == ir.JumpIfTrue || jumpInst.Type == ir.ShortJumpIfTrue {
 		p.issueCommand(fmt.Sprintf("jz %s", nojump))
 	}
 	p.morphToState(targetState)
@@ -1062,9 +1063,13 @@ func (p *procGen) knownStatForOpt(opt ir.Inst) (bool, bool, bool) {
 	return allVarsKnown, anyVarKnown, allInputsKnown
 }
 
-func (p *procGen) generateSingleOpt(optIdx int, opt ir.Inst) {
-	fmt.Println("doing ir line", optIdx)
-	fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
+	if p.skipUntilLabel != "" {
+		if opt.Type == ir.Label && opt.Extra.(string) == p.skipUntilLabel {
+			p.skipUntilLabel = ""
+		}
+		return
+	}
 	stopPrecomputingIfNeeded := func(vn int) {
 		if stopAt := p.stopPrecomputation[vn]; stopAt == optIdx {
 			p.stopPrecomputingVar(vn)
@@ -1132,9 +1137,9 @@ func (p *procGen) generateSingleOpt(optIdx int, opt ir.Inst) {
 	}
 
 	if anyVarKnown {
-		p.genPrecompute(optIdx, opt)
+		p.genInstPartialKnown(optIdx, opt)
 	} else {
-		p.genInst(optIdx, opt)
+		p.genInstAllRuntimeVars(optIdx, opt)
 
 		decommissionIfLastUse := func(vn int) {
 			reg := p.varStorage[vn].currentRegister
@@ -1168,8 +1173,10 @@ func (p *procGen) generate() {
 
 	// backendDebug(framesize, p.typeTable)
 	for optIdx, opt := range p.block.Opts {
-		p.generateSingleOpt(optIdx, opt)
-		// p.trace(12)
+		fmt.Println("doing ir line", optIdx)
+		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+		p.generateSingleInst(optIdx, opt)
+		p.trace(9)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -1253,7 +1260,7 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 	return true
 }
 
-func (p *procGen) genPrecompute(optIdx int, opt ir.Inst) {
+func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 	switch opt.Type {
 	case ir.Assign:
 		l := opt.Left()
@@ -1343,15 +1350,32 @@ func (p *procGen) genPrecompute(optIdx int, opt ir.Inst) {
 		}
 		p.allocateRuntimeStorage(opt.Out())
 		p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(opt.Out()), result))
+	case ir.JumpIfTrue:
+		if p.getPrecomputedValue(opt.ReadOperand) != 0 {
+			p.jumpOrDelayedJump(optIdx, &opt)
+		} else {
+			p.issueCommand("; never jumps")
+		}
 	case ir.JumpIfFalse:
 		if p.getPrecomputedValue(opt.ReadOperand) == 0 {
 			p.jumpOrDelayedJump(optIdx, &opt)
 		} else {
 			p.issueCommand("; never jumps")
 		}
-	case ir.JumpIfTrue:
+	case ir.ShortJumpIfTrue:
+		// The difference between short jumps and normal jumps is that for short jumps,
+		// the jump target is within the same source line and is somewhere ahead in the ir list.
+		// This guarentees between the short jump and the target, there is no mutation of
+		// named variables. Since nothing user-visible is changed, we can safely skip over all
+		// the insts in between if we know the condition at compile time.
 		if p.getPrecomputedValue(opt.ReadOperand) != 0 {
-			p.jumpOrDelayedJump(optIdx, &opt)
+			p.skipUntilLabel = opt.Extra.(string)
+		} else {
+			p.issueCommand("; never jumps")
+		}
+	case ir.ShortJumpIfFalse:
+		if p.getPrecomputedValue(opt.ReadOperand) == 0 {
+			p.skipUntilLabel = opt.Extra.(string)
 		} else {
 			p.issueCommand("; never jumps")
 		}
@@ -1367,7 +1391,7 @@ func (p *procGen) genPrecompute(optIdx int, opt ir.Inst) {
 	}
 }
 
-func (p *procGen) genInst(optIdx int, opt ir.Inst) {
+func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 	switch opt.Type {
 	case ir.Assign:
 		p.varVarCopy(opt.Left(), opt.Right())
@@ -1465,7 +1489,7 @@ func (p *procGen) genInst(optIdx int, opt ir.Inst) {
 			}
 			p.issueCommand(fmt.Sprintf("idiv %s", p.stackOperand(r)))
 		}
-	case ir.JumpIfFalse, ir.JumpIfTrue:
+	case ir.JumpIfFalse, ir.ShortJumpIfFalse, ir.ShortJumpIfTrue, ir.JumpIfTrue:
 		label := opt.Extra.(string)
 		in := opt.In()
 
