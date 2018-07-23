@@ -59,32 +59,35 @@ func (g *LabelIdGen) GenLabel(template string) (ret string) {
 }
 
 type scope struct {
-	gen            *procGen
-	parentScope    *scope
-	varTable       map[string]int
-	loopLabel      string
-	firstVarInLoop int
-	// keep track of mutation of variables that are not local to the loop scope
-	outsideLoopMutations *[]int
+	gen             *procGen
+	parentScope     *scope
+	varTable        map[string]int
+	loopLabel       string
+	firstVarInScope int
+	// keep track of mutation of variables that are not local to the scope
+	outOfScopeMutations *[]int
 }
 
 func (s *scope) inherit() *scope {
+	// take care that since we grab nextVarNum here, if you create new vars
+	// in the parent scope after calling this, the `firstVarInScope` for the
+	// child scope would not be correct.
 	sub := scope{
-		gen:            s.gen,
-		parentScope:    s,
-		varTable:       make(map[string]int),
-		loopLabel:      s.loopLabel,
-		firstVarInLoop: s.firstVarInLoop,
+		gen:             s.gen,
+		parentScope:     s,
+		varTable:        make(map[string]int),
+		loopLabel:       s.loopLabel,
+		firstVarInScope: s.gen.nextVarNum,
 	}
 	// #speed
 	return &sub
 }
 
 func (s *scope) addOpt(opt ir.Inst) {
-	if s.loopLabel != "" {
+	if s.outOfScopeMutations != nil {
 		// if the opt mutates a var that's outside the loop
-		if mut := ir.FindMutationVar(&opt); mut > -1 && mut < s.firstVarInLoop {
-			*s.outsideLoopMutations = append(*s.outsideLoopMutations, mut)
+		if mut := ir.FindMutationVar(&opt); mut > -1 && mut < s.firstVarInScope {
+			*s.outOfScopeMutations = append(*s.outOfScopeMutations, mut)
 		}
 	}
 	s.gen.addOpt(opt)

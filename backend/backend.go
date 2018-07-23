@@ -30,8 +30,14 @@ const (
 )
 
 type precomputeInfo struct {
-	valueType precomputeType
-	value     int64
+	valueType       precomputeType
+	value           int64
+	precomputedOnce bool
+}
+
+type varPrecomputeInfo struct {
+	vn int
+	precomputeInfo
 }
 
 type registerId int
@@ -202,9 +208,10 @@ type procGen struct {
 	nextLabelId               int
 	stackBoundVars            []int
 	// info for compile time evaluation
-	precompute         []precomputeInfo
-	constantVars       []bool
-	stopPrecomputation []int
+	precompute             []precomputeInfo
+	optionSelectPrecompute [][]varPrecomputeInfo
+	constantVars           []bool
+	stopPrecomputation     []int
 	// info for backfilling instructions
 	prologueBlock    *outputBlock
 	conditionalJumps []preJumpState
@@ -673,6 +680,43 @@ func (p *procGen) jumpOrDelayedJump(optIdx int, opt *ir.Inst) {
 	}
 }
 
+func (p *procGen) startOptionSelect(optIdx int, opt ir.Inst) {
+	outOfScopeMutations := *opt.Extra.(*[]int)
+	precompStates := make([]varPrecomputeInfo, 0, len(outOfScopeMutations))
+	for _, mut := range outOfScopeMutations {
+		if p.valueKnown(mut) {
+			precomp := p.precompute[mut]
+			precompStates = append(precompStates, varPrecomputeInfo{mut, precomp})
+			p.allocateRuntimeStorage(mut)
+			p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(mut), precomp.value))
+		}
+	}
+	p.optionSelectPrecompute = append(p.optionSelectPrecompute, precompStates)
+}
+
+func (p *procGen) endOptionSelect() {
+	length := len(p.optionSelectPrecompute)
+	for _, varPrecomp := range p.optionSelectPrecompute[length-1] {
+		p.allocateRuntimeStorage(varPrecomp.vn)
+		p.precompute[varPrecomp.vn].valueType = notKnownAtCompileTime
+	}
+	p.optionSelectPrecompute = p.optionSelectPrecompute[:length-1]
+}
+
+func (p *procGen) genOptionEnd(optIdx int, opt ir.Inst) {
+	length := len(p.optionSelectPrecompute)
+	currentPrecomp := p.optionSelectPrecompute[length-1]
+	for _, varPrecomp := range currentPrecomp {
+		if vn := varPrecomp.vn; p.valueKnown(varPrecomp.vn) {
+			p.allocateRuntimeStorage(vn)
+			p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(vn), p.getPrecomputedValue(vn)))
+		}
+	}
+	for _, varPrecomp := range currentPrecomp {
+		p.precompute[varPrecomp.vn] = varPrecomp.precomputeInfo
+	}
+}
+
 func (p *procGen) genLabel(prefix string) string {
 	label := fmt.Sprintf("%s_%d", prefix, p.nextLabelId)
 	p.nextLabelId++
@@ -682,25 +726,36 @@ func (p *procGen) genLabel(prefix string) string {
 func (p *procGen) genAssignImm(optIdx int, opt ir.Inst) {
 	out := opt.Out()
 
-	switch value := opt.Extra.(type) {
-	case int64:
-		p.precompute[out].valueType = integer
-		p.precompute[out].value = value
-		return
-	case bool:
-		p.precompute[out].valueType = integer
-		var val int64 = 0
-		if value == true {
-			val = 1
+	if !p.precompute[out].precomputedOnce {
+		switch value := opt.Extra.(type) {
+		case int64:
+			p.precompute[out].valueType = integer
+			p.precompute[out].value = value
+			p.precompute[out].precomputedOnce = true
+			return
+		case bool:
+			var val int64 = 0
+			if value == true {
+				val = 1
+			}
+			p.precompute[out].valueType = integer
+			p.precompute[out].value = val
+			p.precompute[out].precomputedOnce = true
+			return
 		}
-		p.precompute[out].value = val
-		return
 	}
 
 	p.precompute[out].valueType = notKnownAtCompileTime
 
 	switch value := opt.Extra.(type) {
-	case uint64:
+	case bool:
+		val := 0
+		if value {
+			val = 1
+		}
+		p.allocateRuntimeStorage(out)
+		p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(out), val))
+	case int64, uint64:
 		p.ensureInRegister(out)
 		p.issueCommand(fmt.Sprintf("mov %s, %d", p.registerOf(out).qwordName, value))
 	case string:
@@ -1010,13 +1065,12 @@ func (p *procGen) knownStatForOpt(opt ir.Inst) (bool, bool, bool) {
 func (p *procGen) generateSingleOpt(optIdx int, opt ir.Inst) {
 	fmt.Println("doing ir line", optIdx)
 	fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
-	defer func() {
-		ir.IterOverAllVars(opt, func(vn int) {
-			if stopAt := p.stopPrecomputation[vn]; stopAt == optIdx {
-				p.stopPrecomputingVar(vn)
-			}
-		})
-	}()
+	stopPrecomputingIfNeeded := func(vn int) {
+		if stopAt := p.stopPrecomputation[vn]; stopAt == optIdx {
+			p.stopPrecomputingVar(vn)
+		}
+	}
+	defer ir.IterOverAllVars(opt, stopPrecomputingIfNeeded)
 	for i := range p.dontSwap {
 		p.dontSwap[i] = false
 	}
@@ -1046,7 +1100,19 @@ func (p *procGen) generateSingleOpt(optIdx int, opt ir.Inst) {
 		varStat()
 	}
 	switch opt.Type {
-	case ir.OutsideLoopMutations:
+	case ir.OutsideLoopMutations, ir.OutOfScopeMutations:
+		for _, vn := range *opt.Extra.(*[]int) {
+			stopPrecomputingIfNeeded(vn)
+		}
+		return
+	case ir.OptionSelectStart:
+		p.startOptionSelect(optIdx, opt)
+		return
+	case ir.OptionEnd:
+		p.genOptionEnd(optIdx, opt)
+		return
+	case ir.OptionSelectEnd:
+		p.endOptionSelect()
 		return
 	case ir.AssignImm:
 		p.genAssignImm(optIdx, opt)
@@ -1104,6 +1170,7 @@ func (p *procGen) generate() {
 	for optIdx, opt := range p.block.Opts {
 		p.generateSingleOpt(optIdx, opt)
 		// p.trace(12)
+		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
 	for _, jump := range p.conditionalJumps {

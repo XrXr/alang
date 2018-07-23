@@ -3,45 +3,12 @@ package ir
 import "fmt"
 import "github.com/XrXr/alang/parsing"
 
-type Inst struct {
-	Type          InstType
-	MutateOperand int
-	ReadOperand   int
-	Extra         interface{}
-	GeneratedFrom parsing.ASTNode
-}
-
-func (i *Inst) Left() int {
-	return i.MutateOperand
-}
-
-func (i *Inst) Right() int {
-	return i.ReadOperand
-}
-
-func (i *Inst) In() int {
-	return i.ReadOperand
-}
-
-func (i *Inst) Out() int {
-	return i.MutateOperand
-}
-
-func (i *Inst) Swap(original int, newVar int) {
-	if i.MutateOperand == original {
-		i.MutateOperand = newVar
-	}
-	if i.ReadOperand == original {
-		i.ReadOperand = newVar
-	}
-}
-
 //go:generate $GOPATH/bin/stringer -type=InstType
 type InstType int
 
 // !!! the order here is important !!!
 // make sure you are putting things under the correct section.
-// arity is how many vars are used in the main struct
+// these are only about main struct
 const (
 	ZeroVarInstructions InstType = iota
 
@@ -52,6 +19,10 @@ const (
 	EndProc
 	Label
 	OutsideLoopMutations
+	OutOfScopeMutations
+	OptionSelectStart
+	OptionEnd
+	OptionSelectEnd
 
 	MutateOnlyInstructions
 
@@ -98,6 +69,39 @@ func (i InstType) ReadOnly() bool {
 
 func (i InstType) ReadAndWrite() bool {
 	return i > ReadAndMutateInstructions
+}
+
+type Inst struct {
+	Type          InstType
+	MutateOperand int
+	ReadOperand   int
+	Extra         interface{}
+	GeneratedFrom parsing.ASTNode
+}
+
+func (i *Inst) Left() int {
+	return i.MutateOperand
+}
+
+func (i *Inst) Right() int {
+	return i.ReadOperand
+}
+
+func (i *Inst) In() int {
+	return i.ReadOperand
+}
+
+func (i *Inst) Out() int {
+	return i.MutateOperand
+}
+
+func (i *Inst) Swap(original int, newVar int) {
+	if i.MutateOperand == original {
+		i.MutateOperand = newVar
+	}
+	if i.ReadOperand == original {
+		i.ReadOperand = newVar
+	}
 }
 
 type CallExtra struct {
@@ -278,7 +282,7 @@ func Dump(insts []Inst) {
 		switch opt.Type {
 		case Compare:
 			extra := opt.Extra.(CompareExtra)
-			fmt.Printf(" %d", extra.Right)
+			fmt.Printf(" %d %s", extra.Right, extra.How.String())
 		case Return:
 			extra := opt.Extra.(ReturnExtra)
 			fmt.Printf(" %v", extra.Values)
@@ -287,7 +291,7 @@ func Dump(insts []Inst) {
 			fmt.Printf(" %s %v", extra.Name, extra.ArgVars)
 		case Label, Jump, JumpIfTrue, JumpIfFalse, StartProc:
 			fmt.Printf(" %v", opt.Extra)
-		case AssignImm:
+		case AssignImm, OptionSelectStart, OutsideLoopMutations, OptionEnd:
 			fmt.Printf(" (%v)", opt.Extra)
 		}
 		fmt.Println("}")
