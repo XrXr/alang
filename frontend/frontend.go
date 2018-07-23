@@ -63,6 +63,17 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 		}
 		switch node := (*nodePtr).(type) {
 		case parsing.BlockEnd:
+			if scope.outOfScopeMutations != nil {
+				sort.Ints(*scope.outOfScopeMutations)
+				*scope.outOfScopeMutations = DedupSorted(*scope.outOfScopeMutations)
+				if scope.parentScope != nil && scope.parentScope.outOfScopeMutations != nil {
+					for _, vn := range *scope.outOfScopeMutations {
+						if vn < scope.parentScope.firstVarInScope {
+							*scope.parentScope.outOfScopeMutations = append(*scope.parentScope.outOfScopeMutations, vn)
+						}
+					}
+				}
+			}
 			after()
 			return i
 		case parsing.Declaration:
