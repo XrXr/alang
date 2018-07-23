@@ -8,7 +8,7 @@ main :: proc () {
     if c == false {
         puts("basic 2\n")
     }
-    d := false && tripwire()
+    d := false && tripwire() && tripwire() && tripwire()
     if d == false {
         puts("shortcircuit 3\n")
     }
@@ -20,7 +20,7 @@ main :: proc () {
 
 tripwire :: proc () -> bool {
     puts("bad\n")
-    return false
+    return true
 }
 
 tick1 :: proc () -> bool {

@@ -10,7 +10,7 @@ main :: proc () {
     } else {
         puts("basic 3\n")
     }
-    if true || tripwire(){
+    if true || tripwire() || tripwire() || tripwire() {
         puts("shortcircuit 4\n")
     }
     e := tick1() || tick2() || tick3() || tripwire()
