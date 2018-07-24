@@ -29,8 +29,29 @@ main :: proc () {
 		}
 	}
 	print_int(c)
+
+	// pointers
+	ptr := &c
+	for 1..5 {
+		if runtimeValue() > 100 {
+			ptr = &b
+		}
+	}
+	print_int(@ptr)
+
+	ptr2 := &c
+	for 1..5 {
+		if runtimeValue() > 100 {
+			ptr2 = runtimePointer(ptr2)
+		}
+	}
+	print_int(@ptr2)
 }
 
 runtimeValue :: proc () -> int {
 	return 1
+}
+
+runtimePointer :: proc (a *int) -> *int {
+	return a
 }

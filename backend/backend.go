@@ -1253,9 +1253,9 @@ func (p *procGen) stopPrecomputingAndMaterialize(vn int) {
 	if !p.valueKnown(vn) {
 		return
 	}
-	value := p.getPrecomputedValue(vn)
-	p.allocateRuntimeStorage(vn)
-	p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(vn), value))
+	vnReg := p.ensureInRegister(vn)
+	p.dontSwap[vnReg] = false
+	p.loadKnownValueIntoReg(vn, vnReg)
 	p.precompute[vn].valueType = notKnownAtCompileTime
 }
 
@@ -1388,14 +1388,13 @@ func (p *procGen) loadPointerIntoReg(pointerVn int, reg registerId) {
 
 // @clobber
 func (p *procGen) loadKnownValueIntoReg(vn int, reg registerId) {
-	switch precomp := &p.precompute[vn]; precomp.valueType {
+	switch precomp := p.precompute[vn]; precomp.valueType {
 	case integer:
-		regName := p.registers.all[reg].qwordName
-		p.issueCommand(fmt.Sprintf("mov %s, %d", regName, precomp.value))
+		p.issueCommand(fmt.Sprintf("mov %s, %d", p.registers.all[reg].nameForSize(p.sizeof(vn)), precomp.value))
 	case pointerRelativeToVar, pointerRelativeToStackBase:
 		p.loadPointerIntoReg(vn, reg)
 	default:
-		panic("ice: don't know how put precomputed type " + precomp.valueType.String() + " into a register")
+		panic("ice: don't know how to materialize precompute value type " + precomp.valueType.String())
 	}
 }
 
