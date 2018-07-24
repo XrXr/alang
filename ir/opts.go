@@ -41,10 +41,6 @@ const (
 
 	ReadAndMutateInstructions
 
-	Add
-	Sub
-	Mult
-	Div
 	Assign
 	TakeAddress
 	ArrayToPointer
@@ -53,6 +49,13 @@ const (
 	StructMemberPtr
 	PeelStruct
 	Not
+
+	TwoOperandUpdateInstructions
+
+	Add
+	Sub
+	Mult
+	Div
 	And
 	Or
 )
@@ -69,8 +72,16 @@ func (i InstType) ReadOnly() bool {
 	return i > ReadOnlyInstructions && i < ReadAndMutateInstructions
 }
 
-func (i InstType) ReadAndWrite() bool {
+func (i InstType) ReadAndMutate() bool {
 	return i > ReadAndMutateInstructions
+}
+
+func (i InstType) InputOutput() bool {
+	return i > ReadAndMutateInstructions && i < TwoOperandUpdateInstructions
+}
+
+func (i InstType) TwoOperandUpdate() bool {
+	return i > TwoOperandUpdateInstructions
 }
 
 type Inst struct {
@@ -168,11 +179,11 @@ func MakeBinaryInst(instType InstType, mutateVn int, readVn int, extra interface
 }
 
 func IterOverAllVars(opt Inst, cb func(vn int)) {
-	if opt.Type > MutateOnlyInstructions && opt.Type < ReadOnlyInstructions {
+	if opt.Type.MutateOnly() {
 		cb(opt.MutateOperand)
-	} else if opt.Type > ReadOnlyInstructions && opt.Type < ReadAndMutateInstructions {
+	} else if opt.Type.ReadOnly() {
 		cb(opt.ReadOperand)
-	} else if opt.Type > ReadAndMutateInstructions {
+	} else if opt.Type.ReadAndMutate() {
 		cb(opt.ReadOperand)
 		cb(opt.MutateOperand)
 	}
@@ -193,11 +204,11 @@ func IterOverAllVars(opt Inst, cb func(vn int)) {
 }
 
 func IterAndMutate(opt *Inst, cb func(vn *int)) {
-	if opt.Type > MutateOnlyInstructions && opt.Type < ReadOnlyInstructions {
+	if opt.Type.MutateOnly() {
 		cb(&opt.MutateOperand)
-	} else if opt.Type > ReadOnlyInstructions && opt.Type < ReadAndMutateInstructions {
+	} else if opt.Type.ReadOnly() {
 		cb(&opt.ReadOperand)
-	} else if opt.Type > ReadAndMutateInstructions {
+	} else if opt.Type.ReadAndMutate() {
 		cb(&opt.ReadOperand)
 		cb(&opt.MutateOperand)
 	}
@@ -231,10 +242,10 @@ func FindMutationVar(opt *Inst) int {
 		return noMutation
 	}
 
-	if opt.Type > MutateOnlyInstructions && opt.Type < ReadOnlyInstructions {
+	if opt.Type.MutateOnly() {
 		return opt.MutateOperand
 	}
-	if opt.Type > ReadAndMutateInstructions {
+	if opt.Type.ReadAndMutate() {
 		return opt.MutateOperand
 	}
 	switch opt.Type {
@@ -246,9 +257,7 @@ func FindMutationVar(opt *Inst) int {
 }
 
 func EnumerateAllReadOnlyVars(opt *Inst, cb func(vn int)) {
-	if opt.Type > ReadOnlyInstructions && opt.Type < ReadAndMutateInstructions {
-		cb(opt.ReadOperand)
-	} else if opt.Type > ReadAndMutateInstructions {
+	if opt.Type.ReadOnly() || opt.Type.ReadAndMutate() {
 		cb(opt.ReadOperand)
 	}
 

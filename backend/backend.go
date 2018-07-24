@@ -1222,10 +1222,10 @@ func (p *procGen) generate() {
 
 	// backendDebug(framesize, p.typeTable)
 	for optIdx, opt := range p.block.Opts {
-		fmt.Println("doing ir line", optIdx)
-		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+		// fmt.Println("doing ir line", optIdx)
+		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
-		p.trace(31)
+		// p.trace(31)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -1260,13 +1260,17 @@ func (p *procGen) stopPrecomputingAndMaterialize(vn int) {
 }
 
 // Caller makes sure that the value for every input variable is known at compile time
-// returns whether we did any computation
+// returns whether whether the func was able to do precomputation for the instruction
 func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 	switch opt.Type {
 	case ir.Add, ir.Sub, ir.Div, ir.Mult, ir.And, ir.Or, ir.Increment, ir.Decrement:
 		if !p.valueKnown(opt.MutateOperand) {
 			return false
 		}
+	}
+	// check if we would start doing precomputation again
+	if opt.Type.InputOutput() && p.precompute[opt.Out()].precomputedOnce && !p.valueKnown(opt.Out()) {
+		return false
 	}
 	switch opt.Type {
 	case ir.Assign:
@@ -1275,9 +1279,6 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		}
 		left := opt.Left()
 		right := opt.Right()
-		if p.precompute[left].precomputedOnce && !p.valueKnown(left) {
-			return false
-		}
 		p.precompute[left] = p.precompute[right]
 	case ir.Add:
 		precomp := &p.precompute[opt.Left()]
@@ -1378,7 +1379,6 @@ func (p *procGen) prepareEffectiveAddress(pointerVn int) string {
 		p.ensureInRegister(pointerVn)
 		return fmt.Sprintf("[%s]", p.registerOf(pointerVn).qwordName)
 	}
-	return "!!!!"
 }
 
 // @clobbber
