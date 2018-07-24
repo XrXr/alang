@@ -188,7 +188,7 @@ func (f *fullVarState) varInfoString(vn int) string {
 	if f.varStorage[vn].decommissioned {
 		return fmt.Sprintf("variable %d is decommissioned", vn)
 	} else if f.inRegister(vn) {
-		return fmt.Sprintf("variable %d is in %s", vn, f.registers.all[vn].qwordName)
+		return fmt.Sprintf("variable %d is in %s", vn, f.registerOf(vn).qwordName)
 	} else {
 		return fmt.Sprintf("variable %d is at rbp-%d", vn, f.varStorage[vn].rbpOffset)
 	}
@@ -1225,7 +1225,7 @@ func (p *procGen) generate() {
 		fmt.Println("doing ir line", optIdx)
 		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
-		// p.trace(3)
+		p.trace(31)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -1273,7 +1273,12 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		if !p.valueKnown(opt.Right()) {
 			panic("ice: input to assign not known at compile time")
 		}
-		p.precompute[opt.Left()] = p.precompute[opt.Right()]
+		left := opt.Left()
+		right := opt.Right()
+		if p.precompute[left].precomputedOnce && !p.valueKnown(left) {
+			return false
+		}
+		p.precompute[left] = p.precompute[right]
 	case ir.Add:
 		precomp := &p.precompute[opt.Left()]
 		rightValue := p.getPrecomputedValue(opt.Right())
@@ -1398,23 +1403,15 @@ func (p *procGen) loadKnownValueIntoReg(vn int, reg registerId) {
 	}
 }
 
+// caller makes sure that we don't try to put a runtime value into a compile time variable
 func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 	switch opt.Type {
 	case ir.Assign:
 		l := opt.Left()
 		r := opt.Right()
-		if p.valueKnown(r) {
-			p.precompute[l] = p.precompute[r]
-		} else {
-			p.ensureStackOffsetValid(l)
-			info := p.precompute[r]
-			if info.valueType == integer {
-				p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(l), info.value))
-			} else {
-				panic("ice: use of precomputed value of this type for ir.Assign is not implemented")
-			}
-			p.precompute[opt.Out()].value = p.precompute[opt.In()].value
-		}
+		p.ensureStackOffsetValid(l)
+		lReg := p.ensureInRegister(l)
+		p.loadKnownValueIntoReg(r, lReg)
 	case ir.Add:
 		howMuch := p.getPrecomputedValue(opt.Right())
 		if pointer, isPointer := p.typeTable[opt.Left()].(typing.Pointer); isPointer {
