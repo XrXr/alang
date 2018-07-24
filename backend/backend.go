@@ -21,12 +21,14 @@ func newOutputBlock() *outputBlock {
 	return &block
 }
 
+//go:generate $GOPATH/bin/stringer -type=precomputeType
 type precomputeType int
 
 const (
-	notKnownAtCompileTime precomputeType = iota
-	integer
-	pointerToVar
+	notKnownAtCompileTime      precomputeType = iota
+	integer                                   // .value is the value
+	pointerRelativeToStackBase                // .value is an offset from rbp
+	pointerRelativeToVar                      // .value is an index into a slice of relativePointer
 )
 
 type precomputeInfo struct {
@@ -38,6 +40,11 @@ type precomputeInfo struct {
 type varPrecomputeInfo struct {
 	vn int
 	precomputeInfo
+}
+
+type relativePointer struct {
+	baseVar int
+	offset  int
 }
 
 type registerId int
@@ -210,6 +217,7 @@ type procGen struct {
 	skipUntilLabel            string
 	// info for compile time evaluation
 	precompute             []precomputeInfo
+	relativePointers       []relativePointer
 	optionSelectPrecompute [][]varPrecomputeInfo
 	constantVars           []bool
 	stopPrecomputation     []int
@@ -585,9 +593,13 @@ func (p *procGen) zeroOutVarOnStack(vn int) {
 	p.issueCommand("call _intrinsic_zero_mem")
 }
 
-func (p *procGen) perfectRegSize(vn int) bool {
-	size := p.sizeof(vn)
+func isPerfectSize(size int) bool {
 	return size == 8 || size == 4 || size == 2 || size == 1
+}
+
+func (p *procGen) varPerfectRegSize(vn int) bool {
+	size := p.sizeof(vn)
+	return isPerfectSize(size)
 }
 
 func (p *procGen) signOrZeroExtendMovToReg(dest registerId, sourceVn int) {
@@ -616,7 +628,7 @@ func (p *procGen) signOrZeroExtendMov(dest int, source int) {
 }
 
 func (p *procGen) varVarCopy(dest int, source int) {
-	if p.perfectRegSize(source) {
+	if p.varPerfectRegSize(source) {
 		p.ensureInRegister(source)
 		if p.inRegister(dest) {
 			if p.typeTable[dest].IsNumber() && p.typeTable[source].IsNumber() && p.sizeof(dest) > p.sizeof(source) {
@@ -801,7 +813,7 @@ func (p *procGen) genAssignImm(optIdx int, opt ir.Inst) {
 		_, isStruct := p.typeTable[out].(typing.StructRecord)
 		_, isArray := p.typeTable[out].(typing.Array)
 		freeReg, freeRegExists := p.registers.nextAvailable()
-		if !isStruct && !isArray && p.perfectRegSize(out) && freeRegExists {
+		if !isStruct && !isArray && p.varPerfectRegSize(out) && freeRegExists {
 			p.loadRegisterWithVar(freeReg, out)
 		}
 		if p.inRegister(out) {
@@ -947,7 +959,7 @@ func (p *procGen) genReturn(optIdx int, opt ir.Inst) {
 		retVar := returnExtra.Values[0]
 		if p.valueKnown(retVar) {
 			p.issueCommand(fmt.Sprintf("mov rax, %d", p.getPrecomputedValue(retVar)))
-		} else if p.perfectRegSize(retVar) {
+		} else if p.varPerfectRegSize(retVar) {
 			p.loadRegisterWithVar(rax, retVar)
 			if returnType.Size() > p.sizeof(retVar) {
 				p.signOrZeroExtendMov(retVar, retVar)
@@ -1006,6 +1018,20 @@ func (p *procGen) andOrImm(opt *ir.Inst, imm int64) {
 	} else {
 		panic("ice: and and or for more than 1 byte is not supported yet")
 	}
+}
+
+func (p *procGen) genTakeAddress(optIdx int, opt ir.Inst) {
+	in := opt.In()
+	out := opt.Out()
+	if p.precompute[out].precomputedOnce && !p.valueKnown(out) {
+		panic("ice: re-precompute by outputting from ir.TakeAddress")
+	}
+	p.stopPrecomputingAndMaterialize(in)
+	p.ensureStackOffsetValid(in)
+	p.stackBoundVars = append(p.stackBoundVars, in)
+	p.precompute[out].valueType = pointerRelativeToStackBase
+	p.precompute[out].precomputedOnce = true
+	p.precompute[out].value = int64(p.varStorage[out].rbpOffset)
 }
 
 func (p *procGen) evalCompare(opt *ir.Inst) int64 {
@@ -1072,7 +1098,7 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	}
 	stopPrecomputingIfNeeded := func(vn int) {
 		if stopAt := p.stopPrecomputation[vn]; stopAt == optIdx {
-			p.stopPrecomputingVar(vn)
+			p.stopPrecomputingAndMaterialize(vn)
 		}
 	}
 	defer ir.IterOverAllVars(opt, stopPrecomputingIfNeeded)
@@ -1081,7 +1107,13 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	}
 
 	if opt.Type == ir.TakeAddress {
-		p.stopPrecomputingVar(opt.In())
+		p.genTakeAddress(optIdx, opt)
+		return
+	}
+	if opt.Type == ir.IndirectLoad && p.valueKnown(opt.Out()) {
+		// A special case. Even if we know both operands at copmile time,
+		// we need to stop precomputing the output var.
+		p.stopPrecomputingAndMaterialize(opt.Out())
 	}
 
 	mut := ir.FindMutationVar(&opt)
@@ -1101,7 +1133,7 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	}
 	varStat()
 	if mut >= 0 && p.valueKnown(mut) && !allInputsKnown {
-		p.stopPrecomputingVar(mut)
+		p.stopPrecomputingAndMaterialize(mut)
 		varStat()
 	}
 	switch opt.Type {
@@ -1200,7 +1232,7 @@ func (p *procGen) getPrecomputedValue(vn int) int64 {
 	return p.precompute[vn].value
 }
 
-func (p *procGen) stopPrecomputingVar(vn int) {
+func (p *procGen) stopPrecomputingAndMaterialize(vn int) {
 	if !p.valueKnown(vn) {
 		return
 	}
@@ -1221,10 +1253,26 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 	}
 	switch opt.Type {
 	case ir.Assign:
-		p.precompute[opt.Left()].value = p.getPrecomputedValue(opt.Right())
-		p.precompute[opt.Left()].valueType = integer
+		if !p.valueKnown(opt.Right()) {
+			panic("ice: input to assign not known at compile time")
+		}
+		p.precompute[opt.Left()] = p.precompute[opt.Right()]
 	case ir.Add:
-		p.precompute[opt.Left()].value += p.getPrecomputedValue(opt.Right())
+		precomp := &p.precompute[opt.Left()]
+		rightValue := p.getPrecomputedValue(opt.Right())
+		switch precomp.valueType {
+		case integer:
+			precomp.value += rightValue
+		case pointerRelativeToVar, pointerRelativeToStackBase:
+			delta := int64(p.sizeof(opt.Left())) * rightValue
+			if precomp.valueType == pointerRelativeToStackBase {
+				precomp.value += delta
+			} else {
+				p.relativePointers[precomp.value].offset += int(delta)
+			}
+		default:
+			panic("adding to an unsupported precomp value type " + precomp.valueType.String())
+		}
 	case ir.Sub:
 		p.precompute[opt.Left()].value -= p.getPrecomputedValue(opt.Right())
 	case ir.Mult:
@@ -1258,6 +1306,36 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		return false
 	}
 	return true
+}
+
+func (p *procGen) prepareEffectiveAddress(pointerVn int) string {
+	if p.valueKnown(pointerVn) {
+		precomp := &p.precompute[pointerVn]
+		switch precomp.valueType {
+		case pointerRelativeToStackBase:
+			return fmt.Sprintf("[rbp-%d]", precomp.value)
+		case pointerRelativeToVar:
+			rel := &p.relativePointers[precomp.value]
+			p.ensureInRegister(rel.baseVar)
+			return fmt.Sprintf("[%s+%d]", p.registerOf(rel.baseVar).qwordName, rel.offset)
+		default:
+			panic("ice: unknown precomp pointer type")
+		}
+	} else {
+		p.ensureInRegister(pointerVn)
+		return fmt.Sprintf("[%s]", p.registerOf(pointerVn).qwordName)
+	}
+	return "!!!!"
+}
+
+// @clobbber
+func (p *procGen) loadPointerIntoReg(pointerVn int, reg registerId) {
+	if p.valueKnown(pointerVn) {
+		effectiveAddress := p.prepareEffectiveAddress(pointerVn)
+		p.issueCommand(fmt.Sprintf("lea %s, %s", p.registers.all[reg].qwordName, effectiveAddress))
+	} else {
+		p.loadRegisterWithVar(reg, pointerVn)
+	}
 }
 
 func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
@@ -1300,12 +1378,12 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 	case ir.Div:
 		l := opt.Left()
 		r := opt.Right()
-		preCompValue := p.getPrecomputedValue(r)
-		if preCompValue == 0 {
+		precompValue := p.getPrecomputedValue(r)
+		if precompValue == 0 {
 			panic(parsing.ErrorFromNode(opt.GeneratedFrom, "Divide by zero"))
 		}
 		tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(p.sizeof(l)), p.sizeof(l))
-		p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, preCompValue))
+		p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, precompValue))
 		p.loadRegisterWithVar(rax, l)
 		p.freeUpRegisters(true, rdx)
 		p.issueCommand("xor rdx, rdx")
@@ -1379,13 +1457,67 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 		} else {
 			p.issueCommand("; never jumps")
 		}
+	case ir.IndirectLoad:
+		p.swapStackBoundVars()
+		out := opt.Out()
+		in := opt.In()
+		pointedToSize := p.typeTable[in].(typing.Pointer).ToWhat.Size()
+		if p.valueKnown(out) {
+			panic("ice: can't indirect load into a copmile time value. Should've checked")
+		}
+
+		if isPerfectSize(pointedToSize) {
+			sourceOperand := p.prepareEffectiveAddress(in)
+			prefix := prefixForSize(pointedToSize)
+			p.ensureInRegister(out)
+			regName := p.registerOf(out).nameForSize(pointedToSize)
+			p.issueCommand(fmt.Sprintf("mov %s, %s %s", regName, prefix, sourceOperand))
+		} else {
+			if pointedToSize != p.sizeof(out) {
+				panic("ice: memcpy indirect load where the sizes are not equal")
+			}
+			p.freeUpRegisters(true, rsi, rdi, rcx)
+			p.loadPointerIntoReg(in, rsi)
+			p.ensureStackOffsetValid(out)
+			p.loadVarOffsetIntoReg(out, rdi)
+			p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
+			p.issueCommand("call _intrinsic_memcpy")
+			if p.inRegister(out) {
+				p.releaseRegister(p.varStorage[out].currentRegister)
+			}
+		}
 	case ir.IndirectWrite:
 		p.swapStackBoundVars()
-		preCompValue := p.getPrecomputedValue(opt.ReadOperand)
-		p.ensureInRegister(opt.MutateOperand)
-		reg := p.registerOf(opt.MutateOperand).qwordName
-		prefix := prefixForSize(p.typeTable[opt.MutateOperand].(typing.Pointer).ToWhat.Size())
-		p.issueCommand(fmt.Sprintf("mov %s [%s], %d", prefix, reg, preCompValue))
+		target := opt.Out()
+		data := opt.In()
+		pointedToSize := p.typeTable[target].(typing.Pointer).ToWhat.Size()
+
+		if p.varPerfectRegSize(data) {
+			destOperand := p.prepareEffectiveAddress(target)
+			prefix := prefixForSize(pointedToSize)
+			if p.valueKnown(data) {
+				precompValue := p.getPrecomputedValue(data)
+				p.issueCommand(fmt.Sprintf("mov %s %s, %d", prefix, destOperand, precompValue))
+			} else {
+				p.ensureInRegister(data)
+				// TODO sign extend here
+				regName := p.registerOf(data).nameForSize(pointedToSize)
+				p.issueCommand(fmt.Sprintf("mov %s %s, %s", prefix, destOperand, regName))
+			}
+		} else {
+			if pointedToSize != p.sizeof(data) {
+				panic("ice: memcpy indirect write where the sizes are not equal")
+			}
+			p.freeUpRegisters(true, rsi, rdi, rcx)
+			p.loadPointerIntoReg(target, rdi)
+			p.ensureStackOffsetValid(data)
+			if p.inRegister(data) {
+				p.memRegCommand("mov", data, data)
+			}
+			p.loadVarOffsetIntoReg(data, rsi)
+			p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
+			p.issueCommand("call _intrinsic_memcpy")
+		}
 	default:
 		panic("ice: unknown inst trying to use a precomputed value")
 	}
@@ -1587,13 +1719,6 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 		p.setccToVar(extra.How, out)
 	case ir.Transclude:
 		panic("Transcludes should be gone by now")
-	case ir.TakeAddress:
-		in := opt.In()
-		out := opt.Out()
-		p.ensureStackOffsetValid(in)
-		outReg := p.ensureInRegister(out)
-		p.loadVarOffsetIntoReg(in, outReg)
-		p.stackBoundVars = append(p.stackBoundVars, in)
 	case ir.ArrayToPointer:
 		in := opt.In()
 		out := opt.Out()
@@ -1629,7 +1754,7 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 		pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
 		p.ensureInRegister(ptr)
 
-		if p.perfectRegSize(data) {
+		if p.varPerfectRegSize(data) {
 			p.ensureInRegister(data)
 			dataRegName := p.registerOf(data).nameForSize(pointedToSize)
 			prefix := prefixForSize(pointedToSize)
