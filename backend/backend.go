@@ -693,6 +693,22 @@ func (p *procGen) jumpOrDelayedJump(optIdx int, opt *ir.Inst) {
 	}
 }
 
+func (p *procGen) findOrMakeFreeReg() registerId {
+	reg, freeRegExists := p.registers.nextAvailable()
+	if freeRegExists {
+		return reg
+	}
+	reg = paramPassingRegOrder[len(paramPassingRegOrder)-1]
+	currentTenant := p.registers.all[reg].occupiedBy
+	if currentTenant == invalidVn {
+		panic("ice: inconsistent available list and register.occupiedBy")
+	}
+	p.ensureStackOffsetValid(currentTenant)
+	p.memRegCommand("mov", currentTenant, currentTenant)
+	p.releaseRegister(reg)
+	return reg
+}
+
 func (p *procGen) startOptionSelect(optIdx int, opt ir.Inst) {
 	outOfScopeMutations := *opt.Extra.(*[]int)
 	precompStates := make([]varPrecomputeInfo, 0, len(outOfScopeMutations))
@@ -838,7 +854,12 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 			p.zeroOutVarOnStack(opt.Out())
 		default:
 			// cast
-			p.varVarCopy(opt.Out(), extra.ArgVars[0])
+			firstArg := extra.ArgVars[0]
+			if p.valueKnown(firstArg) {
+				p.precompute[opt.Out()] = p.precompute[firstArg]
+			} else {
+				p.varVarCopy(opt.Out(), extra.ArgVars[0])
+			}
 		}
 	} else {
 		retVar := opt.Out()
@@ -859,12 +880,7 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 		}
 
 		if visibleArgsInReg < len(extra.ArgVars) {
-			tmpReg := paramPassingRegOrder[len(paramPassingRegOrder)-1]
-			if currentTenant := p.registers.all[tmpReg].occupiedBy; currentTenant != invalidVn {
-				p.ensureStackOffsetValid(currentTenant)
-				p.memRegCommand("mov", currentTenant, currentTenant)
-				p.releaseRegister(tmpReg)
-			}
+			tmpReg := p.findOrMakeFreeReg()
 			tmpRegInfo := &p.registers.all[tmpReg]
 			numStackVars = len(extra.ArgVars) - visibleArgsInReg
 			if numStackVars%2 == 1 {
@@ -877,7 +893,7 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 				switch argSize {
 				case 8, 4, 2, 1:
 					if p.valueKnown(arg) {
-						p.issueCommand(fmt.Sprintf("mov %s, %d", tmpRegInfo.qwordName, p.getPrecomputedValue(arg)))
+						p.loadKnownValueIntoReg(arg, tmpReg)
 					} else {
 						p.signOrZeroExtendMovToReg(tmpReg, arg)
 					}
@@ -899,11 +915,12 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 			case 8, 4, 2, 1:
 				reg := paramPassingRegOrder[i]
 				p.loadRegisterWithVar(reg, arg)
-				if valueSize < procRecord.Args[i].Size() {
-					p.signOrZeroExtendMovToReg(reg, arg)
-				}
 				if p.valueKnown(arg) {
-					p.issueCommand(fmt.Sprintf("mov %s, %d", p.registers.all[reg].qwordName, p.getPrecomputedValue(arg)))
+					p.loadKnownValueIntoReg(arg, reg)
+				} else {
+					if valueSize < procRecord.Args[i].Size() {
+						p.signOrZeroExtendMovToReg(reg, arg)
+					}
 				}
 			default:
 				panic("Unsupported parameter size")
@@ -1031,7 +1048,7 @@ func (p *procGen) genTakeAddress(optIdx int, opt ir.Inst) {
 	p.stackBoundVars = append(p.stackBoundVars, in)
 	p.precompute[out].valueType = pointerRelativeToStackBase
 	p.precompute[out].precomputedOnce = true
-	p.precompute[out].value = int64(p.varStorage[out].rbpOffset)
+	p.precompute[out].value = -int64(p.varStorage[in].rbpOffset)
 }
 
 func (p *procGen) evalCompare(opt *ir.Inst) int64 {
@@ -1208,7 +1225,7 @@ func (p *procGen) generate() {
 		fmt.Println("doing ir line", optIdx)
 		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
-		p.trace(9)
+		// p.trace(3)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -1302,6 +1319,37 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		p.precompute[opt.Left()].value &= p.getPrecomputedValue(opt.Right())
 	case ir.Or:
 		p.precompute[opt.Left()].value |= p.getPrecomputedValue(opt.Right())
+	case ir.StructMemberPtr:
+		in := opt.In()
+		out := opt.Out()
+		if !p.valueKnown(in) {
+			return false
+		}
+		pointer, inIsPointer := p.typeTable[in].(typing.Pointer)
+		if !inIsPointer {
+			return false
+		}
+		record, pointerToStruct := pointer.ToWhat.(*typing.StructRecord)
+		if !pointerToStruct {
+			return false
+		}
+		precomp := &p.precompute[in]
+		fieldName := opt.Extra.(string)
+		offset := record.Members[fieldName].Offset
+		switch precomp.valueType {
+		case pointerRelativeToStackBase:
+			p.precompute[out] = *precomp
+			p.precompute[out].value += int64(offset)
+		case pointerRelativeToVar:
+			rel := p.relativePointers[precomp.value]
+			rel.offset += offset
+			p.relativePointers = append(p.relativePointers, rel)
+			p.precompute[out].valueType = pointerRelativeToVar
+			p.precompute[out].value = int64(len(p.relativePointers) - 1)
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -1313,7 +1361,7 @@ func (p *procGen) prepareEffectiveAddress(pointerVn int) string {
 		precomp := &p.precompute[pointerVn]
 		switch precomp.valueType {
 		case pointerRelativeToStackBase:
-			return fmt.Sprintf("[rbp-%d]", precomp.value)
+			return fmt.Sprintf("[rbp+%d]", precomp.value)
 		case pointerRelativeToVar:
 			rel := &p.relativePointers[precomp.value]
 			p.ensureInRegister(rel.baseVar)
@@ -1335,6 +1383,19 @@ func (p *procGen) loadPointerIntoReg(pointerVn int, reg registerId) {
 		p.issueCommand(fmt.Sprintf("lea %s, %s", p.registers.all[reg].qwordName, effectiveAddress))
 	} else {
 		p.loadRegisterWithVar(reg, pointerVn)
+	}
+}
+
+// @clobber
+func (p *procGen) loadKnownValueIntoReg(vn int, reg registerId) {
+	switch precomp := &p.precompute[vn]; precomp.valueType {
+	case integer:
+		regName := p.registers.all[reg].qwordName
+		p.issueCommand(fmt.Sprintf("mov %s, %d", regName, precomp.value))
+	case pointerRelativeToVar, pointerRelativeToStackBase:
+		p.loadPointerIntoReg(vn, reg)
+	default:
+		panic("ice: don't know how put precomputed type " + precomp.valueType.String() + " into a register")
 	}
 }
 
@@ -1443,7 +1504,7 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 	case ir.ShortJumpIfTrue:
 		// The difference between short jumps and normal jumps is that for short jumps,
 		// the jump target is within the same source line and is somewhere ahead in the ir list.
-		// This guarentees between the short jump and the target, there is no mutation of
+		// This guarentees that between the short jump and the target, there is no mutation of
 		// named variables. Since nothing user-visible is changed, we can safely skip over all
 		// the insts in between if we know the condition at compile time.
 		if p.getPrecomputedValue(opt.ReadOperand) != 0 {
@@ -1496,8 +1557,17 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 			destOperand := p.prepareEffectiveAddress(target)
 			prefix := prefixForSize(pointedToSize)
 			if p.valueKnown(data) {
-				precompValue := p.getPrecomputedValue(data)
-				p.issueCommand(fmt.Sprintf("mov %s %s, %d", prefix, destOperand, precompValue))
+				switch precomp := &p.precompute[data]; precomp.valueType {
+				case integer:
+					precompValue := p.getPrecomputedValue(data)
+					p.issueCommand(fmt.Sprintf("mov %s %s, %d", prefix, destOperand, precompValue))
+				case pointerRelativeToVar, pointerRelativeToStackBase:
+					tmpReg := p.findOrMakeFreeReg()
+					p.loadPointerIntoReg(data, tmpReg)
+					p.issueCommand(fmt.Sprintf("mov %s %s, %s", prefix, destOperand, p.registers.all[tmpReg].qwordName))
+				default:
+					panic("don't know how to do an indirect write with precomputed type " + precomp.valueType.String())
+				}
 			} else {
 				p.ensureInRegister(data)
 				// TODO sign extend here
@@ -1518,8 +1588,31 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 			p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
 			p.issueCommand("call _intrinsic_memcpy")
 		}
+	case ir.StructMemberPtr:
+		out := opt.Out()
+		in := opt.In()
+		pointer, isPointer := p.typeTable[in].(typing.Pointer)
+		_, isPointerToString := pointer.ToWhat.(typing.String)
+		if !isPointer || !isPointerToString {
+			// The only case where we can't keep doing precomputation is when we have a *string.
+			// We only get here if we can't keep doing precomputation
+			panic("ice: asked to generate member pointer of precomputed " + p.typeTable[in].Rep())
+		}
+
+		p.swapStackBoundVars()
+		p.ensureInRegister(out)
+		effectiveAddress := p.prepareEffectiveAddress(in)
+		outReg := p.registerOf(out)
+		fieldName := opt.Extra.(string)
+		p.issueCommand(fmt.Sprintf("mov %s, qword %s", outReg.qwordName, effectiveAddress))
+		switch fieldName {
+		case "data":
+			p.issueCommand(fmt.Sprintf("add %s, 8", outReg.qwordName))
+		case "length":
+			// string is a pointer to the length, so we are done.
+		}
 	default:
-		panic("ice: unknown inst trying to use a precomputed value")
+		panic("ice: unknown inst trying to use a precomputed value " + opt.Type.String())
 	}
 }
 
