@@ -300,7 +300,7 @@ func Dump(insts []Inst) {
 		case Call:
 			extra := opt.Extra.(CallExtra)
 			fmt.Printf(" %s %v", extra.Name, extra.ArgVars)
-		case Label, Jump, JumpIfTrue, JumpIfFalse, StartProc:
+		case Label, Jump, JumpIfTrue, JumpIfFalse, StartProc, PeelStruct, StructMemberPtr:
 			fmt.Printf(" %v", opt.Extra)
 		case AssignImm, OptionSelectStart, OutsideLoopMutations, OptionEnd:
 			fmt.Printf(" (%v)", opt.Extra)

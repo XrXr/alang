@@ -975,7 +975,7 @@ func (p *procGen) genReturn(optIdx int, opt ir.Inst) {
 	if len(returnExtra.Values) > 0 {
 		retVar := returnExtra.Values[0]
 		if p.valueKnown(retVar) {
-			p.issueCommand(fmt.Sprintf("mov rax, %d", p.getPrecomputedValue(retVar)))
+			p.loadKnownValueIntoReg(retVar, rax)
 		} else if p.varPerfectRegSize(retVar) {
 			p.loadRegisterWithVar(rax, retVar)
 			if returnType.Size() > p.sizeof(retVar) {
@@ -1051,6 +1051,47 @@ func (p *procGen) genTakeAddress(optIdx int, opt ir.Inst) {
 	p.precompute[out].value = -int64(p.varStorage[in].rbpOffset)
 }
 
+func (p *procGen) addRelativePointer(baseVar int, offset int) int64 {
+	rel := relativePointer{baseVar: baseVar, offset: offset}
+	p.relativePointers = append(p.relativePointers, rel)
+	length := len(p.relativePointers)
+	return int64(length - 1)
+}
+
+func (p *procGen) arrayToPointer(optIdx int, opt ir.Inst) {
+	in := opt.In()
+	out := opt.Out()
+	if p.precompute[out].precomputedOnce && !p.valueKnown(out) {
+		panic("ice: re-precompute by outputting from ir.ArrayToPointer")
+	}
+	if p.valueKnown(in) {
+		precomp := p.precompute[in]
+		switch precomp.valueType {
+		case pointerRelativeToVar:
+			rel := p.relativePointers[precomp.value]
+			p.precompute[out].valueType = pointerRelativeToVar
+			p.precompute[out].value = p.addRelativePointer(rel.baseVar, rel.offset)
+			p.precompute[out].precomputedOnce = true
+		case pointerRelativeToStackBase:
+			p.precompute[out] = precomp
+		default:
+			panic("ice: can convert precomputed array to data pointer. Value type: " + precomp.valueType.String())
+		}
+	} else {
+		switch p.typeTable[in].(type) {
+		case typing.Pointer:
+			p.precompute[out].valueType = pointerRelativeToVar
+			p.precompute[out].value = p.addRelativePointer(in, 0)
+			p.precompute[out].precomputedOnce = true
+		default:
+			p.ensureStackOffsetValid(in)
+			p.precompute[out].valueType = pointerRelativeToStackBase
+			p.precompute[out].value = -int64(p.varStorage[in].rbpOffset)
+			p.precompute[out].precomputedOnce = true
+		}
+	}
+}
+
 func (p *procGen) evalCompare(opt *ir.Inst) int64 {
 	extra := opt.Extra.(ir.CompareExtra)
 	leftValue := p.getPrecomputedValue(opt.ReadOperand)
@@ -1123,16 +1164,34 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 		p.dontSwap[i] = false
 	}
 
-	if opt.Type == ir.TakeAddress {
+	switch opt.Type {
+	case ir.TakeAddress:
 		p.genTakeAddress(optIdx, opt)
 		return
+	case ir.ArrayToPointer:
+		p.arrayToPointer(optIdx, opt)
+		return
+	case ir.OutsideLoopMutations, ir.OutOfScopeMutations:
+		for _, vn := range *opt.Extra.(*[]int) {
+			stopPrecomputingIfNeeded(vn)
+		}
+		return
+	case ir.OptionSelectStart:
+		p.startOptionSelect(optIdx, opt)
+		return
+	case ir.OptionEnd:
+		p.genOptionEnd(optIdx, opt)
+		return
+	case ir.OptionSelectEnd:
+		p.endOptionSelect()
+		return
 	}
+
 	if opt.Type == ir.IndirectLoad && p.valueKnown(opt.Out()) {
 		// A special case. Even if we know both operands at copmile time,
 		// we need to stop precomputing the output var.
 		p.stopPrecomputingAndMaterialize(opt.Out())
 	}
-
 	mut := ir.FindMutationVar(&opt)
 	var allInputsKnown, anyVarKnown bool
 	varStat := func() {
@@ -1154,20 +1213,6 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 		varStat()
 	}
 	switch opt.Type {
-	case ir.OutsideLoopMutations, ir.OutOfScopeMutations:
-		for _, vn := range *opt.Extra.(*[]int) {
-			stopPrecomputingIfNeeded(vn)
-		}
-		return
-	case ir.OptionSelectStart:
-		p.startOptionSelect(optIdx, opt)
-		return
-	case ir.OptionEnd:
-		p.genOptionEnd(optIdx, opt)
-		return
-	case ir.OptionSelectEnd:
-		p.endOptionSelect()
-		return
 	case ir.AssignImm:
 		p.genAssignImm(optIdx, opt)
 		return
@@ -1179,7 +1224,8 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 		return
 	}
 
-	if allInputsKnown {
+	// PeelStruct and StructMemberPointer  can work even when the input is a runtime value
+	if allInputsKnown || opt.Type == ir.PeelStruct || opt.Type == ir.StructMemberPtr {
 		if p.doPrecomputaion(optIdx, opt) {
 			return
 		}
@@ -1222,10 +1268,14 @@ func (p *procGen) generate() {
 
 	// backendDebug(framesize, p.typeTable)
 	for optIdx, opt := range p.block.Opts {
+		if opt.GeneratedFrom != nil && opt.GeneratedFrom.GetLineNumber() == 26 {
+			p.issueCommand("; line 26")
+
+		}
 		// fmt.Println("doing ir line", optIdx)
 		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
-		// p.trace(31)
+		// p.trace(23)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -1281,13 +1331,16 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		right := opt.Right()
 		p.precompute[left] = p.precompute[right]
 	case ir.Add:
-		precomp := &p.precompute[opt.Left()]
-		rightValue := p.getPrecomputedValue(opt.Right())
+		left := opt.Left()
+		right := opt.Right()
+		precomp := &p.precompute[left]
+		rightValue := p.getPrecomputedValue(right)
 		switch precomp.valueType {
 		case integer:
 			precomp.value += rightValue
 		case pointerRelativeToVar, pointerRelativeToStackBase:
-			delta := int64(p.sizeof(opt.Left())) * rightValue
+			pointedToSize := p.typeTable[left].(typing.Pointer).ToWhat.Size()
+			delta := int64(pointedToSize) * rightValue
 			if precomp.valueType == pointerRelativeToStackBase {
 				precomp.value += delta
 			} else {
@@ -1325,12 +1378,22 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		p.precompute[opt.Left()].value &= p.getPrecomputedValue(opt.Right())
 	case ir.Or:
 		p.precompute[opt.Left()].value |= p.getPrecomputedValue(opt.Right())
+	case ir.PeelStruct:
+		in := opt.In()
+		fieldName := opt.Extra.(string)
+		switch inType := p.typeTable[in].(type) {
+		case typing.Pointer:
+			record := inType.ToWhat.(*typing.StructRecord)
+			_, memberIsPointer := record.Members[fieldName].Type.(typing.Pointer)
+			// If it's a pointer we would need to deference it. Can't do that at compile time.
+			if memberIsPointer {
+				return false
+			}
+		}
+		fallthrough
 	case ir.StructMemberPtr:
 		in := opt.In()
 		out := opt.Out()
-		if !p.valueKnown(in) {
-			return false
-		}
 		pointer, inIsPointer := p.typeTable[in].(typing.Pointer)
 		if !inIsPointer {
 			return false
@@ -1339,19 +1402,25 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		if !pointerToStruct {
 			return false
 		}
-		precomp := &p.precompute[in]
 		fieldName := opt.Extra.(string)
-		offset := record.Members[fieldName].Offset
+		memberOffset := record.Members[fieldName].Offset
+		precomp := p.precompute[in]
 		switch precomp.valueType {
-		case pointerRelativeToStackBase:
-			p.precompute[out] = *precomp
-			p.precompute[out].value += int64(offset)
 		case pointerRelativeToVar:
 			rel := p.relativePointers[precomp.value]
-			rel.offset += offset
-			p.relativePointers = append(p.relativePointers, rel)
 			p.precompute[out].valueType = pointerRelativeToVar
-			p.precompute[out].value = int64(len(p.relativePointers) - 1)
+			p.precompute[out].value = p.addRelativePointer(rel.baseVar, rel.offset+memberOffset)
+			p.precompute[out].precomputedOnce = true
+			return true
+		case pointerRelativeToStackBase:
+			p.precompute[out].valueType = pointerRelativeToStackBase
+			p.precompute[out].value = precomp.value + int64(memberOffset)
+			p.precompute[out].precomputedOnce = true
+			return true
+		case notKnownAtCompileTime:
+			p.precompute[out].valueType = pointerRelativeToVar
+			p.precompute[out].value = p.addRelativePointer(in, memberOffset)
+			p.precompute[out].precomputedOnce = true
 			return true
 		default:
 			return false
@@ -1362,23 +1431,27 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 	return true
 }
 
-func (p *procGen) prepareEffectiveAddress(pointerVn int) string {
+func (p *procGen) prepareEffectiveAddressWithOffset(pointerVn int, additonalOffset int) string {
 	if p.valueKnown(pointerVn) {
 		precomp := &p.precompute[pointerVn]
 		switch precomp.valueType {
 		case pointerRelativeToStackBase:
-			return fmt.Sprintf("[rbp+%d]", precomp.value)
+			return fmt.Sprintf("[rbp+%d]", precomp.value+int64(additonalOffset))
 		case pointerRelativeToVar:
 			rel := &p.relativePointers[precomp.value]
 			p.ensureInRegister(rel.baseVar)
-			return fmt.Sprintf("[%s+%d]", p.registerOf(rel.baseVar).qwordName, rel.offset)
+			return fmt.Sprintf("[%s+%d]", p.registerOf(rel.baseVar).qwordName, rel.offset+additonalOffset)
 		default:
 			panic("ice: unknown precomp pointer type")
 		}
 	} else {
 		p.ensureInRegister(pointerVn)
-		return fmt.Sprintf("[%s]", p.registerOf(pointerVn).qwordName)
+		return fmt.Sprintf("[%s+%d]", p.registerOf(pointerVn).qwordName, additonalOffset)
 	}
+}
+
+func (p *procGen) prepareEffectiveAddress(pointerVn int) string {
+	return p.prepareEffectiveAddressWithOffset(pointerVn, 0)
 }
 
 // @clobbber
@@ -1607,7 +1680,29 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 		case "length":
 			// string is a pointer to the length, so we are done.
 		}
+	case ir.PeelStruct:
+		in := opt.In()
+		out := opt.Out()
+		if !p.valueKnown(in) {
+			panic("ice: ask to partial generate an ir.PeelStruct but input is not known")
+		}
+		pointer, isPointer := p.typeTable[in].(typing.Pointer)
+		if !isPointer {
+			// The only case where we can't keep doing precomputation is when we need to dereference
+			panic("ice: precompute-generate peeling a non pointer. Can only handle precomputed pointers")
+		}
+		fieldName := opt.Extra.(string)
+		record := pointer.ToWhat.(*typing.StructRecord)
+		member := record.Members[fieldName]
+		if _, memberIsPointer := member.Type.(typing.Pointer); !memberIsPointer {
+			panic("ice: genInstPartialKnown asked to peel a struct by doing anything but dereferencing")
+		}
+		offset := member.Offset
+		outReg := p.ensureInRegister(out)
+		effectiveAddress := p.prepareEffectiveAddressWithOffset(in, offset)
+		p.issueCommand(fmt.Sprintf("mov %s, qword %s", p.registers.all[outReg].qwordName, effectiveAddress))
 	default:
+		println(opt.GeneratedFrom.GetLineNumber())
 		panic("ice: unknown inst trying to use a precomputed value " + opt.Type.String())
 	}
 }
@@ -1976,6 +2071,10 @@ func (p *procGen) trace(vn int) {
 	}
 	if p.valueKnown(vn) {
 		fmt.Printf("var %d has compile time value %d\n", vn, p.getPrecomputedValue(vn))
+		if p.precompute[vn].valueType == pointerRelativeToVar {
+			rel := p.relativePointers[p.precompute[vn].value]
+			fmt.Printf("    relative to %d, offset %d\n", rel.baseVar, rel.offset)
+		}
 	} else {
 		fmt.Fprintf(p.out.buffer, "\t\t\t;%s\n", p.varInfoString(vn))
 	}
