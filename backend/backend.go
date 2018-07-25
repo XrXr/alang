@@ -1262,12 +1262,12 @@ func (p *procGen) generate() {
 
 	// backendDebug(framesize, p.typeTable)
 	for optIdx, opt := range p.block.Opts {
-		if opt.GeneratedFrom != nil && opt.GeneratedFrom.GetLineNumber() == 26 {
-			p.issueCommand("; line 26")
+		// if opt.GeneratedFrom != nil && opt.GeneratedFrom.GetLineNumber() == 26 {
+		// 	p.issueCommand("; line 26")
 
-		}
+		// }
 		// fmt.Println("doing ir line", optIdx)
-		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
 		// p.trace(23)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])

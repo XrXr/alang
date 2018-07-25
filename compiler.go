@@ -274,7 +274,7 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 		}
 		out := <-workOrder.Out
 		_ = ir.Dump
-		// ir.Dump(out.Opts)
+		ir.Dump(out.Opts)
 		frontend.Prune(&out)
 		ir.Dump(out.Opts)
 		// parsing.Dump(env)
