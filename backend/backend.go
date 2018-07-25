@@ -513,9 +513,11 @@ func (p *procGen) allocateRuntimeStorage(vn int) {
 	}
 }
 
-func (p *procGen) morphToState(targetState *fullVarState) {
+// rearrage varaible storage according to a fullVarState, return whether morphing generated any instructions.
+func (p *procGen) morphToState(targetState *fullVarState) bool {
 	backup := p.fullVarState.copyVarState()
 	p.noNewStackStorage = true
+	generationHappened := false
 morph:
 	for regId, reg := range targetState.registers.all {
 		theirOccupiedBy := reg.occupiedBy
@@ -533,20 +535,24 @@ morph:
 				p.releaseRegister(registerId(regId))
 			} else if targetState.inRegister(ourOccupiedBy) {
 				p.loadRegisterWithVar(targetState.varStorage[ourOccupiedBy].currentRegister, ourOccupiedBy)
+				generationHappened = true
 			} else if targetState.hasStackStorage(ourOccupiedBy) {
 				p.varStorage[ourOccupiedBy].rbpOffset = targetState.varStorage[ourOccupiedBy].rbpOffset
 				p.memRegCommand("mov", ourOccupiedBy, ourOccupiedBy)
 				p.releaseRegister(registerId(regId))
+				generationHappened = true
 			} else {
-				panic("this should be exhaustive")
+				panic("ice: this should be exhaustive")
 			}
 		}
 		if theirOccupiedBy != invalidVn && !p.varStorage[theirOccupiedBy].decommissioned {
 			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
+			generationHappened = true
 		}
 	}
 	p.noNewStackStorage = false
 	p.fullVarState = backup
+	return generationHappened
 }
 
 // return the register of extendee sized to sizingVar
@@ -664,15 +670,38 @@ func (p *procGen) varVarCopy(dest int, source int) {
 func (p *procGen) conditionalJump(jumpInst ir.Inst) {
 	label := jumpInst.Extra.(string)
 	targetState := p.labelToState[label]
-	nojump := p.genLabel(".nojump")
-	if jumpInst.Type == ir.JumpIfFalse || jumpInst.Type == ir.ShortJumpIfFalse {
-		p.issueCommand(fmt.Sprintf("jnz %s", nojump))
-	} else if jumpInst.Type == ir.JumpIfTrue || jumpInst.Type == ir.ShortJumpIfTrue {
-		p.issueCommand(fmt.Sprintf("jz %s", nojump))
+	// insert a new block
+	originalOut := p.out
+	originalNext := p.out.next
+	p.switchToNewOutBlock()
+	p.out.next = originalNext
+	generatedCode := p.morphToState(targetState)
+	if generatedCode {
+		morphCodeOut := p.out
+		p.out = originalOut
+		nojump := p.genLabel(".nojump")
+		var format string
+		// we have to do state morphing before we jump so we test for the reverse condition
+		if jumpInst.Type == ir.JumpIfFalse || jumpInst.Type == ir.ShortJumpIfFalse {
+			format = "jnz %s"
+		} else if jumpInst.Type == ir.JumpIfTrue || jumpInst.Type == ir.ShortJumpIfTrue {
+			format = "jz %s"
+		}
+		p.issueCommand(fmt.Sprintf(format, nojump))
+		p.out = morphCodeOut
+		p.issueCommand(fmt.Sprintf("jmp .%s", label))
+		fmt.Fprintf(p.out.buffer, "%s:\n", nojump)
+	} else {
+		p.out = originalOut
+		originalOut.next = originalNext
+		var format string
+		if jumpInst.Type == ir.JumpIfFalse || jumpInst.Type == ir.ShortJumpIfFalse {
+			format = "jz .%s"
+		} else if jumpInst.Type == ir.JumpIfTrue || jumpInst.Type == ir.ShortJumpIfTrue {
+			format = "jnz .%s"
+		}
+		p.issueCommand(fmt.Sprintf(format, label))
 	}
-	p.morphToState(targetState)
-	p.issueCommand(fmt.Sprintf("jmp .%s", label))
-	fmt.Fprintf(p.out.buffer, "%s:\n", nojump)
 }
 
 func (p *procGen) jump(jumpInst *ir.Inst) {

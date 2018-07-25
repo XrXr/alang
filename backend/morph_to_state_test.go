@@ -1,11 +1,15 @@
 package backend
 
+// for all of these test cases, we create as many variables as there are registers,
+// assign values to them, morph to a new state, and thne expect the values to have
+// stayed the same
+
 import (
 	"bytes"
 	"fmt"
 	"github.com/XrXr/alang/library"
 	"github.com/XrXr/alang/typing"
-	// "io/ioutil"
+	_ "io/ioutil"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -13,6 +17,8 @@ import (
 	"testing"
 	"time"
 )
+
+var fixture []byte
 
 func (p *procGen) saveAllRegisters() {
 	for _, reg := range p.registers.all {
@@ -27,7 +33,7 @@ func (p *procGen) restoreAllRegisters() {
 	}
 }
 
-func test(t *testing.T, currentState, targetState *fullVarState) {
+func test(t *testing.T, currentState, targetState *fullVarState, expectedReturn bool) {
 	typer := typing.NewTyper()
 	asm, err := os.Create("a.asm")
 	if err != nil {
@@ -53,7 +59,10 @@ func test(t *testing.T, currentState, targetState *fullVarState) {
 		gen.issueCommand(fmt.Sprintf("mov %s, %d", gen.varOperand(i), i))
 	}
 	gen.issueCommand("; morph")
-	gen.morphToState(targetState)
+	ret := gen.morphToState(targetState)
+	if expectedReturn != ret {
+		t.Errorf("morphToState expected to return %t but returned %t", expectedReturn, ret)
+	}
 	gen.fullVarState = targetState
 	for i := 0; i < int(numRegisters); i++ {
 		gen.issueCommand(fmt.Sprintf("; printing var %d", i))
@@ -92,11 +101,7 @@ func test(t *testing.T, currentState, targetState *fullVarState) {
 	if err != nil {
 		t.Fatal("call to executable failed to finish")
 	}
-	var fixture []byte
-	for i := 0; i < int(numRegisters); i++ {
-		fixture = append(fixture, strconv.Itoa(i)...)
-		fixture = append(fixture, '\n')
-	}
+
 	if !bytes.Equal(output, fixture) {
 		t.Fatal("output from the binary is incorrect")
 	}
@@ -120,7 +125,7 @@ func TestFullRegToFullReg(t *testing.T) {
 		targetState.allocateRegToVar(registerId(regId), vn)
 	}
 	logState(t, targetState)
-	test(t, currentState, targetState)
+	test(t, currentState, targetState, true)
 }
 
 func TestRegToStack(t *testing.T) {
@@ -145,7 +150,7 @@ func TestRegToStack(t *testing.T) {
 	}
 	logState(t, currentState)
 	logState(t, targetState)
-	test(t, currentState, targetState)
+	test(t, currentState, targetState, true)
 }
 
 func TestStackToReg(t *testing.T) {
@@ -171,10 +176,33 @@ func TestStackToReg(t *testing.T) {
 	}
 	logState(t, currentState)
 	logState(t, targetState)
-	test(t, currentState, targetState)
+	test(t, currentState, targetState, true)
+}
+
+func TestNoOp(t *testing.T) {
+	currentState := newFullVarState(int(numRegisters))
+	targetState := newFullVarState(int(numRegisters))
+	for i := 0; i < int(numRegisters)/2; i++ {
+		currentState.allocateRegToVar(registerId(i), i)
+		targetState.allocateRegToVar(registerId(i), i)
+	}
+
+	offset := 8
+	for i := int(numRegisters) / 2; i < int(numRegisters); i++ {
+		currentState.varStorage[i].rbpOffset = offset
+		targetState.varStorage[i].rbpOffset = offset
+		offset += 8
+	}
+	logState(t, currentState)
+	logState(t, targetState)
+	test(t, currentState, targetState, false)
 }
 
 func TestMain(m *testing.M) {
 	rand.Seed(time.Now().UnixNano())
+	for i := 0; i < int(numRegisters); i++ {
+		fixture = append(fixture, strconv.Itoa(i)...)
+		fixture = append(fixture, '\n')
+	}
 	os.Exit(m.Run())
 }
