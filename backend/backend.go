@@ -1350,7 +1350,7 @@ func (p *procGen) generate() {
 		// fmt.Println("doing ir line", optIdx)
 		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
-		// p.trace(31)
+		// p.trace(23)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -1460,51 +1460,71 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		in := opt.In()
 		fieldName := opt.Extra.(string)
 		switch inType := p.typeTable[in].(type) {
+		case *typing.StructRecord:
+			_, memberIsPointer := inType.Members[fieldName].Type.(typing.Pointer)
+			// If it's a pointer we would need to do a load
+			if memberIsPointer {
+				return false
+			}
 		case typing.Pointer:
 			record := inType.ToWhat.(*typing.StructRecord)
 			_, memberIsPointer := record.Members[fieldName].Type.(typing.Pointer)
-			// If it's a pointer we would need to deference it. Can't do that at compile time.
+			// If it's a pointer we would need to deference in. Can't do that at compile time.
 			if memberIsPointer {
 				return false
 			}
 		}
 		fallthrough
 	case ir.StructMemberPtr:
+		// as a special case, we can get here even if we don't know the value of in
 		in := opt.In()
 		out := opt.Out()
-		pointer, inIsPointer := p.typeTable[in].(typing.Pointer)
-		if !inIsPointer {
-			println("in not a pointer can't precomp")
-			return false
-		}
-		record, pointerToStruct := pointer.ToWhat.(*typing.StructRecord)
-		if !pointerToStruct {
-			println("in not a pointer to struct")
-			return false
-		}
-		fieldName := opt.Extra.(string)
-		memberOffset := record.Members[fieldName].Offset
-		precomp := p.precompute[in]
-		switch precomp.valueType {
-		case pointerRelativeToVar:
-			rel := p.relativePointers[precomp.value]
-			p.precompute[out].valueType = pointerRelativeToVar
-			p.precompute[out].value = p.addRelativePointer(rel.baseVar, rel.offset+memberOffset)
-			p.precompute[out].precomputedOnce = true
-			return true
-		case pointerRelativeToStackBase:
+		switch inType := p.typeTable[in].(type) {
+		case *typing.StructRecord:
+			p.ensureStackOffsetValid(in)
+			fieldName := opt.Extra.(string)
+			memberOffset := inType.Members[fieldName].Offset
 			p.precompute[out].valueType = pointerRelativeToStackBase
-			p.precompute[out].value = precomp.value + int64(memberOffset)
+			p.precompute[out].value = int64(-p.varStorage[in].rbpOffset + memberOffset)
 			p.precompute[out].precomputedOnce = true
 			return true
-		case notKnownAtCompileTime:
-			p.precompute[out].valueType = pointerRelativeToVar
-			p.precompute[out].value = p.addRelativePointer(in, memberOffset)
-			p.precompute[out].precomputedOnce = true
-			return true
-		default:
-			return false
+		case typing.String:
+			fieldName := opt.Extra.(string)
+			if fieldName == "length" {
+				p.precompute[out].valueType = pointerRelativeToVar
+				p.precompute[out].value = p.addRelativePointer(in, 0)
+				p.precompute[out].precomputedOnce = true
+				return true
+			}
+		case typing.Pointer:
+			record, pointerToStruct := inType.ToWhat.(*typing.StructRecord)
+			if !pointerToStruct {
+				println("in not a pointer to struct", inType.Rep())
+				return false
+			}
+			fieldName := opt.Extra.(string)
+			memberOffset := record.Members[fieldName].Offset
+			precomp := p.precompute[in]
+			switch precomp.valueType {
+			case pointerRelativeToVar:
+				rel := p.relativePointers[precomp.value]
+				p.precompute[out].valueType = pointerRelativeToVar
+				p.precompute[out].value = p.addRelativePointer(rel.baseVar, rel.offset+memberOffset)
+				p.precompute[out].precomputedOnce = true
+				return true
+			case pointerRelativeToStackBase:
+				p.precompute[out].valueType = pointerRelativeToStackBase
+				p.precompute[out].value = precomp.value + int64(memberOffset)
+				p.precompute[out].precomputedOnce = true
+				return true
+			case notKnownAtCompileTime:
+				p.precompute[out].valueType = pointerRelativeToVar
+				p.precompute[out].value = p.addRelativePointer(in, memberOffset)
+				p.precompute[out].precomputedOnce = true
+				return true
+			}
 		}
+		return false
 	default:
 		return false
 	}
