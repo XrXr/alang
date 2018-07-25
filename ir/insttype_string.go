@@ -4,9 +4,9 @@ package ir
 
 import "strconv"
 
-const _InstType_name = "ZeroVarInstructionsReturnTranscludeJumpStartProcEndProcLabelOutsideLoopMutationsOutOfScopeMutationsOptionSelectStartOptionEndOptionSelectEndMutateOnlyInstructionsCallAssignImmIncrementDecrementReadOnlyInstructionsJumpIfTrueJumpIfFalseShortJumpIfTrueShortJumpIfFalseCompareReadAndMutateInstructionsAssignTakeAddressArrayToPointerIndirectWriteIndirectLoadStructMemberPtrPeelStructNotTwoOperandUpdateInstructionsAddSubMultDivAndOr"
+const _InstType_name = "ZeroVarInstructionsReturnTranscludeJumpStartProcEndProcLabelOutsideLoopMutationsOutOfScopeMutationsOptionSelectStartOptionEndOptionSelectEndLoopEndMutateOnlyInstructionsCallAssignImmIncrementDecrementReadOnlyInstructionsJumpIfTrueJumpIfFalseShortJumpIfTrueShortJumpIfFalseCompareReadAndMutateInstructionsAssignTakeAddressArrayToPointerIndirectWriteIndirectLoadStructMemberPtrPeelStructNotTwoOperandUpdateInstructionsAddSubMultDivAndOr"
 
-var _InstType_index = [...]uint16{0, 19, 25, 35, 39, 48, 55, 60, 80, 99, 116, 125, 140, 162, 166, 175, 184, 193, 213, 223, 234, 249, 265, 272, 297, 303, 314, 328, 341, 353, 368, 378, 381, 409, 412, 415, 419, 422, 425, 427}
+var _InstType_index = [...]uint16{0, 19, 25, 35, 39, 48, 55, 60, 80, 99, 116, 125, 140, 147, 169, 173, 182, 191, 200, 220, 230, 241, 256, 272, 279, 304, 310, 321, 335, 348, 360, 375, 385, 388, 416, 419, 422, 426, 429, 432, 434}
 
 func (i InstType) String() string {
 	if i < 0 || i >= InstType(len(_InstType_index)-1) {

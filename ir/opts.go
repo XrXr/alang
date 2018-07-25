@@ -23,6 +23,7 @@ const (
 	OptionSelectStart
 	OptionEnd
 	OptionSelectEnd
+	LoopEnd
 
 	MutateOnlyInstructions
 

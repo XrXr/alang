@@ -216,6 +216,7 @@ type procGen struct {
 	skipUntilLabel            string
 	currentLineVarUsage       map[int]bool
 	currentLineIdx            int
+	preLoopVarState           []*fullVarState
 	// info for compile time evaluation
 	precompute             []precomputeInfo
 	relativePointers       []relativePointer
@@ -1122,6 +1123,10 @@ func (p *procGen) evalCompare(opt *ir.Inst) int64 {
 	}
 }
 
+func (p *procGen) startLoop() {
+	p.preLoopVarState = append(p.preLoopVarState, p.copyVarState())
+}
+
 func (p *procGen) valueKnown(vn int) bool {
 	return p.precompute[vn].valueType != notKnownAtCompileTime
 }
@@ -1209,10 +1214,18 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	case ir.ArrayToPointer:
 		p.arrayToPointer(optIdx, opt)
 		return
-	case ir.OutsideLoopMutations, ir.OutOfScopeMutations:
+	case ir.OutOfScopeMutations, ir.OutsideLoopMutations:
 		for _, vn := range *opt.Extra.(*[]int) {
 			stopPrecomputingIfNeeded(vn)
 		}
+		if opt.Type == ir.OutsideLoopMutations {
+			// We need to do this after we materialize any precomputed var
+			// because we restore var storage state after the loop ends.
+			// If we don't include those vars in the backup we would clobber them
+			p.startLoop()
+		}
+		return
+	case ir.LoopEnd:
 		return
 	case ir.OptionSelectStart:
 		p.startOptionSelect(optIdx, opt)
@@ -1302,7 +1315,7 @@ func (p *procGen) generate() {
 		// fmt.Println("doing ir line", optIdx)
 		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
-		// p.trace(14)
+		// p.trace(31)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -1872,9 +1885,20 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 		label := opt.Extra.(string)
 		fmt.Fprintf(p.out.buffer, ".%s:\n", label)
 		if _, alreadyThere := p.labelToState[label]; alreadyThere {
-			panic("same label issued twice")
+			panic("ice: same label issued twice")
 		}
-		p.labelToState[label] = p.copyVarState()
+		if optIdx > 0 && p.block.Opts[optIdx-1].Type == ir.LoopEnd {
+			length := len(p.preLoopVarState)
+			preLoopState := p.preLoopVarState[length-1]
+			p.preLoopVarState = p.preLoopVarState[:length-1]
+			p.labelToState[label] = preLoopState
+			// Since we always jump to this label and never reach it in normal execution order,
+			// this is safe to do. (There is a jmp loop_head at the end of every loop) Everyone
+			// who jumps to here will morph into the var state we had before we entered the loop
+			p.fullVarState = preLoopState.copyVarState()
+		} else {
+			p.labelToState[label] = p.copyVarState()
+		}
 	case ir.StartProc:
 		fmt.Fprintf(p.out.buffer, "proc_%s:\n", opt.Extra.(string))
 		p.issueCommand("push rbp")

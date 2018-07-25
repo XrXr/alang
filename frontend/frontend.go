@@ -149,11 +149,11 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			scope.addOpt(ir.MakeReadOnlyInst(ir.JumpIfFalse, condVar, pastBlock))
 			i = genForProcSubSection(labelGen, order, scope, i)
 			scope.addOpt(ir.Inst{Type: ir.OptionEnd, Extra: mutations})
-			scope.addOpt(labelInst(pastBlock))
 			*optionSelectAllOutOfScopeMutations = append(*optionSelectAllOutOfScopeMutations, *mutations...)
 			if _, doingElseNext := (*order.In[i]).(parsing.ElseNode); !doingElseNext {
 				finishOptionSelect()
 			}
+			scope.addOpt(labelInst(pastBlock))
 		case parsing.ElseNode:
 			if !sawIfLastIter {
 				panic("ice: bare else. Should've been caught by the parser")
@@ -167,10 +167,10 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 
 			scope.addOpt(elseLabel)
 			i = genForProcSubSection(labelGen, order, scope, i)
-			scope.addOpt(ir.Inst{Type: ir.OptionEnd, Extra: mutations})
-			scope.addOpt(labelInst(endOfTree))
 			*optionSelectAllOutOfScopeMutations = append(*optionSelectAllOutOfScopeMutations, *mutations...)
+			scope.addOpt(ir.Inst{Type: ir.OptionEnd, Extra: mutations})
 			finishOptionSelect()
+			scope.addOpt(labelInst(endOfTree))
 		case parsing.Loop:
 			outsideLoopMutations := &[]int{}
 			loopStart := labelGen.GenLabel("loop_%d")
@@ -240,13 +240,13 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 			if usingRangeExpr {
 				scope.addOpt(ir.MakeMutateOnlyInst(ir.Increment, iterationVar, nil))
 				scope.addOpt(ir.MakePlainInst(ir.Jump, loopStart))
+				gen.nonTemporaryVars = append(gen.nonTemporaryVars, iterationVar, endVar)
 			} else {
 				scope.addOpt(ir.MakePlainInst(ir.Jump, loopStart))
 			}
+
+			scope.addOpt(ir.MakePlainInst(ir.LoopEnd, nil))
 			scope.addOpt(labelInst(loopEnd))
-			if usingRangeExpr {
-				gen.nonTemporaryVars = append(gen.nonTemporaryVars, iterationVar, endVar)
-			}
 		case parsing.ContinueNode:
 			if scope.loopLabel == "" {
 				panic(parsing.ErrorFromNode(node, "Use of continue outside of a loop"))
