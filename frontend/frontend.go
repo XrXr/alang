@@ -497,6 +497,7 @@ func Prune(block *OptBlock) {
 		count        int
 		firstUseIdx  int
 		secondUseIdx int
+		vn           int
 	}, block.NumberOfVars)
 	for idx, opt := range block.Opts {
 		recordUsage := func(varNum int) {
@@ -507,6 +508,7 @@ func Prune(block *OptBlock) {
 				usageLog[varNum].secondUseIdx = idx
 			}
 			usageLog[varNum].count++
+			usageLog[varNum].vn = varNum
 		}
 		ir.IterOverAllVars(opt, recordUsage)
 	}
@@ -520,7 +522,8 @@ func Prune(block *OptBlock) {
 			continue
 		}
 		genesis := block.Opts[log.firstUseIdx]
-		if log.count == 1 && (genesis.Type == ir.Assign || genesis.Type == ir.AssignImm) {
+		if log.count == 1 && (genesis.Type == ir.Assign || genesis.Type == ir.AssignImm) && log.vn == genesis.Left() {
+			// assigned but not used
 			holes = append(holes, log.firstUseIdx)
 			continue
 		}
