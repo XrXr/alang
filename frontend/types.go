@@ -15,17 +15,19 @@ type ProcWorkOrder struct {
 }
 
 type OptBlock struct {
-	NumberOfVars int
-	NumberOfArgs int
-	Opts         []ir.Inst
+	NumberOfVars     int
+	NumberOfArgs     int
+	Opts             []ir.Inst
+	NonTemporaryVars []int
 }
 
 type procGen struct {
-	opts       []ir.Inst
-	nextVarNum int
-	rootScope  *scope
-	labelGen   *LabelIdGen
-	nodeStack  []*parsing.ASTNode // keep track of what node we are generating for
+	opts             []ir.Inst
+	nextVarNum       int
+	rootScope        *scope
+	labelGen         *LabelIdGen
+	nodeStack        []*parsing.ASTNode // keep track of what node we are generating for
+	nonTemporaryVars []int
 }
 
 func (p *procGen) addOpt(opt ir.Inst) {
@@ -116,5 +118,6 @@ func (s *scope) newNamedVar(name string) int {
 	varNum := s.newVar()
 	// fmt.Println(name, "has vn", varNum)
 	s.varTable[name] = varNum
+	s.gen.nonTemporaryVars = append(s.gen.nonTemporaryVars, varNum)
 	return varNum
 }

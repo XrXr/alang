@@ -213,8 +213,9 @@ type procGen struct {
 	noNewStackStorage         bool // checked by loadRegisterWithVar
 	currentFrameSize          int
 	nextLabelId               int
-	stackBoundVars            []int
 	skipUntilLabel            string
+	currentLineVarUsage       map[int]bool
+	currentLineIdx            int
 	// info for compile time evaluation
 	precompute             []precomputeInfo
 	relativePointers       []relativePointer
@@ -227,8 +228,9 @@ type procGen struct {
 	jumps            []preJumpState
 	labelToState     map[string]*fullVarState
 	// all three below are vn-indexed
-	typeTable []typing.TypeRecord
-	lastUsage []int
+	typeTable      []typing.TypeRecord
+	lastUsage      []int
+	stackBoundVars []int
 }
 
 func (p *procGen) switchToNewOutBlock() {
@@ -406,6 +408,7 @@ func (p *procGen) swapStackBoundVars() {
 
 func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 	if p.varStorage[vn].decommissioned {
+		println(vn)
 		panic(zombieMessage)
 	}
 	switch vnSize := p.sizeof(vn); {
@@ -537,7 +540,7 @@ morph:
 				panic("this should be exhaustive")
 			}
 		}
-		if theirOccupiedBy != invalidVn {
+		if theirOccupiedBy != invalidVn && !p.varStorage[theirOccupiedBy].decommissioned {
 			p.loadRegisterWithVar(registerId(regId), theirOccupiedBy)
 		}
 	}
@@ -1141,6 +1144,37 @@ func (p *procGen) knownStatForOpt(opt ir.Inst) (bool, bool, bool) {
 	return allVarsKnown, anyVarKnown, allInputsKnown
 }
 
+func (p *procGen) scribeVarUsage(vn int) {
+	p.currentLineVarUsage[vn] = true
+}
+
+func (p *procGen) decommissionAllTempVars() {
+	for vn := range p.currentLineVarUsage {
+		delete(p.currentLineVarUsage, vn)
+		dontDecommision := false
+		for _, nonTmp := range p.block.NonTemporaryVars {
+			if nonTmp == vn {
+				dontDecommision = true
+				break
+			}
+		}
+		if !dontDecommision {
+			p.decommission(vn)
+		}
+	}
+}
+
+// Mark a variable as no longer used. It will stop having
+// any storage and and value it had might be clobbered
+func (p *procGen) decommission(vn int) {
+	p.varStorage[vn].decommissioned = true
+	reg := p.varStorage[vn].currentRegister
+	if reg != invalidRegister {
+		p.releaseRegister(reg)
+	}
+	p.varStorage[vn].rbpOffset = 0
+}
+
 func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	if p.skipUntilLabel != "" {
 		if opt.Type == ir.Label && opt.Extra.(string) == p.skipUntilLabel {
@@ -1148,12 +1182,22 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 		}
 		return
 	}
+	if opt.GeneratedFrom != nil {
+		optLineIdx := opt.GeneratedFrom.GetLineNumber()
+		if optLineIdx > p.currentLineIdx {
+			// println("source line", optLineIdx+1)
+			p.decommissionAllTempVars()
+			p.currentLineIdx = optLineIdx
+		}
+	}
+
 	stopPrecomputingIfNeeded := func(vn int) {
 		if stopAt := p.stopPrecomputation[vn]; stopAt == optIdx {
 			p.stopPrecomputingAndMaterialize(vn)
 		}
 	}
 	defer ir.IterOverAllVars(opt, stopPrecomputingIfNeeded)
+	defer ir.IterOverAllVars(opt, p.scribeVarUsage)
 	for i := range p.dontSwap {
 		p.dontSwap[i] = false
 	}
@@ -1229,17 +1273,6 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 		p.genInstPartialKnown(optIdx, opt)
 	} else {
 		p.genInstAllRuntimeVars(optIdx, opt)
-
-		decommissionIfLastUse := func(vn int) {
-			reg := p.varStorage[vn].currentRegister
-			if p.lastUsage[vn] == optIdx {
-				if reg != invalidRegister {
-					p.releaseRegister(reg)
-				}
-				p.varStorage[vn].decommissioned = true
-			}
-		}
-		ir.IterOverAllVars(opt, decommissionIfLastUse)
 	}
 }
 
@@ -1267,9 +1300,9 @@ func (p *procGen) generate() {
 
 		// }
 		// fmt.Println("doing ir line", optIdx)
-		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
-		// p.trace(23)
+		// p.trace(14)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
 	}
 
@@ -2084,7 +2117,9 @@ func (p *procGen) trace(vn int) {
 			fmt.Printf("    relative to %d, offset %d\n", rel.baseVar, rel.offset)
 		}
 	} else {
-		fmt.Fprintf(p.out.buffer, "\t\t\t;%s\n", p.varInfoString(vn))
+		info := p.varInfoString(vn)
+		fmt.Fprintf(p.out.buffer, "\t\t\t;%s\n", info)
+		fmt.Println(info)
 	}
 }
 
@@ -2197,6 +2232,7 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		typer:                     typer,
 		staticDataBuf:             &staticDataBuf,
 		labelToState:              make(map[string]*fullVarState),
+		currentLineVarUsage:       make(map[int]bool),
 		lastUsage:                 findLastusage(block),
 		procRecord:                procRecord,
 		precompute:                make([]precomputeInfo, block.NumberOfVars),

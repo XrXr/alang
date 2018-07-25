@@ -35,7 +35,7 @@ func GenForProc(labelGen *LabelIdGen, order *ProcWorkOrder) {
 		parsing.Dump(gen.nodeStack)
 		panic("ice: nodeStack is not empty after generation has finished")
 	}
-	order.Out <- OptBlock{NumberOfVars: gen.nextVarNum, NumberOfArgs: len(order.ProcDecl.Args), Opts: gen.opts}
+	order.Out <- OptBlock{NumberOfVars: gen.nextVarNum, NumberOfArgs: len(order.ProcDecl.Args), Opts: gen.opts, NonTemporaryVars: gen.nonTemporaryVars}
 	close(order.Out)
 }
 
@@ -244,6 +244,9 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 				scope.addOpt(ir.MakePlainInst(ir.Jump, loopStart))
 			}
 			scope.addOpt(labelInst(loopEnd))
+			if usingRangeExpr {
+				gen.nonTemporaryVars = append(gen.nonTemporaryVars, iterationVar, endVar)
+			}
 		case parsing.ContinueNode:
 			if scope.loopLabel == "" {
 				panic(parsing.ErrorFromNode(node, "Use of continue outside of a loop"))
@@ -608,7 +611,6 @@ func Prune(block *OptBlock) {
 			})
 		}
 	}
-
 	block.NumberOfVars = len(allVarNums) + block.NumberOfArgs
 }
 
