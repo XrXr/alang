@@ -214,7 +214,7 @@ type procGen struct {
 	currentFrameSize          int
 	nextLabelId               int
 	skipUntilLabel            string
-	currentLineVarUsage       map[int]bool
+	currentLineVarUsage       []int
 	currentLineIdx            int
 	preLoopVarState           []*fullVarState
 	// info for compile time evaluation
@@ -822,7 +822,7 @@ func (p *procGen) genAssignImm(optIdx int, opt ir.Inst) {
 		p.issueCommand(fmt.Sprintf("mov %s, %d", p.registerOf(out).qwordName, value))
 	case string:
 		destReg := p.ensureInRegister(out)
-		labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.staticDataBuf))
+		labelName := p.genLabel(fmt.Sprintf("static_string_%p", p.block.Opts))
 		p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[destReg].qwordName, labelName))
 
 		var buf bytes.Buffer
@@ -1179,12 +1179,11 @@ func (p *procGen) knownStatForOpt(opt ir.Inst) (bool, bool, bool) {
 }
 
 func (p *procGen) scribeVarUsage(vn int) {
-	p.currentLineVarUsage[vn] = true
+	p.currentLineVarUsage = append(p.currentLineVarUsage, vn)
 }
 
 func (p *procGen) decommissionAllTempVars() {
-	for vn := range p.currentLineVarUsage {
-		delete(p.currentLineVarUsage, vn)
+	for _, vn := range p.currentLineVarUsage {
 		dontDecommision := false
 		for _, nonTmp := range p.block.NonTemporaryVars {
 			if nonTmp == vn {
@@ -1196,6 +1195,7 @@ func (p *procGen) decommissionAllTempVars() {
 			p.decommission(vn)
 		}
 	}
+	p.currentLineVarUsage = p.currentLineVarUsage[:0]
 }
 
 // Mark a variable as no longer used. It will stop having
@@ -1474,10 +1474,12 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		out := opt.Out()
 		pointer, inIsPointer := p.typeTable[in].(typing.Pointer)
 		if !inIsPointer {
+			println("in not a pointer can't precomp")
 			return false
 		}
 		record, pointerToStruct := pointer.ToWhat.(*typing.StructRecord)
 		if !pointerToStruct {
+			println("in not a pointer to struct")
 			return false
 		}
 		fieldName := opt.Extra.(string)
@@ -2291,7 +2293,6 @@ func X86ForBlock(out io.Writer, block frontend.OptBlock, typeTable []typing.Type
 		typer:                     typer,
 		staticDataBuf:             &staticDataBuf,
 		labelToState:              make(map[string]*fullVarState),
-		currentLineVarUsage:       make(map[int]bool),
 		lastUsage:                 findLastusage(block),
 		procRecord:                procRecord,
 		precompute:                make([]precomputeInfo, block.NumberOfVars),
