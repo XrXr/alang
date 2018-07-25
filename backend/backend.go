@@ -893,7 +893,7 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 				switch argSize {
 				case 8, 4, 2, 1:
 					if p.valueKnown(arg) {
-						p.loadKnownValueIntoReg(arg, tmpReg)
+						p.loadKnownValueIntoRegSized(arg, procRecord.Args[i], tmpReg)
 					} else {
 						p.signOrZeroExtendMovToReg(tmpReg, arg)
 					}
@@ -916,7 +916,7 @@ func (p *procGen) genCall(optIdx int, opt ir.Inst) {
 				reg := paramPassingRegOrder[i]
 				p.loadRegisterWithVar(reg, arg)
 				if p.valueKnown(arg) {
-					p.loadKnownValueIntoReg(arg, reg)
+					p.loadKnownValueIntoRegSized(arg, procRecord.Args[i], reg)
 				} else {
 					if valueSize < procRecord.Args[i].Size() {
 						p.signOrZeroExtendMovToReg(reg, arg)
@@ -1119,12 +1119,6 @@ func (p *procGen) evalCompare(opt *ir.Inst) int64 {
 	}
 }
 
-func (p *procGen) tmpStorageForValue(size int, value int64) string {
-	tmpStackStorage := fmt.Sprintf("%s[rsp-%d]", prefixForSize(size), size)
-	p.issueCommand(fmt.Sprintf("mov %s, %d", tmpStackStorage, value))
-	return tmpStackStorage
-}
-
 func (p *procGen) valueKnown(vn int) bool {
 	return p.precompute[vn].valueType != notKnownAtCompileTime
 }
@@ -1251,7 +1245,7 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 
 func (p *procGen) generate() {
 	{
-		paramOffset := -16
+		paramOffset := -16 - 8*len(preservedRegisters)
 		for i := 0; i < p.block.NumberOfArgs; i++ {
 			regOrder := i
 			if p.callerProvidesReturnSpace {
@@ -1261,7 +1255,7 @@ func (p *procGen) generate() {
 				p.loadRegisterWithVar(paramPassingRegOrder[regOrder], i)
 			} else {
 				p.varStorage[i].rbpOffset = paramOffset
-				paramOffset -= p.sizeof(i)
+				paramOffset -= 8 // params are rounded to eightbytes
 			}
 		}
 	}
@@ -1361,6 +1355,9 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		p.precompute[opt.Left()].value /= rightValue
 	case ir.Compare:
 		extra := opt.Extra.(ir.CompareExtra)
+		if !(p.valueKnown(opt.ReadOperand) && p.valueKnown(extra.Right)) {
+			return false
+		}
 		p.precompute[extra.Out].valueType = integer
 		p.precompute[extra.Out].value = p.evalCompare(&opt)
 	case ir.Increment:
@@ -1465,15 +1462,20 @@ func (p *procGen) loadPointerIntoReg(pointerVn int, reg registerId) {
 }
 
 // @clobber
-func (p *procGen) loadKnownValueIntoReg(vn int, reg registerId) {
+func (p *procGen) loadKnownValueIntoRegSized(vn int, sizingType typing.TypeRecord, reg registerId) {
 	switch precomp := p.precompute[vn]; precomp.valueType {
 	case integer:
-		p.issueCommand(fmt.Sprintf("mov %s, %d", p.registers.all[reg].nameForSize(p.sizeof(vn)), precomp.value))
+		p.issueCommand(fmt.Sprintf("mov %s, %d", p.registers.all[reg].nameForSize(sizingType.Size()), precomp.value))
 	case pointerRelativeToVar, pointerRelativeToStackBase:
 		p.loadPointerIntoReg(vn, reg)
 	default:
 		panic("ice: don't know how to materialize precompute value type " + precomp.valueType.String())
 	}
+}
+
+// @clobber
+func (p *procGen) loadKnownValueIntoReg(vn int, reg registerId) {
+	p.loadKnownValueIntoRegSized(vn, p.typeTable[vn], reg)
 }
 
 // caller makes sure that we don't try to put a runtime value into a compile time variable
@@ -1522,20 +1524,26 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 		extra := opt.Extra.(ir.CompareExtra)
 		l := opt.ReadOperand
 		r := extra.Right
-		p.allocateRuntimeStorage(extra.Out)
-		if p.valueKnown(l) && p.valueKnown(r) {
-			p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(extra.Out), p.evalCompare(&opt)))
-		} else if p.valueKnown(l) {
-			p.ensureInRegister(r)
-			tmpStorage := p.tmpStorageForValue(p.sizeof(r), p.getPrecomputedValue(l))
-			p.issueCommand(fmt.Sprintf("cmp %s, %s", tmpStorage, p.varOperand(r)))
-			p.setccToVar(extra.How, extra.Out)
+		lSize := p.sizeof(l)
+		rSize := p.sizeof(r)
+		tmpReg := p.findOrMakeFreeReg()
+		var leftOperand string
+		var rightOperand string
+		if p.valueKnown(l) {
+			p.loadKnownValueIntoReg(l, tmpReg)
+			leftOperand = p.registers.all[tmpReg].nameForSize(rSize)
+			rightOperand = p.varOperand(r)
 		} else if p.valueKnown(r) {
-			p.ensureInRegister(l)
-			tmpStorage := p.tmpStorageForValue(p.sizeof(l), p.getPrecomputedValue(r))
-			p.issueCommand(fmt.Sprintf("cmp %s, %s", p.varOperand(opt.ReadOperand), tmpStorage))
-			p.setccToVar(extra.How, extra.Out)
+			p.loadKnownValueIntoReg(r, tmpReg)
+			leftOperand = p.varOperand(l)
+			rightOperand = p.registers.all[tmpReg].nameForSize(lSize)
+		} else {
+			panic("ice: genPartialKnown cmp: one of left or right must be known")
 		}
+
+		p.issueCommand(fmt.Sprintf("cmp %s, %s", leftOperand, rightOperand))
+		p.allocateRuntimeStorage(extra.Out)
+		p.setccToVar(extra.How, extra.Out)
 	case ir.And:
 		preCompValue := p.getPrecomputedValue(opt.Right())
 		if preCompValue == 0 {

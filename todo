@@ -24,7 +24,7 @@
  ☐ retire vars that are not named vars / loop control var
  ☐ typecheck errors interrupting each other
  ☐ for i := 0..num loops, the body should be able to mutate i
- ☐ test passing a lot of parameters
+ ✔ test passing a lot of parameters @done (18-07-25 11:44)
  ☐ returning a value from a function that doesn't declare a return type
  ☐ unbalanced braces
  ☐ hidden parameter for returning large values can be clobbered
