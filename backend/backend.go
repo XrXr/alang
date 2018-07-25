@@ -1286,6 +1286,12 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 		p.genInstPartialKnown(optIdx, opt)
 	} else {
 		p.genInstAllRuntimeVars(optIdx, opt)
+
+		ir.IterOverAllVars(opt, func(vn int) {
+			if p.lastUsage[vn] == optIdx {
+				p.decommission(vn)
+			}
+		})
 	}
 }
 
