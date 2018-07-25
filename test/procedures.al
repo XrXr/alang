@@ -4,6 +4,15 @@ main :: proc () {
     numbers(221, 2, 3, 9)
     qwordToByte(2333, false, true)
     qwordToWordToByte(4929, true, true, true, true, false)
+
+    var magic1 u16
+    var magic2 s8
+    magic1 = 65535
+    magic2 = -121
+    ret := lotsOfParameters(false, false, false, false, false, true, false, false, false, false, false, true, false, true, magic1, magic1, magic2, magic2, &magic1)
+    if ret == &magic1 {
+        puts("return from lotsOfParameter good\n")
+    }
 }
 
 thisBetterWork :: proc () {
@@ -76,4 +85,29 @@ qwordToWordToByte :: proc (a int, b bool, c bool, d bool, e bool, f bool) {
     } else {
         puts("qwordToWordToByte 6/6\n")
     }
+}
+
+lotsOfParameters :: proc (a bool, b bool, c bool, d bool, e bool, f bool, g bool, h bool, i bool, j bool, k bool, l bool, m bool, n bool, unsigned64 u64, unsigned32 u32, signed64 s64, signed32 s32, ptr *u16) -> *u16 {
+    if a {
+        puts("lotsOfParameters 1\n")
+    }
+    if g {
+        puts("lotOfParameters 2\n")
+    }
+    if b || c || d || e || f || h || i || j || k {
+        puts("bad!\n")
+    }
+    if l && n {
+        puts("lotsOfParameters 3\n")
+    }
+    if m {
+        puts("bad!\n")
+    }
+    if unsigned64 == 65535 && unsigned64 == unsigned32 {
+        puts("lotsOfParameters 4\n")
+    }
+    if signed64 == -121 && signed64 == signed32 {
+        puts("lotsOfParameters 5\n")
+    }
+    return ptr
 }

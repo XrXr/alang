@@ -13,3 +13,9 @@ qwordToWordToByte 3/6
 qwordToWordToByte 4/6
 qwordToWordToByte 5/6
 qwordToWordToByte 6/6
+lotsOfParameters 1
+lotsOfParameters 2
+lotsOfParameters 3
+lotsOfParameters 4
+lotsOfParameters 5
+return from lotsOfParameter good

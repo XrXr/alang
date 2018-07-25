@@ -19,9 +19,10 @@
  ✔ :morecopies copying full structs @done (18-06-23 20:51)
  ✔ factor out signExtendToMatchSize @done (18-06-19 20:07)
  ✘ do some reserach about signedModulous -- how do we do s32 *= s64? what if on the right side the sign bit is set? @cancelled (18-07-03 19:11)
- ☐ more aggressive compile time evaluation
- ☐ flag for turning off compile time evaluation and run tests on both
+ ✔ more aggressive compile time evaluation @done (18-07-25 09:11)
+ ✘ flag for turning off compile time evaluation and run tests on both @cancelled (18-07-25 09:11)
  ☐ retire vars that are not named vars / loop control var
+ ☐ typecheck errors interrupting each other
  ☐ for i := 0..num loops, the body should be able to mutate i
  ☐ test passing a lot of parameters
  ☐ returning a value from a function that doesn't declare a return type
