@@ -2024,20 +2024,9 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 		p.allocateRuntimeStorage(out)
 		p.setccToVar(extra.How, out)
 	case ir.Transclude:
-		panic("Transcludes should be gone by now")
+		panic("ice: Transcludes should be gone by now")
 	case ir.ArrayToPointer:
-		in := opt.In()
-		out := opt.Out()
-		p.ensureStackOffsetValid(in)
-		p.ensureInRegister(out)
-		switch p.typeTable[opt.In()].(type) {
-		case typing.Array:
-			p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d]", p.registerOf(out).qwordName, p.varStorage[in].rbpOffset))
-		case typing.Pointer:
-			p.issueCommand(fmt.Sprintf("mov %s, %s", p.fittingRegisterName(out), p.varOperand(in)))
-		default:
-			panic("must be array or pointer to an array")
-		}
+		panic("ice: arrayToPointer should always be a compile time operation")
 	case ir.IndirectLoad, ir.IndirectWrite:
 		p.swapStackBoundVars()
 		_, isDataMemberOfString := p.typeTable[opt.In()].(typing.StringDataPointer)
