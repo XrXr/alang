@@ -2152,10 +2152,8 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 		out := opt.Out()
 		in := opt.In()
 		p.ensureInRegister(out)
-		p.issueCommand(fmt.Sprintf("mov %s, 0", p.fittingRegisterName(out)))
 		p.issueCommand(fmt.Sprintf("cmp %s, 0", p.varOperand(in)))
-		p.issueCommand(fmt.Sprintf("jnz %s", setLabel))
-		p.issueCommand(fmt.Sprintf("mov %s, 1", p.fittingRegisterName(out)))
+		p.issueCommand(fmt.Sprintf("setz %s", p.fittingRegisterName(out)))
 		fmt.Fprintf(p.out.buffer, "%s:\n", setLabel)
 	case ir.And:
 		l := opt.Left()
