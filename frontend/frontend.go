@@ -273,6 +273,19 @@ func genForProcSubSection(labelGen *LabelIdGen, order *ProcWorkOrder, scope *sco
 	return -1
 }
 
+func genAndOr(scope *scope, node parsing.ASTNode, op parsing.Operator, condJumpInst, combineInst ir.InstType, endLabel string, destVn int) {
+	expr, nodeIsExpr := node.(parsing.ExprNode)
+	if !nodeIsExpr || expr.Op != op {
+		genExpressionValueToVar(scope, destVn, node)
+		return
+	}
+	// keep going left and as long as we are combining the same op, we can skip to the same end label
+	genAndOr(scope, expr.Left, op, condJumpInst, combineInst, endLabel, destVn)
+	scope.addOpt(ir.MakeReadOnlyInst(condJumpInst, destVn, endLabel))
+	rightVn := genExpressionValue(scope, expr.Right)
+	scope.addOpt(ir.MakeBinaryInst(combineInst, destVn, rightVn, nil))
+}
+
 // given an ast node, generate ir that computes its value. Returns the variable number which holds said value.
 func genExpressionValue(scope *scope, node parsing.ASTNode) int {
 	switch n := node.(type) {
@@ -346,17 +359,11 @@ func genExpressionValueToVar(scope *scope, dest int, node parsing.ASTNode) {
 			scope.addOpt(ir.MakeBinaryInst(ir.Not, dest, rightDest, nil))
 		case parsing.LogicalAnd:
 			end := labelGen.GenLabel("andEnd_%d")
-			genExpressionValueToVar(scope, dest, n.Left)
-			scope.addOpt(ir.MakeReadOnlyInst(ir.ShortJumpIfFalse, dest, end))
-			rightDest := genExpressionValue(scope, n.Right)
-			scope.addOpt(ir.MakeBinaryInst(ir.And, dest, rightDest, nil))
+			genAndOr(scope, n, n.Op, ir.ShortJumpIfFalse, ir.And, end, dest)
 			scope.addOpt(labelInst(end))
 		case parsing.LogicalOr:
 			end := labelGen.GenLabel("orEnd_%d")
-			genExpressionValueToVar(scope, dest, n.Left)
-			scope.addOpt(ir.MakeReadOnlyInst(ir.ShortJumpIfTrue, dest, end))
-			rightDest := genExpressionValue(scope, n.Right)
-			scope.addOpt(ir.MakeBinaryInst(ir.Or, dest, rightDest, nil))
+			genAndOr(scope, n, n.Op, ir.ShortJumpIfTrue, ir.Or, end, dest)
 			scope.addOpt(labelInst(end))
 		case parsing.Star, parsing.Minus, parsing.Plus, parsing.Divide,
 			parsing.Greater, parsing.GreaterEqual, parsing.Lesser,
