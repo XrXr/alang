@@ -213,15 +213,26 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 			procDecl := procDeclare.Right.(parsing.ProcDecl)
 			procName := procDeclare.Left.(parsing.IdName).Name
 			order := frontend.ProcWorkOrder{
-				Out:      make(chan frontend.OptBlock),
-				In:       nodesForProc,
-				Name:     procName,
-				ProcDecl: procDecl,
+				Out:       make(chan frontend.OptBlock),
+				In:        nodesForProc,
+				Name:      procName,
+				ProcDecl:  procDecl,
+				UserError: make(chan *errors.UserError),
 			}
 			workOrders = append(workOrders, &order)
 			if !isForeignProc {
 				go func() {
-					defer catchUserError(sourceLines)
+					defer func() {
+						err := recover()
+						if err != nil {
+							switch err := err.(type) {
+							case *errors.UserError:
+								order.UserError <- err
+							default:
+								panic(err)
+							}
+						}
+					}()
 					frontend.GenForProc(&labelGen, &order)
 				}()
 			}
@@ -265,32 +276,40 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 		panic(err)
 	}
 	// fmt.Printf("%#v\n", env.Types)
-
+	sawError := false
 	var staticData []*bytes.Buffer
 	for _, workOrder := range workOrders {
 		if workOrder.ProcDecl.IsForeign {
 			fmt.Fprintf(asmOut, "extern %s\n", workOrder.Name)
 			continue
 		}
-		out := <-workOrder.Out
-		_ = ir.Dump
-		ir.Dump(out.Opts)
-		// frontend.Prune(&out)
-		// ir.Dump(out.Opts)
-		// parsing.Dump(env)
-		procRecord := env.Procs[workOrder.Name]
-		typeTable, err := typer.InferAndCheck(env, &out, procRecord)
-		if err != nil {
-			panic(err)
-		}
-		for i, e := range typeTable {
-			if e == nil {
-				println(i)
-				panic("Bug in typer -- not all vars have types!")
+		select {
+		case err := <-workOrder.UserError:
+			sawError = true
+			displayError(sourceLines, err)
+		case out := <-workOrder.Out:
+			_ = ir.Dump
+			ir.Dump(out.Opts)
+			// frontend.Prune(&out)
+			// ir.Dump(out.Opts)
+			// parsing.Dump(env)
+			procRecord := env.Procs[workOrder.Name]
+			typeTable, err := typer.InferAndCheck(env, &out, procRecord)
+			if err != nil {
+				panic(err)
 			}
+			for i, e := range typeTable {
+				if e == nil {
+					println(i)
+					panic("Bug in typer -- not all vars have types!")
+				}
+			}
+			static := backend.X86ForBlock(asmOut, out, typeTable, env, typer, procRecord)
+			staticData = append(staticData, static)
 		}
-		static := backend.X86ForBlock(asmOut, out, typeTable, env, typer, procRecord)
-		staticData = append(staticData, static)
+	}
+	if sawError {
+		os.Exit(1)
 	}
 
 	io.WriteString(asmOut, "; ---user code end---\n")

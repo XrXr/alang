@@ -2,16 +2,18 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/XrXr/alang/errors"
 	"github.com/XrXr/alang/ir"
 	"github.com/XrXr/alang/parsing"
 	"sync"
 )
 
 type ProcWorkOrder struct {
-	Out      chan OptBlock
-	In       []*parsing.ASTNode
-	Name     string
-	ProcDecl parsing.ProcDecl
+	Out       chan OptBlock
+	In        []*parsing.ASTNode
+	Name      string
+	ProcDecl  parsing.ProcDecl
+	UserError chan *errors.UserError
 }
 
 type OptBlock struct {
