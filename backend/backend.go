@@ -1490,12 +1490,14 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 			return true
 		case typing.String:
 			fieldName := opt.Extra.(string)
-			if fieldName == "length" {
-				p.precompute[out].valueType = pointerRelativeToVar
-				p.precompute[out].value = p.addRelativePointer(in, 0)
-				p.precompute[out].precomputedOnce = true
-				return true
+			offset := 0
+			if fieldName == "data" {
+				offset = 8
 			}
+			p.precompute[out].valueType = pointerRelativeToVar
+			p.precompute[out].value = p.addRelativePointer(in, offset)
+			p.precompute[out].precomputedOnce = true
+			return true
 		case typing.Pointer:
 			record, pointerToStruct := inType.ToWhat.(*typing.StructRecord)
 			if !pointerToStruct {
@@ -1691,33 +1693,42 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 			p.issueCommand("; never jumps")
 		}
 	case ir.IndirectLoad:
-		p.swapStackBoundVars()
 		out := opt.Out()
 		in := opt.In()
-		pointedToSize := p.typeTable[in].(typing.Pointer).ToWhat.Size()
 		if p.valueKnown(out) {
 			panic("ice: can't indirect load into a copmile time value. Should've checked")
 		}
 
-		if isPerfectSize(pointedToSize) {
-			sourceOperand := p.prepareEffectiveAddress(in)
-			prefix := prefixForSize(pointedToSize)
-			p.ensureInRegister(out)
-			regName := p.registerOf(out).nameForSize(pointedToSize)
-			p.issueCommand(fmt.Sprintf("mov %s, %s %s", regName, prefix, sourceOperand))
-		} else {
-			if pointedToSize != p.sizeof(out) {
-				panic("ice: memcpy indirect load where the sizes are not equal")
+		switch inType := p.typeTable[in].(type) {
+		case typing.StringDataPointer:
+			outReg := p.ensureInRegister(out)
+			p.loadPointerIntoReg(in, outReg)
+			return
+		case typing.Pointer:
+			pointedToSize := inType.ToWhat.Size()
+			p.swapStackBoundVars()
+			if isPerfectSize(pointedToSize) {
+				sourceOperand := p.prepareEffectiveAddress(in)
+				prefix := prefixForSize(pointedToSize)
+				p.ensureInRegister(out)
+				regName := p.registerOf(out).nameForSize(pointedToSize)
+				p.issueCommand(fmt.Sprintf("mov %s, %s %s", regName, prefix, sourceOperand))
+			} else {
+				if pointedToSize != p.sizeof(out) {
+					panic("ice: memcpy indirect load where the sizes are not equal")
+				}
+				p.freeUpRegisters(true, rsi, rdi, rcx)
+				p.loadPointerIntoReg(in, rsi)
+				p.ensureStackOffsetValid(out)
+				p.loadVarOffsetIntoReg(out, rdi)
+				p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
+				p.issueCommand("call _intrinsic_memcpy")
+				if p.inRegister(out) {
+					p.releaseRegister(p.varStorage[out].currentRegister)
+				}
 			}
-			p.freeUpRegisters(true, rsi, rdi, rcx)
-			p.loadPointerIntoReg(in, rsi)
-			p.ensureStackOffsetValid(out)
-			p.loadVarOffsetIntoReg(out, rdi)
-			p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
-			p.issueCommand("call _intrinsic_memcpy")
-			if p.inRegister(out) {
-				p.releaseRegister(p.varStorage[out].currentRegister)
-			}
+		default:
+			panic("ice: don't know how to IndirectLoad fomr " + inType.Rep())
 		}
 	case ir.IndirectWrite:
 		p.swapStackBoundVars()
@@ -2017,8 +2028,8 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 		p.setccToVar(extra.How, out)
 	case ir.Transclude:
 		panic("ice: Transcludes should be gone by now")
-	case ir.ArrayToPointer:
-		panic("ice: arrayToPointer should always be a compile time operation")
+	case ir.ArrayToPointer, ir.StructMemberPtr:
+		panic("ice: " + opt.Type.String() + " should always be a compile time operation")
 	case ir.IndirectLoad, ir.IndirectWrite:
 		p.swapStackBoundVars()
 		_, isDataMemberOfString := p.typeTable[opt.In()].(typing.StringDataPointer)
@@ -2064,49 +2075,6 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 			} else {
 				memcpy(rsi, rdi)
 			}
-		}
-	case ir.StructMemberPtr:
-		out := opt.Out()
-		in := opt.In()
-		p.ensureInRegister(out)
-		outReg := p.registerOf(out)
-		baseType := p.typeTable[opt.In()]
-		fieldName := opt.Extra.(string)
-		switch baseType := baseType.(type) {
-		case typing.Pointer:
-			switch baseType.ToWhat.(type) {
-			case typing.String:
-				p.swapStackBoundVars()
-				p.ensureInRegister(out)
-				p.ensureInRegister(in)
-				switch fieldName {
-				case "data":
-					p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
-					p.issueCommand(fmt.Sprintf("add %s, 8", outReg.qwordName))
-				case "length":
-					p.issueCommand(fmt.Sprintf("mov %s, qword [%s]", outReg.qwordName, p.registerOf(in).qwordName))
-				}
-			default:
-				p.ensureInRegister(in)
-				record := baseType.ToWhat.(*typing.StructRecord)
-				p.issueCommand(fmt.Sprintf("lea %s, [%s+%d]",
-					outReg.qwordName, p.registerOf(in).qwordName, record.Members[fieldName].Offset))
-			}
-		case *typing.StructRecord:
-			p.ensureStackOffsetValid(in)
-			p.issueCommand(fmt.Sprintf("lea %s, [rbp-%d+%d]",
-				outReg.qwordName, p.varStorage[in].rbpOffset, baseType.Members[fieldName].Offset))
-		case typing.String:
-			p.ensureInRegister(in)
-			switch fieldName {
-			case "data":
-				p.ensureInRegister(in)
-				p.issueCommand(fmt.Sprintf("lea %s, [%s+8]", outReg.qwordName, p.registerOf(in).qwordName))
-			case "length":
-				p.movRegReg(p.varStorage[out].currentRegister, p.varStorage[in].currentRegister)
-			}
-		default:
-			panic("Type checker didn't do its job")
 		}
 	case ir.PeelStruct:
 		// this instruction is an artifact of the fact that the frontend doesn't have type information when generating ir.
