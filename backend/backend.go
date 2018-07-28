@@ -1661,14 +1661,6 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 		} else {
 			p.andOrImm(&opt, preCompValue)
 		}
-	case ir.Not:
-		preCompValue := p.getPrecomputedValue(opt.In())
-		result := 0
-		if preCompValue == 0 {
-			result = 1
-		}
-		p.allocateRuntimeStorage(opt.Out())
-		p.issueCommand(fmt.Sprintf("mov %s, %d", p.varOperand(opt.Out()), result))
 	case ir.JumpIfTrue:
 		if p.getPrecomputedValue(opt.ReadOperand) != 0 {
 			p.jumpOrDelayedJump(optIdx, &opt)
