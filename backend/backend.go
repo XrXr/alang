@@ -1847,24 +1847,11 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 				p.issueCommand(
 					fmt.Sprintf(leaFormatString, p.registers.all[lRegIdx].qwordName, rReg.qwordName, pointedToSize))
 			default:
-				tempReg, freeRegExists := p.registers.nextAvailable()
-				var tempRegTenant int
-				if !freeRegExists {
-					tempReg = rRegId
-					for tempReg == lRegIdx || tempReg == rRegId {
-						tempReg = (tempReg + 1) % numRegisters
-					}
-					tempRegTenant = p.registers.all[tempReg].occupiedBy
-					p.ensureStackOffsetValid(tempRegTenant)
-					p.memRegCommand("mov", tempRegTenant, tempRegTenant)
-				}
+				tempReg := p.findOrMakeFreeReg()
 				p.movRegReg(tempReg, rRegId)
 				tempRegName := p.registers.all[tempReg].qwordName
 				p.issueCommand(fmt.Sprintf("imul %s, %d", tempRegName, pointedToSize))
 				p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, p.registerOf(opt.Left()).qwordName, tempRegName))
-				if !freeRegExists {
-					p.regMemCommand("mov", tempRegTenant, tempRegTenant)
-				}
 			}
 		} else {
 			rRegLeftSize := p.signOrZeroExtendIfNeeded(opt.Right(), opt.Left())
