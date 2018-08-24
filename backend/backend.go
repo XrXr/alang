@@ -1501,7 +1501,6 @@ func (p *procGen) doPrecomputaion(optIdx int, opt ir.Inst) bool {
 		case typing.Pointer:
 			record, pointerToStruct := inType.ToWhat.(*typing.StructRecord)
 			if !pointerToStruct {
-				println("in not a pointer to struct", inType.Rep())
 				return false
 			}
 			fieldName := opt.Extra.(string)

@@ -62,7 +62,7 @@ func (t *Typer) checkAndInferOpt(env *EnvRecord, opt ir.Inst, typeTable []TypeRe
 		baseIsString := baseType == t.Builtins[StringIdx]
 
 		if !baseIsStruct && !baseIsString {
-			bail("Struct member access on non struct")
+			bail(fmt.Sprintf("Struct member access on a non struct (%s)", typeTable[baseVn].Rep()))
 		}
 		if baseIsStruct {
 			field, ok := baseStruct.Members[fieldName]
@@ -311,7 +311,6 @@ func (t *Typer) InferAndCheck(env *EnvRecord, toCheck *frontend.OptBlock, procDe
 
 	for i, opt := range toCheck.Opts {
 		_ = i
-		// fmt.Println("type checking ir line", i)
 
 		err := t.checkAndInferOpt(env, opt, typeTable)
 		if err != nil {
