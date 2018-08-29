@@ -194,7 +194,14 @@ func (l *lineParse) parseInStatementContext() (ASTNode, error) {
 			return node, nil
 		}
 	}
-	return l.parseExprWithParen(parsed, 0, nTokens)
+	node, err := l.parseExprWithParen(parsed, 0, nTokens)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return nil, l.errorFromTokIdx(0, nTokens-1, "Invalid syntax")
+	}
+	return node, nil
 }
 
 func (l *lineParse) finishExprNode(node *ExprNode, opTokIdx int) error {
@@ -317,6 +324,9 @@ func (l *lineParse) genParenInfo(start int, end int) ([]bracketInfo, error) {
 }
 
 func (l *lineParse) parseExprWithParen(parsed map[int]parsedNode, start, end int) (ASTNode, error) {
+	if start >= end {
+		return nil, nil
+	}
 	tokens := l.tokens
 	parenInfo, err := l.genParenInfo(start, end)
 	if err != nil {
