@@ -612,24 +612,28 @@ func (p *procGen) varPerfectRegSize(vn int) bool {
 	return isPerfectSize(size)
 }
 
-func (p *procGen) signOrZeroExtendMovToReg(dest registerId, sourceVn int) {
-	destReg := &p.registers.all[dest]
-	destRegName := destReg.qwordName
-	var mnemonic string
-	if p.sizeof(sourceVn) == 8 {
-		mnemonic = "mov"
-	} else {
-		if p.typer.IsUnsigned(p.typeTable[sourceVn]) {
-			if p.sizeof(sourceVn) == 4 {
-				mnemonic = "mov" // upper 4 bytes are automatically zeroed
-				destRegName = destReg.nameForSize(4)
-			} else {
-				mnemonic = "movzx"
-			}
+// return the mnemonic to use and the register sizing for dest
+func (p *procGen) decideMovType(source typing.TypeRecord) (string, int) {
+	sourceSize := source.Size()
+	destSize := 8
+	if sourceSize == destSize || sourceSize == 8 {
+		return "mov", destSize
+	}
+	if p.typer.IsUnsigned(source) {
+		if sourceSize == 4 {
+			// upper 4 bytes automatically zeroed
+			return "mov", 4
 		} else {
-			mnemonic = "movsx"
+			// movzx is available for every thing except 32 -> 64
+			return "movzx", destSize
 		}
 	}
+	return "movsx", destSize
+}
+
+func (p *procGen) signOrZeroExtendMovToReg(dest registerId, sourceVn int) {
+	mnemonic, destSize := p.decideMovType(p.typeTable[sourceVn])
+	destRegName := p.registers.all[dest].nameForSize(destSize)
 	p.issueCommand(fmt.Sprintf("%s %s, %s", mnemonic, destRegName, p.varOperand(sourceVn)))
 }
 
@@ -1706,12 +1710,14 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 		case typing.Pointer:
 			pointedToSize := inType.ToWhat.Size()
 			p.swapStackBoundVars()
-			if isPerfectSize(pointedToSize) {
+			outSize := p.sizeof(out)
+			if isPerfectSize(pointedToSize) && isPerfectSize(outSize) {
+				p.ensureInRegister(out)
 				sourceOperand := p.prepareEffectiveAddress(in)
 				prefix := prefixForSize(pointedToSize)
-				p.ensureInRegister(out)
-				regName := p.registerOf(out).nameForSize(pointedToSize)
-				p.issueCommand(fmt.Sprintf("mov %s, %s %s", regName, prefix, sourceOperand))
+				mnemonic, outRegSizing := p.decideMovType(inType.ToWhat)
+				regName := p.registerOf(out).nameForSize(outRegSizing)
+				p.issueCommand(fmt.Sprintf("%s %s, %s %s", mnemonic, regName, prefix, sourceOperand))
 			} else {
 				if pointedToSize != p.sizeof(out) {
 					panic("ice: memcpy indirect load where the sizes are not equal")
@@ -1727,7 +1733,7 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 				}
 			}
 		default:
-			panic("ice: don't know how to IndirectLoad fomr " + inType.Rep())
+			panic("ice: don't know how to IndirectLoad from " + inType.Rep())
 		}
 	case ir.IndirectWrite:
 		p.swapStackBoundVars()
