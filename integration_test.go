@@ -60,8 +60,8 @@ func TestIndirectSignAndZeroExtensions(t *testing.T) {
 func makeIndirectLoadFromSmall(smallerType string, biggerType string, magicConstant int) func(*testing.T) {
 	const template = `
 	main :: proc () {
-		var a %s
-		var b %s
+		var a %[1]s
+		var b %[2]s
 		ap := &a
 		a = %[3]d
 		b = -1
@@ -70,12 +70,23 @@ func makeIndirectLoadFromSmall(smallerType string, biggerType string, magicConst
 		if b == %[3]d {
 			puts("good\n")
 		}
+
+		testPointerOriginUnkonwn(ap)
+	}
+
+	testPointerOriginUnkonwn :: proc (small *%[1]s) {
+		var big %[2]s
+		big = -1
+		big = @small
+		if big == %[3]d {
+			puts("good2\n")
+		}
 	}
 `
 
 	program := fmt.Sprintf(template, smallerType, biggerType, magicConstant)
 	return func(t *testing.T) {
-		testSourceString(t, program, []byte("good\n"))
+		testSourceString(t, program, []byte("good\ngood2\n"))
 	}
 }
 
@@ -92,12 +103,21 @@ func makeIndirectWriteToBig(smallerType string, biggerType string, magicConstant
 		if b == %[3]d {
 			puts("good\n")
 		}
+
+		b = -1
+		writeSmallTo(bp, %[3]d)
+		if b == %[3]d {
+			puts("good2\n")
+		}
+	}
+
+	writeSmallTo :: proc (ptr *%[2]s, constant %[1]s) {
+		@ptr = constant
 	}
 `
-
 	program := fmt.Sprintf(template, smallerType, biggerType, magicConstant)
 	return func(t *testing.T) {
-		testSourceString(t, program, []byte("good\n"))
+		testSourceString(t, program, []byte("good\ngood2\n"))
 	}
 }
 
