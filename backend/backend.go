@@ -1080,6 +1080,7 @@ func (p *procGen) genTakeAddress(optIdx int, opt ir.Inst) {
 	if p.precompute[out].precomputedOnce && !p.valueKnown(out) {
 		panic("ice: re-precompute by outputting from ir.TakeAddress")
 	}
+	p.precompute[in].precomputedOnce = true // ban in from being precomputation
 	p.stopPrecomputingAndMaterialize(in)
 	p.ensureStackOffsetValid(in)
 	p.stackBoundVars = append(p.stackBoundVars, in)
