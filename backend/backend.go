@@ -1092,6 +1092,7 @@ func (p *procGen) genIndirectWrite(optIdx int, opt ir.Inst) {
 		if p.valueKnown(data) {
 			switch precomp := &p.precompute[data]; precomp.valueType {
 			case integer:
+				// since it's a immediate mov, we don't need to do sign extension
 				precompValue := p.getPrecomputedValue(data)
 				p.issueCommand(fmt.Sprintf("mov %s %s, %d", prefix, destOperand, precompValue))
 			case pointerRelativeToVar, pointerRelativeToStackBase:
@@ -1102,8 +1103,8 @@ func (p *procGen) genIndirectWrite(optIdx int, opt ir.Inst) {
 				panic("don't know how to do an indirect write with precomputed type " + precomp.valueType.String())
 			}
 		} else {
-			p.ensureInRegister(data)
-			// TODO sign extend here
+			reg := p.ensureInRegister(data)
+			p.signOrZeroExtendMovToReg(reg, data)
 			regName := p.registerOf(data).nameForSize(pointedToSize)
 			p.issueCommand(fmt.Sprintf("mov %s %s, %s", prefix, destOperand, regName))
 		}
