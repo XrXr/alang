@@ -19,6 +19,9 @@ import (
 	"sort"
 )
 
+const dumpIr = true
+const dumpEnv = false
+
 type embedGraphNode struct {
 	visited  bool
 	embedees []*typing.StructRecord
@@ -289,10 +292,12 @@ func doCompile(sourceLines []string, libc bool, asmOut io.Writer) {
 			displayError(sourceLines, err)
 		case out := <-workOrder.Out:
 			_ = ir.Dump
-			// ir.Dump(out.Opts)
-			// frontend.Prune(&out)
-			// ir.Dump(out.Opts)
-			// parsing.Dump(env)
+			if dumpIr {
+				ir.Dump(out.Opts)
+			}
+			if dumpEnv {
+				parsing.Dump(env)
+			}
 			procRecord := env.Procs[workOrder.Name]
 			typeTable, err := typer.InferAndCheck(env, &out, procRecord)
 			if err != nil {

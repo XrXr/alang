@@ -69,7 +69,7 @@ const (
 
 const invalidVn int = -1
 const invalidRegister registerId = -1
-const zombieMessage string = "ice: trying to revive a decommissioned variable"
+const zombieRevival string = "ice: trying to revive a decommissioned variable"
 
 var paramPassingRegOrder = [...]registerId{rdi, rsi, rdx, rcx, r8, r9}
 var preservedRegisters = [...]registerId{rbx, r15, r14, r13, r12}
@@ -410,7 +410,7 @@ func (p *procGen) swapStackBoundVars() {
 func (p *procGen) loadRegisterWithVar(register registerId, vn int) {
 	if p.varStorage[vn].decommissioned {
 		println(vn)
-		panic(zombieMessage)
+		panic(zombieRevival)
 	}
 	switch vnSize := p.sizeof(vn); {
 	case vnSize == 0:
@@ -492,7 +492,7 @@ func (p *procGen) ensureInRegister(vn int) registerId {
 
 func (p *procGen) ensureStackOffsetValid(vn int) {
 	if p.varStorage[vn].decommissioned {
-		panic(zombieMessage)
+		panic(zombieRevival)
 	}
 	if p.varStorage[vn].rbpOffset != 0 {
 		return
@@ -1038,6 +1038,52 @@ func (p *procGen) genReturn(optIdx int, opt ir.Inst) {
 	p.issueCommand("jmp .end_of_proc")
 }
 
+func (p *procGen) genIndirectLoad(optIdx int, opt ir.Inst) {
+	out := opt.Out()
+	in := opt.In()
+	// we might know the address we need to load from, but we don't know what's in that address.
+	p.endPrecomputation(out)
+
+	switch inType := p.typeTable[in].(type) {
+	case typing.StringDataPointer:
+		outReg := p.ensureInRegister(out)
+		println("here!")
+		println("we are loading", in, "into", p.registers.all[outReg].qwordName)
+		p.loadPointerIntoReg(in, outReg)
+	case typing.Pointer:
+		pointedToSize := inType.ToWhat.Size()
+		p.swapStackBoundVars()
+		outSize := p.sizeof(out)
+		if isPerfectSize(pointedToSize) && isPerfectSize(outSize) {
+			p.ensureInRegister(out)
+			sourceOperand := p.prepareEffectiveAddress(in)
+			prefix := prefixForSize(pointedToSize)
+			mnemonic, outRegSizing := p.decideMovType(inType.ToWhat)
+			regName := p.registerOf(out).nameForSize(outRegSizing)
+			p.issueCommand(fmt.Sprintf("%s %s, %s %s", mnemonic, regName, prefix, sourceOperand))
+		} else {
+			if pointedToSize != p.sizeof(out) {
+				panic("ice: memcpy indirect load where the sizes are not equal")
+			}
+			p.freeUpRegisters(true, rsi, rdi, rcx)
+			p.loadPointerIntoReg(in, rsi)
+			p.ensureStackOffsetValid(out)
+			p.loadVarOffsetIntoReg(out, rdi)
+			p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
+			p.issueCommand("call _intrinsic_memcpy")
+			if p.inRegister(out) {
+				p.releaseRegister(p.varStorage[out].currentRegister)
+			}
+		}
+	default:
+		panic("ice: don't know how to IndirectLoad from " + inType.Rep())
+	}
+}
+
+func (p *procGen) genIndirectWrite(optIdx int, opt ir.Inst) {
+	panic("later")
+}
+
 func (p *procGen) setccToVar(how ir.ComparisonMethod, vn int) {
 	var mnemonic string
 	switch how {
@@ -1081,7 +1127,7 @@ func (p *procGen) genTakeAddress(optIdx int, opt ir.Inst) {
 		panic("ice: re-precompute by outputting from ir.TakeAddress")
 	}
 	p.precompute[in].precomputedOnce = true // ban in from being precomputation
-	p.stopPrecomputingAndMaterialize(in)
+	p.endPrecomputingAndMaterialize(in)
 	p.ensureStackOffsetValid(in)
 	p.stackBoundVars = append(p.stackBoundVars, in)
 	p.precompute[out].valueType = pointerRelativeToStackBase
@@ -1232,7 +1278,7 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 
 	stopPrecomputingIfNeeded := func(vn int) {
 		if stopAt := p.stopPrecomputation[vn]; stopAt == optIdx {
-			p.stopPrecomputingAndMaterialize(vn)
+			p.endPrecomputingAndMaterialize(vn)
 		}
 	}
 	defer ir.IterOverAllVars(opt, stopPrecomputingIfNeeded)
@@ -1248,6 +1294,12 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	case ir.ArrayToPointer:
 		p.arrayToPointer(optIdx, opt)
 		return
+	case ir.IndirectLoad:
+		p.genIndirectLoad(optIdx, opt)
+		return
+	// case ir.IndirectWrite:
+	// 	p.genIndirectWrite(optIdx, opt)
+	// 	return
 	case ir.OutOfScopeMutations, ir.OutsideLoopMutations:
 		for _, vn := range *opt.Extra.(*[]int) {
 			stopPrecomputingIfNeeded(vn)
@@ -1272,11 +1324,6 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 		return
 	}
 
-	if opt.Type == ir.IndirectLoad && p.valueKnown(opt.Out()) {
-		// A special case. Even if we know both operands at copmile time,
-		// we need to stop precomputing the output var.
-		p.stopPrecomputingAndMaterialize(opt.Out())
-	}
 	mut := ir.FindMutationVar(&opt)
 	var allInputsKnown, anyVarKnown bool
 	varStat := func() {
@@ -1294,7 +1341,7 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	}
 	varStat()
 	if mut >= 0 && p.valueKnown(mut) && !allInputsKnown {
-		p.stopPrecomputingAndMaterialize(mut)
+		p.endPrecomputingAndMaterialize(mut)
 		varStat()
 	}
 	switch opt.Type {
@@ -1352,8 +1399,8 @@ func (p *procGen) generate() {
 		// 	p.issueCommand("; line 26")
 
 		// }
-		// fmt.Println("doing ir line", optIdx)
-		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+		fmt.Println("doing ir line", optIdx)
+		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
 		// p.trace(23)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])
@@ -1379,14 +1426,19 @@ func (p *procGen) getPrecomputedValue(vn int) int64 {
 	return p.precompute[vn].value
 }
 
-func (p *procGen) stopPrecomputingAndMaterialize(vn int) {
+func (p *procGen) endPrecomputation(vn int) {
+	p.precompute[vn].valueType = notKnownAtCompileTime
+	p.precompute[vn].precomputedOnce = true
+}
+
+func (p *procGen) endPrecomputingAndMaterialize(vn int) {
 	if !p.valueKnown(vn) {
 		return
 	}
 	vnReg := p.ensureInRegister(vn)
 	p.dontSwap[vnReg] = false
 	p.loadKnownValueIntoReg(vn, vnReg)
-	p.precompute[vn].valueType = notKnownAtCompileTime
+	p.endPrecomputation(vn)
 }
 
 // Caller makes sure that the value for every input variable is known at compile time
@@ -1562,11 +1614,12 @@ func (p *procGen) prepareEffectiveAddress(pointerVn int) string {
 
 // @clobbber
 func (p *procGen) loadPointerIntoReg(pointerVn int, reg registerId) {
+	regName := p.registers.all[reg].qwordName
 	if p.valueKnown(pointerVn) {
 		effectiveAddress := p.prepareEffectiveAddress(pointerVn)
-		p.issueCommand(fmt.Sprintf("lea %s, %s", p.registers.all[reg].qwordName, effectiveAddress))
+		p.issueCommand(fmt.Sprintf("lea %s, %s", regName, effectiveAddress))
 	} else {
-		p.loadRegisterWithVar(reg, pointerVn)
+		p.issueCommand(fmt.Sprintf("mov %s, %s", regName, p.varOperand(pointerVn)))
 	}
 }
 
@@ -1695,46 +1748,6 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 			p.skipUntilLabel = opt.Extra.(string)
 		} else {
 			p.issueCommand("; never jumps")
-		}
-	case ir.IndirectLoad:
-		out := opt.Out()
-		in := opt.In()
-		if p.valueKnown(out) {
-			panic("ice: can't indirect load into a copmile time value. Should've checked")
-		}
-
-		switch inType := p.typeTable[in].(type) {
-		case typing.StringDataPointer:
-			outReg := p.ensureInRegister(out)
-			p.loadPointerIntoReg(in, outReg)
-			return
-		case typing.Pointer:
-			pointedToSize := inType.ToWhat.Size()
-			p.swapStackBoundVars()
-			outSize := p.sizeof(out)
-			if isPerfectSize(pointedToSize) && isPerfectSize(outSize) {
-				p.ensureInRegister(out)
-				sourceOperand := p.prepareEffectiveAddress(in)
-				prefix := prefixForSize(pointedToSize)
-				mnemonic, outRegSizing := p.decideMovType(inType.ToWhat)
-				regName := p.registerOf(out).nameForSize(outRegSizing)
-				p.issueCommand(fmt.Sprintf("%s %s, %s %s", mnemonic, regName, prefix, sourceOperand))
-			} else {
-				if pointedToSize != p.sizeof(out) {
-					panic("ice: memcpy indirect load where the sizes are not equal")
-				}
-				p.freeUpRegisters(true, rsi, rdi, rcx)
-				p.loadPointerIntoReg(in, rsi)
-				p.ensureStackOffsetValid(out)
-				p.loadVarOffsetIntoReg(out, rdi)
-				p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
-				p.issueCommand("call _intrinsic_memcpy")
-				if p.inRegister(out) {
-					p.releaseRegister(p.varStorage[out].currentRegister)
-				}
-			}
-		default:
-			panic("ice: don't know how to IndirectLoad from " + inType.Rep())
 		}
 	case ir.IndirectWrite:
 		p.swapStackBoundVars()
@@ -2129,6 +2142,10 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 
 func (p *procGen) trace(vn int) {
 	if vn >= len(p.varStorage) {
+		return
+	}
+	if !p.valueKnown(vn) && !p.hasStackStorage(vn) && !p.inRegister(vn) && !p.varStorage[vn].decommissioned {
+		// before first use
 		return
 	}
 	if p.valueKnown(vn) {
