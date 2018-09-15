@@ -1081,7 +1081,46 @@ func (p *procGen) genIndirectLoad(optIdx int, opt ir.Inst) {
 }
 
 func (p *procGen) genIndirectWrite(optIdx int, opt ir.Inst) {
-	panic("later")
+	p.swapStackBoundVars()
+	target := opt.Out()
+	data := opt.In()
+	pointedToSize := p.typeTable[target].(typing.Pointer).ToWhat.Size()
+
+	if p.varPerfectRegSize(data) {
+		destOperand := p.prepareEffectiveAddress(target)
+		prefix := prefixForSize(pointedToSize)
+		if p.valueKnown(data) {
+			switch precomp := &p.precompute[data]; precomp.valueType {
+			case integer:
+				precompValue := p.getPrecomputedValue(data)
+				p.issueCommand(fmt.Sprintf("mov %s %s, %d", prefix, destOperand, precompValue))
+			case pointerRelativeToVar, pointerRelativeToStackBase:
+				tmpReg := p.findOrMakeFreeReg()
+				p.loadPointerIntoReg(data, tmpReg)
+				p.issueCommand(fmt.Sprintf("mov %s %s, %s", prefix, destOperand, p.registers.all[tmpReg].qwordName))
+			default:
+				panic("don't know how to do an indirect write with precomputed type " + precomp.valueType.String())
+			}
+		} else {
+			p.ensureInRegister(data)
+			// TODO sign extend here
+			regName := p.registerOf(data).nameForSize(pointedToSize)
+			p.issueCommand(fmt.Sprintf("mov %s %s, %s", prefix, destOperand, regName))
+		}
+	} else {
+		if pointedToSize != p.sizeof(data) {
+			panic("ice: memcpy indirect write where the sizes are not equal")
+		}
+		p.freeUpRegisters(true, rsi, rdi, rcx)
+		p.loadPointerIntoReg(target, rdi)
+		p.ensureStackOffsetValid(data)
+		if p.inRegister(data) {
+			p.memRegCommand("mov", data, data)
+		}
+		p.loadVarOffsetIntoReg(data, rsi)
+		p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
+		p.issueCommand("call _intrinsic_memcpy")
+	}
 }
 
 func (p *procGen) setccToVar(how ir.ComparisonMethod, vn int) {
@@ -1297,9 +1336,9 @@ func (p *procGen) generateSingleInst(optIdx int, opt ir.Inst) {
 	case ir.IndirectLoad:
 		p.genIndirectLoad(optIdx, opt)
 		return
-	// case ir.IndirectWrite:
-	// 	p.genIndirectWrite(optIdx, opt)
-	// 	return
+	case ir.IndirectWrite:
+		p.genIndirectWrite(optIdx, opt)
+		return
 	case ir.OutOfScopeMutations, ir.OutsideLoopMutations:
 		for _, vn := range *opt.Extra.(*[]int) {
 			stopPrecomputingIfNeeded(vn)
@@ -1749,47 +1788,6 @@ func (p *procGen) genInstPartialKnown(optIdx int, opt ir.Inst) {
 		} else {
 			p.issueCommand("; never jumps")
 		}
-	case ir.IndirectWrite:
-		p.swapStackBoundVars()
-		target := opt.Out()
-		data := opt.In()
-		pointedToSize := p.typeTable[target].(typing.Pointer).ToWhat.Size()
-
-		if p.varPerfectRegSize(data) {
-			destOperand := p.prepareEffectiveAddress(target)
-			prefix := prefixForSize(pointedToSize)
-			if p.valueKnown(data) {
-				switch precomp := &p.precompute[data]; precomp.valueType {
-				case integer:
-					precompValue := p.getPrecomputedValue(data)
-					p.issueCommand(fmt.Sprintf("mov %s %s, %d", prefix, destOperand, precompValue))
-				case pointerRelativeToVar, pointerRelativeToStackBase:
-					tmpReg := p.findOrMakeFreeReg()
-					p.loadPointerIntoReg(data, tmpReg)
-					p.issueCommand(fmt.Sprintf("mov %s %s, %s", prefix, destOperand, p.registers.all[tmpReg].qwordName))
-				default:
-					panic("don't know how to do an indirect write with precomputed type " + precomp.valueType.String())
-				}
-			} else {
-				p.ensureInRegister(data)
-				// TODO sign extend here
-				regName := p.registerOf(data).nameForSize(pointedToSize)
-				p.issueCommand(fmt.Sprintf("mov %s %s, %s", prefix, destOperand, regName))
-			}
-		} else {
-			if pointedToSize != p.sizeof(data) {
-				panic("ice: memcpy indirect write where the sizes are not equal")
-			}
-			p.freeUpRegisters(true, rsi, rdi, rcx)
-			p.loadPointerIntoReg(target, rdi)
-			p.ensureStackOffsetValid(data)
-			if p.inRegister(data) {
-				p.memRegCommand("mov", data, data)
-			}
-			p.loadVarOffsetIntoReg(data, rsi)
-			p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
-			p.issueCommand("call _intrinsic_memcpy")
-		}
 	case ir.StructMemberPtr:
 		out := opt.Out()
 		in := opt.In()
@@ -2036,52 +2034,6 @@ func (p *procGen) genInstAllRuntimeVars(optIdx int, opt ir.Inst) {
 		panic("ice: Transcludes should be gone by now")
 	case ir.ArrayToPointer, ir.StructMemberPtr:
 		panic("ice: " + opt.Type.String() + " should always be a compile time operation")
-	case ir.IndirectLoad, ir.IndirectWrite:
-		p.swapStackBoundVars()
-		_, isDataMemberOfString := p.typeTable[opt.In()].(typing.StringDataPointer)
-		if opt.Type == ir.IndirectLoad && isDataMemberOfString {
-			p.varVarCopy(opt.Out(), opt.In())
-			break
-		}
-
-		var ptr, data int
-		var commandTemplate string
-		if opt.Type == ir.IndirectLoad {
-			ptr = opt.In()
-			data = opt.Out()
-			commandTemplate = "mov %s, %s [%s]"
-		} else {
-			ptr = opt.Left()
-			data = opt.Right()
-			commandTemplate = "mov %[2]s [%[3]s], %[1]s"
-		}
-		pointedToSize := p.typeTable[ptr].(typing.Pointer).ToWhat.Size()
-		p.ensureInRegister(ptr)
-
-		if p.varPerfectRegSize(data) {
-			p.ensureInRegister(data)
-			dataRegName := p.registerOf(data).nameForSize(pointedToSize)
-			prefix := prefixForSize(pointedToSize)
-			ptrRegName := p.registerOf(ptr).qwordName
-			p.issueCommand(fmt.Sprintf(commandTemplate, dataRegName, prefix, ptrRegName))
-		} else {
-			if p.sizeof(data) != pointedToSize {
-				panic("indirect read/write with inconsistent sizes")
-			}
-			memcpy := func(dataDest registerId, ptrDest registerId) {
-				p.freeUpRegisters(true, rsi, rdi, rcx)
-				p.ensureStackOffsetValid(data)
-				p.loadVarOffsetIntoReg(data, dataDest)
-				p.issueCommand(fmt.Sprintf("mov %s, %s", p.registers.all[ptrDest].qwordName, p.varOperand(ptr)))
-				p.issueCommand(fmt.Sprintf("mov rcx, %d", pointedToSize))
-				p.issueCommand("call _intrinsic_memcpy")
-			}
-			if opt.Type == ir.IndirectLoad {
-				memcpy(rdi, rsi)
-			} else {
-				memcpy(rsi, rdi)
-			}
-		}
 	case ir.PeelStruct:
 		// this instruction is an artifact of the fact that the frontend doesn't have type information when generating ir.
 		// every intermediate dot use this instruction to deal with both auto dereferencing and struct nesting.
