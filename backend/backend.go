@@ -1047,8 +1047,6 @@ func (p *procGen) genIndirectLoad(optIdx int, opt ir.Inst) {
 	switch inType := p.typeTable[in].(type) {
 	case typing.StringDataPointer:
 		outReg := p.ensureInRegister(out)
-		println("here!")
-		println("we are loading", in, "into", p.registers.all[outReg].qwordName)
 		p.loadPointerIntoReg(in, outReg)
 	case typing.Pointer:
 		pointedToSize := inType.ToWhat.Size()
@@ -1439,8 +1437,8 @@ func (p *procGen) generate() {
 		// 	p.issueCommand("; line 26")
 
 		// }
-		fmt.Println("doing ir line", optIdx)
-		fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
+		// fmt.Println("doing ir line", optIdx)
+		// fmt.Fprintf(p.out.buffer, ".ir_line_%d:\n", optIdx)
 		p.generateSingleInst(optIdx, opt)
 		// p.trace(23)
 		// fmt.Printf("stroage for %d %#v\n", 1, p.varStorage[1])

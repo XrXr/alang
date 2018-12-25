@@ -19,7 +19,7 @@ import (
 	"sort"
 )
 
-const dumpIr = true
+const dumpIr = false
 const dumpEnv = false
 
 type embedGraphNode struct {
